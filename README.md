@@ -4,7 +4,7 @@
 
 ## Install
 
-Go toolchain、Git、`gh` CLI、Codex CLI を事前に用意し、GitHub と Codex の認証を済ませてください。`iro` は不足している環境を自動構築しません。
+Go toolchain と Git を事前に用意してください。`iro run` を利用する場合は、さらに `gh` CLI、Codex CLI、および各認証が必要です。`iro` は不足している環境を自動構築しません。
 
 ```bash
 go install ./cmd/iro
@@ -17,10 +17,11 @@ go install ./cmd/iro
 ```bash
 iro init
 iro doctor
+iro status
 iro run <issue-number>
 ```
 
-`iro init` は `WORKFLOW.md` と `iro.toml` を新規作成します。`iro doctor` は環境と設定を read-only で診断します。`iro run` は configured remote の GitHub Issue を取得し、Issue 専用 worktree で fresh ephemeral Codex run を開始します。
+`iro init` は `WORKFLOW.md` と `iro.toml` を新規作成します。`iro doctor` は環境と設定を read-only で診断します。`iro status` は ownership mapping に対応するローカル Issue workspace の機械状態を read-only で表示します。`iro run` は configured remote の GitHub Issue を取得し、Issue 専用 worktree で fresh ephemeral Codex run を開始します。
 
 Codex が生成した変更は commit されません。人間が worktree を review し、必要な Git 操作と Issue の lifecycle 操作を行ってください。
 

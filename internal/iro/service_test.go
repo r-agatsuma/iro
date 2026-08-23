@@ -2,6 +2,7 @@ package iro
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -413,6 +414,294 @@ func TestRunRejectsDirtyOwnedWorkspaceWithoutCleanup(t *testing.T) {
 	for _, call := range runner.calls {
 		if call.Name == "codex" && len(call.Args) > 0 && call.Args[0] == "--cd" {
 			t.Fatal("Codex was started for dirty workspace")
+		}
+	}
+}
+
+func statusTestRunner(root, workspace string, dirty bool, branchPresent bool) *fakeCommandRunner {
+	return statusTestRunnerWithBranch(root, workspace, dirty, branchPresent, "iro/issue-123")
+}
+
+func statusTestRunnerWithBranch(root, workspace string, dirty bool, branchPresent bool, checkedOutBranch string) *fakeCommandRunner {
+	runner := &fakeCommandRunner{}
+	runner.lookups = map[string]error{
+		"gh":    errors.New("status must not look up gh"),
+		"codex": errors.New("status must not look up codex"),
+	}
+	runner.fn = func(spec CommandSpec) CommandResult {
+		if spec.Name != "git" {
+			return unexpectedStatusCommand(spec)
+		}
+		switch {
+		case len(spec.Args) == 2 && spec.Args[0] == "rev-parse" && spec.Args[1] == "--show-toplevel":
+			return CommandResult{Stdout: root + "\n", ExitCode: 0}
+		case len(spec.Args) == 3 && spec.Args[0] == "config" && spec.Args[1] == "--get-all" && spec.Args[2] == "remote.origin.url":
+			return CommandResult{Stdout: "git@github.com:acme/iro.git\n", ExitCode: 0}
+		case len(spec.Args) == 4 && spec.Args[0] == "show-ref" && spec.Args[1] == "--verify" && spec.Args[2] == "--quiet" && spec.Args[3] == "refs/heads/iro/issue-123":
+			if branchPresent {
+				return CommandResult{ExitCode: 0}
+			}
+			return CommandResult{ExitCode: 1, Err: errors.New("not found")}
+		case len(spec.Args) == 3 && spec.Args[0] == "worktree" && spec.Args[1] == "list" && spec.Args[2] == "--porcelain":
+			return CommandResult{Stdout: "worktree " + root + "\nbranch refs/heads/main\n\nworktree " + workspace + "\nbranch refs/heads/" + checkedOutBranch + "\n\n", ExitCode: 0}
+		case len(spec.Args) == 4 && spec.Args[0] == "--no-optional-locks" && spec.Args[1] == "status" && spec.Args[2] == "--porcelain" && spec.Args[3] == "--untracked-files=all":
+			if spec.Dir != workspace {
+				return unexpectedStatusCommand(spec)
+			}
+			if dirty {
+				return CommandResult{Stdout: "?? changed.txt\n", ExitCode: 0}
+			}
+			return CommandResult{ExitCode: 0}
+		}
+		return unexpectedStatusCommand(spec)
+	}
+	return runner
+}
+
+func unexpectedStatusCommand(spec CommandSpec) CommandResult {
+	return CommandResult{ExitCode: -1, Err: fmt.Errorf("unexpected status command: %s %v", spec.Name, spec.Args)}
+}
+
+func createStatusWorkspace(t *testing.T, service *Service, issueNumber int) (RepositoryIdentity, string) {
+	t.Helper()
+	identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
+	workspace := cleanAbsolutePath(worktreePath(service.Dirs, identity, issueNumber))
+	if err := os.MkdirAll(workspace, 0755); err != nil {
+		t.Fatal(err)
+	}
+	mapping := ownershipMapping{
+		Version:     1,
+		Repository:  identity.Canonical(),
+		IssueNumber: issueNumber,
+		Branch:      fmt.Sprintf("iro/issue-%d", issueNumber),
+		Worktree:    workspace,
+	}
+	if err := service.writeOwnership(ownershipPath(service.Dirs, identity, issueNumber), mapping); err != nil {
+		t.Fatal(err)
+	}
+	return identity, workspace
+}
+
+func TestStatusReportsNoManagedWorkspacesWithoutGitHubOrCodex(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	runner := statusTestRunner(root, "", false, false)
+	service := newTestService(t, runner, root)
+	var output, errorsOutput strings.Builder
+	if status := Execute([]string{"status"}, &output, &errorsOutput, service); status != 0 {
+		t.Fatalf("Execute(status) = %d, stderr = %s", status, errorsOutput.String())
+	}
+	if !strings.Contains(output.String(), "Repository: acme/iro") || !strings.Contains(output.String(), "No iro-managed Issue workspaces.") {
+		t.Fatalf("unexpected status output: %s", output.String())
+	}
+	for _, call := range runner.calls {
+		if call.Name == "gh" || call.Name == "codex" {
+			t.Fatalf("status invoked %s: %+v", call.Name, call)
+		}
+	}
+}
+
+func TestStatusReportsCleanOwnedWorkspace(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	service := newTestService(t, &fakeCommandRunner{}, root)
+	_, workspace := createStatusWorkspace(t, service, 123)
+	runner := statusTestRunner(root, workspace, false, true)
+	service.Runner = runner
+	var output, errorsOutput strings.Builder
+	if status := Execute([]string{"status"}, &output, &errorsOutput, service); status != 0 {
+		t.Fatalf("Execute(status) = %d, stderr = %s", status, errorsOutput.String())
+	}
+	if !strings.Contains(output.String(), "#123\tCLEAN\tiro/issue-123\t"+workspace) {
+		t.Fatalf("unexpected status output: %s", output.String())
+	}
+}
+
+func TestStatusReportsDirtyWorkspaceAsSuccess(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	service := newTestService(t, &fakeCommandRunner{}, root)
+	_, workspace := createStatusWorkspace(t, service, 123)
+	runner := statusTestRunner(root, workspace, true, true)
+	service.Runner = runner
+	if err := os.WriteFile(filepath.Join(root, "source-change.txt"), []byte("keep"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var output, errorsOutput strings.Builder
+	if status := Execute([]string{"status"}, &output, &errorsOutput, service); status != 0 {
+		t.Fatalf("Execute(status) = %d, stderr = %s", status, errorsOutput.String())
+	}
+	if !strings.Contains(output.String(), "#123\tDIRTY\tiro/issue-123\t"+workspace) {
+		t.Fatalf("unexpected status output: %s", output.String())
+	}
+	for _, call := range runner.calls {
+		if call.Name == "git" && len(call.Args) > 0 && call.Args[0] == "status" && call.Dir == root {
+			t.Fatal("status inspected invoking checkout cleanliness")
+		}
+	}
+}
+
+func TestStatusReportsMajorBrokenStates(t *testing.T) {
+	tests := []struct {
+		name             string
+		setup            func(t *testing.T, service *Service, identity RepositoryIdentity, workspace string)
+		branchPresent    bool
+		checkedOutBranch string
+	}{
+		{
+			name: "invalid ownership mapping JSON",
+			setup: func(t *testing.T, service *Service, identity RepositoryIdentity, workspace string) {
+				t.Helper()
+				path := ownershipPath(service.Dirs, identity, 123)
+				if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			checkedOutBranch: "iro/issue-123",
+		},
+		{
+			name: "repository identity mismatch",
+			setup: func(t *testing.T, service *Service, identity RepositoryIdentity, workspace string) {
+				t.Helper()
+				mapping := ownershipMapping{
+					Version:     1,
+					Repository:  "other/repository",
+					IssueNumber: 123,
+					Branch:      "iro/issue-123",
+					Worktree:    workspace,
+				}
+				if err := service.writeOwnership(ownershipPath(service.Dirs, identity, 123), mapping); err != nil {
+					t.Fatal(err)
+				}
+			},
+			checkedOutBranch: "iro/issue-123",
+		},
+		{
+			name: "expected worktree path missing",
+			setup: func(t *testing.T, service *Service, identity RepositoryIdentity, workspace string) {
+				t.Helper()
+				mapping := ownershipMapping{
+					Version:     1,
+					Repository:  identity.Canonical(),
+					IssueNumber: 123,
+					Branch:      "iro/issue-123",
+					Worktree:    workspace,
+				}
+				if err := service.writeOwnership(ownershipPath(service.Dirs, identity, 123), mapping); err != nil {
+					t.Fatal(err)
+				}
+			},
+			branchPresent:    true,
+			checkedOutBranch: "iro/issue-123",
+		},
+		{
+			name: "wrong branch checkout",
+			setup: func(t *testing.T, service *Service, identity RepositoryIdentity, workspace string) {
+				t.Helper()
+				if err := os.MkdirAll(workspace, 0755); err != nil {
+					t.Fatal(err)
+				}
+				mapping := ownershipMapping{
+					Version:     1,
+					Repository:  identity.Canonical(),
+					IssueNumber: 123,
+					Branch:      "iro/issue-123",
+					Worktree:    workspace,
+				}
+				if err := service.writeOwnership(ownershipPath(service.Dirs, identity, 123), mapping); err != nil {
+					t.Fatal(err)
+				}
+			},
+			branchPresent:    true,
+			checkedOutBranch: "iro/issue-999",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeProjectFiles(t, root)
+			service := newTestService(t, &fakeCommandRunner{}, root)
+			identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
+			workspace := cleanAbsolutePath(worktreePath(service.Dirs, identity, 123))
+			tt.setup(t, service, identity, workspace)
+			service.Runner = statusTestRunnerWithBranch(root, workspace, false, tt.branchPresent, tt.checkedOutBranch)
+
+			var output, errorsOutput strings.Builder
+			if status := Execute([]string{"status"}, &output, &errorsOutput, service); status == 0 {
+				t.Fatalf("Execute(status) unexpectedly succeeded: output=%s stderr=%s", output.String(), errorsOutput.String())
+			}
+			if !strings.Contains(output.String(), "#123\tBROKEN\t") {
+				t.Fatalf("unexpected status output: %s", output.String())
+			}
+		})
+	}
+}
+
+func TestStatusIgnoresNonMappingJSONFiles(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	service := newTestService(t, &fakeCommandRunner{}, root)
+	identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
+	directory := filepath.Dir(ownershipPath(service.Dirs, identity, 123))
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"foo.json", "issue-abc.json", "issue-0.json", "issue-01.json", "issue-001.json"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("not a mapping"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service.Runner = statusTestRunner(root, "", false, false)
+
+	var output, errorsOutput strings.Builder
+	if status := Execute([]string{"status"}, &output, &errorsOutput, service); status != 0 {
+		t.Fatalf("Execute(status) = %d, stderr = %s", status, errorsOutput.String())
+	}
+	if !strings.Contains(output.String(), "No iro-managed Issue workspaces.") {
+		t.Fatalf("unexpected status output: %s", output.String())
+	}
+	for _, call := range service.Runner.(*fakeCommandRunner).calls {
+		if call.Name == "git" && len(call.Args) >= 2 && call.Args[0] == "worktree" && call.Args[1] == "list" {
+			t.Fatal("status read worktrees for ignored mapping filenames")
+		}
+	}
+}
+
+func TestStatusReportsBrokenWorkspaceAndReturnsFailure(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	service := newTestService(t, &fakeCommandRunner{}, root)
+	_, workspace := createStatusWorkspace(t, service, 123)
+	service.Runner = statusTestRunner(root, workspace, false, false)
+	var output, errorsOutput strings.Builder
+	if status := Execute([]string{"status"}, &output, &errorsOutput, service); status == 0 {
+		t.Fatal("Execute(status) unexpectedly succeeded for broken workspace")
+	}
+	if !strings.Contains(output.String(), "#123\tBROKEN\tiro/issue-123\t"+workspace) {
+		t.Fatalf("unexpected status output: %s", output.String())
+	}
+}
+
+func TestStatusDoesNotDiscoverUnmappedWorktree(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	workspace := filepath.Join(t.TempDir(), "issue-123")
+	runner := statusTestRunner(root, workspace, false, true)
+	service := newTestService(t, runner, root)
+	var output strings.Builder
+	if err := service.Status(&output); err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if !strings.Contains(output.String(), "No iro-managed Issue workspaces.") {
+		t.Fatalf("unexpected status output: %s", output.String())
+	}
+	for _, call := range runner.calls {
+		if call.Name == "git" && len(call.Args) >= 2 && call.Args[0] == "worktree" && call.Args[1] == "list" {
+			t.Fatal("status discovered worktrees without ownership mappings")
 		}
 	}
 }
