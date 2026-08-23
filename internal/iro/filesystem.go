@@ -8,6 +8,7 @@ import (
 // FileSystem is the testable boundary for filesystem operations used by iro.
 type FileSystem interface {
 	ReadFile(name string) ([]byte, error)
+	ReadDir(name string) ([]os.DirEntry, error)
 	WriteFile(name string, data []byte, perm os.FileMode) error
 	CreateNew(name string, perm os.FileMode) (io.WriteCloser, error)
 	Remove(name string) error
@@ -24,6 +25,10 @@ func NewOSFileSystem() FileSystem {
 
 func (OSFileSystem) ReadFile(name string) ([]byte, error) {
 	return os.ReadFile(name)
+}
+
+func (OSFileSystem) ReadDir(name string) ([]os.DirEntry, error) {
+	return os.ReadDir(name)
 }
 
 func (OSFileSystem) WriteFile(name string, data []byte, perm os.FileMode) error {
