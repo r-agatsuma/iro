@@ -332,7 +332,108 @@ mapping が 0 件である場合、および `CLEAN` / `DIRTY` のみの場合�
 `iro status` は repository files、Git index、refs、branches、worktrees、ownership mappings、runtime logs、GitHub Issues、Codex state を変更してはならない。
 GitHub にアクセスしてはならず、Codex を起動してはならない。
 
-## 8. `iro run <issue-number>`
+## 8. `iro cleanup <issue-number>`
+
+### CLEANUP-001: explicit destructive intent
+
+`iro cleanup` は Human が Issue number を明示して呼び出した場合だけ実行する。
+Issue close、PR merge、branch name、directory name、Issue / PR の semantic state を理由に cleanup を開始してはならない。
+`iro cleanup` は Issue の完了状態を判断する command ではない。
+
+### CLEANUP-002: local-only ownership scope
+
+MVP の cleanup 対象は、指定 Issue の canonical ownership mapping によって ownership を検証できる次の local resource だけである。
+
+```text
+verified iro-owned worktree
+verified iro-owned local branch
+verified ownership mapping
+```
+
+ownership の列挙・証拠起点は、現在の repository identity に対応する
+`issue-<canonical-positive-decimal-integer>.json` mapping である。
+branch name、workspace path、Git worktree 登録、Issue number の偶然の一致だけから ownership を推測してはならない。
+
+### CLEANUP-003: preconditions before mutation
+
+destructive operation の前に、次の precondition をすべて検証しなければならない。
+
+- Git executable と Git repository
+- `WORKFLOW.md` および valid supported `iro.toml` による initialized iro project
+- configured `tracker.remote` の存在と、そこからの repository identity の一意なローカル解決
+- canonical ownership mapping の存在、regular file 性、supported version
+- mapping の repository、Issue number、filename、branch、deterministic worktree path の整合性
+- expected local branch、worktree path、Git worktree 登録、expected branch checkout の整合性
+- invoking checkout が cleanup target 自身ではないこと
+- target worktree に tracked changes または non-ignored untracked files がないこと
+- Issue branch tip が invoking checkout の `HEAD` の ancestor であること
+
+invoking checkout 自身の cleanliness は要求しない。
+target worktree が dirty または broken なら cleanup を拒否し、local state を変更してはならない。
+
+ancestor 検証は概念的に次と同等である。
+
+```text
+git merge-base --is-ancestor iro/issue-<issue-number> HEAD
+```
+
+ancestor でない場合、Human は Issue branch の履歴を含む integration checkout から cleanup を再実行する。
+iro は invoking checkout が正式な integration branch かどうかを推測・検証しない。
+
+### CLEANUP-004: disposable ignored state
+
+target worktree の ignored file / directory は disposable workspace state として扱う。
+ignored state だけでは cleanup を拒否せず、worktree removal とともに削除され得る。
+tracked changes と non-ignored untracked files は Human の未保存作業である可能性があるため、cleanup を拒否する。
+workspace teardown 後も必要な durable data は ignored file として worktree 内だけに保存してはならない。
+
+### CLEANUP-005: mutation ordering and safe deletion
+
+すべての precondition が成立した場合だけ、次の順序で mutation を開始する。
+
+```text
+validate all preconditions
+        ↓
+git worktree remove <verified-worktree>
+        ↓
+git branch -d iro/issue-<issue-number>
+        ↓
+remove ownership mapping LAST
+```
+
+worktree removal は通常の安全な Git operation だけを使う。
+`--force`、`git clean`、`reset`、`stash`、force checkout などで安全条件を回避してはならない。
+worktree removal 後は path と Git worktree registration の removal を確認する。
+
+local branch は normal safe deletion (`git branch -d`) だけで削除する。
+`git branch -D`、force deletion、history equivalence inference、remote merge inference を使ってはならない。
+branch deletion 後は branch removal を確認する。
+
+ownership mapping は worktree removal と branch deletion が安全に完了するまで保持する。
+どちらかが失敗した場合、または destructive operation 後の state を安全に確認できない場合、cleanup は non-zero とし mapping を保持する。
+automatic repair、rollback、partial cleanup の success 扱いは実装しない。
+
+### CLEANUP-006: success and failure state
+
+cleanup success は次の一状態だけである。
+
+```text
+worktree removed
+local branch safely deleted
+ownership mapping removed
+```
+
+成功時の output には少なくとも Issue number、removed worktree path、removed local branch、mapping removal を含める。
+precondition failure、unsafe work、broken ownership/resource state、Git operation failure、post-operation verification failure は non-zero である。
+mutation 後の failure では Human が resource state を理解できる diagnostic を表示し、mapping を保持する。
+
+### CLEANUP-007: responsibility and remote boundary
+
+`iro cleanup` は local lifecycle operation であり、GitHub Issue / PR の lookup や semantic state inspection を行わない。
+`gh`、GitHub authentication、network access、Codex executable、Codex authentication、Codex invocation を要求・実行してはならない。
+remote branch、remote ref、Issue、PR、repository configuration、invoking checkout、other worktree、other branch、other ownership mapping、runtime logs を変更してはならない。
+
+## 9. `iro run <issue-number>`
 
 ### RUN-001: argument grammar
 
@@ -591,7 +692,7 @@ Issue comment の投稿に失敗した場合:
 
 Issue comment failure を理由に Codex を再実行してはならない。
 
-## 9. Runtime state and logs
+## 10. Runtime state and logs
 
 runtime state は repository へ commit してはならない。
 
@@ -613,33 +714,36 @@ workspace ownership mapping
 
 Codex thread/session ID は保存対象に含めない。
 
-## 10. Behavior matrix
+## 11. Behavior matrix
 
-| State | `iro init` | `iro doctor` | `iro status` | `iro run <issue-number>` |
-|---|---|---|---|---|
-| Git executable missing | error | report | error | error |
-| Not a Git repository | error | report | error | error |
-| `WORKFLOW.md` missing | create only in clean init | report | error | error |
-| `iro.toml` missing | create only in clean init | report | error | error |
-| configured remote missing | allowed | report | error | error |
-| other remotes exist but configured remote invalid | allowed | report | error | error; no guessing |
-| `gh` missing | allowed | report | allowed; no GitHub access | error |
-| GitHub auth missing | allowed | report | allowed; no authentication check | error |
-| Codex missing | allowed | report | allowed; no Codex access | error |
-| Codex auth missing | allowed | report | allowed; no authentication check | error |
-| source checkout dirty | N/A | report if inspected | allowed; invoking checkout cleanliness is not inspected; read-only | error; no changes |
-| Issue not found/unreadable | N/A | N/A | not applicable; no Issue lookup; read-only | error before workspace creation |
-| Issue branch/worktree both absent | N/A | optional report | `BROKEN`; non-zero if an ownership mapping exists; otherwise no row; no repair | create from current HEAD commit |
-| matching iro-owned Issue worktree clean | N/A | optional report | `CLEAN`; success; read-only | reuse; fresh ephemeral run |
-| matching iro-owned Issue worktree dirty | N/A | report if discoverable | `DIRTY`; success; read-only | error; no cleanup |
-| expected branch/path exists without valid ownership mapping | N/A | report if discoverable | ignore; no ownership guessing; read-only | error; no ownership guessing |
-| branch/worktree collision | N/A | report if discoverable | `BROKEN`; non-zero for a mapped workspace; unowned resource ignored; no repair | error; no repair |
-| invalid or mismatched ownership mapping | N/A | report if discoverable | `BROKEN`; non-zero; no repair | error; no repair |
-| Codex run success | N/A | N/A | observe local state only; no semantic inference; read-only | comment result; keep worktree; human review |
-| Codex run failure | N/A | N/A | observe local state only; no semantic inference; read-only | comment failure result if possible; keep worktree; non-zero |
-| Issue comment failure | N/A | N/A | observe local state only; no semantic inference; read-only | keep local result; non-zero; no Codex rerun |
+| State | `iro init` | `iro doctor` | `iro status` | `iro run <issue-number>` | `iro cleanup <issue-number>` |
+|---|---|---|---|---|---|
+| Git executable missing | error | report | error | error | error; no changes |
+| Not a Git repository | error | report | error | error | error; no changes |
+| `WORKFLOW.md` missing | create only in clean init | report | error | error | error; no changes |
+| `iro.toml` missing | create only in clean init | report | error | error | error; no changes |
+| configured remote missing | allowed | report | error | error | error; no changes |
+| other remotes exist but configured remote invalid | allowed | report | error | error; no guessing | error; no guessing |
+| `gh` missing | allowed | report | allowed; no GitHub access | error | allowed; no GitHub access |
+| GitHub auth missing | allowed | report | allowed; no authentication check | error | allowed; no authentication check |
+| Codex missing | allowed | report | allowed; no Codex access | error | allowed; no Codex access |
+| Codex auth missing | allowed | report | allowed; no authentication check | error | allowed; no authentication check |
+| source checkout dirty | N/A | report if inspected | allowed; invoking checkout cleanliness is not inspected; read-only | error; no changes | allowed if target is a different clean worktree |
+| Issue not found/unreadable | N/A | N/A | not applicable; no Issue lookup; read-only | error before workspace creation | not applicable; no Issue lookup |
+| Issue branch/worktree both absent | N/A | optional report | `BROKEN`; non-zero if an ownership mapping exists; otherwise no row; no repair | create from current HEAD commit | error; mapping required; no changes |
+| matching iro-owned Issue worktree clean | N/A | optional report | `CLEAN`; success; read-only | reuse; fresh ephemeral run | remove worktree, safe-delete branch, then remove mapping |
+| matching iro-owned Issue worktree dirty | N/A | report if discoverable | `DIRTY`; success; read-only | error; no cleanup | error; no changes |
+| expected branch/path exists without valid ownership mapping | N/A | report if discoverable | ignore; no ownership guessing; read-only | error; no ownership guessing | error; no ownership guessing |
+| branch/worktree collision | N/A | report if discoverable | `BROKEN`; non-zero for a mapped workspace; unowned resource ignored; no repair | error; no repair | error; no repair |
+| invalid or mismatched ownership mapping | N/A | report if discoverable | `BROKEN`; non-zero; no repair | error; no repair | error; no repair |
+| Issue branch tip not in invoking `HEAD` history | N/A | N/A | not applicable; read-only | not applicable | error; no changes |
+| worktree removal or safe branch deletion failure | N/A | N/A | not applicable | not applicable | non-zero; mapping retained |
+| successful full cleanup | N/A | N/A | no mapping remains | not applicable | worktree, local branch, and mapping removed |
+| Codex run success | N/A | N/A | observe local state only; no semantic inference; read-only | comment result; keep worktree; human review | not applicable |
+| Codex run failure | N/A | N/A | observe local state only; no semantic inference; read-only | comment failure result if possible; keep worktree; non-zero | not applicable |
+| Issue comment failure | N/A | N/A | observe local state only; no semantic inference; read-only | keep local result; non-zero; no Codex rerun | not applicable |
 
-## 11. Diagnostic requirements
+## 12. Diagnostic requirements
 
 error は「何が起きたか」と「Human が次に何をすべきか」が分かる内容にする。
 
@@ -658,7 +762,7 @@ Review the worktree and either preserve or discard the changes, then retry:
   iro run 123
 ```
 
-## 12. Explicitly undefined or deferred
+## 13. Explicitly undefined or deferred
 
 以下は bootstrap MVP の外とする。
 
@@ -669,7 +773,7 @@ Review the worktree and either preserve or discard the changes, then retry:
 - automatic retry scheduler / retry queue
 - automatic cleanup
 - stale worktree repair
-- automatic branch deletion
+- automatic or unrequested branch deletion
 - automatic commit / push / PR / merge
 - automatic Issue create / close / label / assignment
 - multiple trackers

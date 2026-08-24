@@ -19,9 +19,11 @@ iro init
 iro doctor
 iro status
 iro run <issue-number>
+iro cleanup <issue-number>
 ```
 
 `iro init` は `WORKFLOW.md` と `iro.toml` を新規作成します。`iro doctor` は環境と設定を read-only で診断します。`iro status` は ownership mapping に対応するローカル Issue workspace の機械状態を read-only で表示します。`iro run` は configured remote の GitHub Issue を取得し、Issue 専用 worktree で fresh ephemeral Codex run を開始します。
+`iro cleanup` は Human が明示した Issue について、ownership を検証できる clean な local worktree と local branch を安全に削除し、最後に ownership mapping を削除します。GitHub Issue / PR の状態や remote branch は確認・変更しません。
 
 Codex が生成した変更は commit されません。人間が worktree を review し、必要な Git 操作と Issue の lifecycle 操作を行ってください。
 

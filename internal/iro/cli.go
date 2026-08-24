@@ -8,7 +8,7 @@ import (
 // Execute dispatches the bootstrap MVP CLI commands and returns an exit status.
 func Execute(args []string, out, errOut io.Writer, service *Service) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "error: command is required (init, doctor, status, or run <issue-number>)")
+		fmt.Fprintln(errOut, "error: command is required (init, doctor, status, run <issue-number>, or cleanup <issue-number>)")
 		return 2
 	}
 
@@ -43,6 +43,17 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 			return 2
 		}
 		err = service.Run(number, out)
+	case "cleanup":
+		if len(args) != 2 {
+			fmt.Fprintln(errOut, "error: usage: iro cleanup <issue-number>")
+			return 2
+		}
+		number, parseErr := parseIssueNumber(args[1])
+		if parseErr != nil {
+			fmt.Fprintln(errOut, "error:", parseErr)
+			return 2
+		}
+		err = service.Cleanup(number, out)
 	default:
 		fmt.Fprintf(errOut, "error: unknown command %q\n", args[0])
 		return 2
