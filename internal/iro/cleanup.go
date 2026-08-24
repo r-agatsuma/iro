@@ -130,12 +130,17 @@ func (s *Service) validateCleanupTarget(root string, identity RepositoryIdentity
 	if err != nil {
 		return cleanupTarget{}, err
 	}
+	expectedBranch := "refs/heads/" + target.branch
 	foundExpected := false
 	for _, worktree := range worktrees {
-		if cleanAbsolutePath(worktree.Path) != target.worktree {
+		worktreePath := cleanAbsolutePath(worktree.Path)
+		if worktree.Branch == expectedBranch && worktreePath != target.worktree {
+			return cleanupTarget{}, fmt.Errorf("Issue branch %q is checked out in another worktree %s; resolve the branch/worktree collision manually", target.branch, worktreePath)
+		}
+		if worktreePath != target.worktree {
 			continue
 		}
-		if worktree.Branch != "refs/heads/"+target.branch {
+		if worktree.Branch != expectedBranch {
 			return cleanupTarget{}, fmt.Errorf("expected worktree %s has branch %q instead of %q", target.worktree, strings.TrimPrefix(worktree.Branch, "refs/heads/"), target.branch)
 		}
 		foundExpected = true
@@ -228,6 +233,8 @@ func cleanupPreconditionError(issueNumber int, cause error) error {
 		remediation = fmt.Sprintf("run cleanup from an integration checkout that contains the Issue branch history: `iro cleanup %d`", issueNumber)
 	case strings.Contains(causeText, "invoking checkout is the cleanup target"):
 		remediation = fmt.Sprintf("change to a different checkout that contains the Issue branch history, then retry `iro cleanup %d`", issueNumber)
+	case strings.Contains(causeText, "branch/worktree collision"):
+		remediation = fmt.Sprintf("resolve the duplicate Issue branch checkout manually, then retry `iro cleanup %d`", issueNumber)
 	case strings.Contains(causeText, "cleanup target worktree") && strings.Contains(causeText, "is dirty"):
 		remediation = fmt.Sprintf("review the target worktree, preserve or discard its changes manually, then retry `iro cleanup %d`", issueNumber)
 	case strings.Contains(causeText, "ownership mapping"):

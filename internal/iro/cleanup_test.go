@@ -18,6 +18,7 @@ type cleanupFixture struct {
 	workspace    string
 	mapping      string
 	branch       string
+	collision    string
 	worktreeGone bool
 	branchGone   bool
 }
@@ -76,7 +77,11 @@ func (f *cleanupFixture) run(spec CommandSpec) CommandResult {
 		if f.worktreeGone {
 			return CommandResult{Stdout: "worktree " + f.root + "\nbranch refs/heads/main\n\n", ExitCode: 0}
 		}
-		return CommandResult{Stdout: "worktree " + f.root + "\nbranch refs/heads/main\n\nworktree " + f.workspace + "\nbranch refs/heads/" + f.branch + "\n\n", ExitCode: 0}
+		output := "worktree " + f.root + "\nbranch refs/heads/main\n\nworktree " + f.workspace + "\nbranch refs/heads/" + f.branch + "\n\n"
+		if f.collision != "" {
+			output += "worktree " + f.collision + "\nbranch refs/heads/" + f.branch + "\n\n"
+		}
+		return CommandResult{Stdout: output, ExitCode: 0}
 	case len(spec.Args) == 4 && spec.Args[0] == "--no-optional-locks" && spec.Args[1] == "status" && spec.Args[2] == "--porcelain" && spec.Args[3] == "--untracked-files=all":
 		return CommandResult{ExitCode: 0}
 	case len(spec.Args) == 4 && spec.Args[0] == "merge-base" && spec.Args[1] == "--is-ancestor" && spec.Args[2] == f.branch && spec.Args[3] == "HEAD":
@@ -190,6 +195,25 @@ func TestCleanupRejectsInvokingTargetWorktree(t *testing.T) {
 		t.Fatal("ownership mapping was removed")
 	}
 	assertNoCleanupMutation(t, runner.calls)
+}
+
+func TestCleanupRejectsIssueBranchCheckedOutInAnotherWorktree(t *testing.T) {
+	fixture := newCleanupFixture(t)
+	fixture.collision = filepath.Join(fixture.root, "other-worktree")
+
+	err := fixture.service.Cleanup(123, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "branch/worktree collision") {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	for _, want := range []string{fixture.branch, fixture.collision, "duplicate Issue branch checkout"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Cleanup() error does not contain %q: %v", want, err)
+		}
+	}
+	if fixture.mappingExists(t) == false || !pathExists(fixture.workspace) || fixture.branchGone {
+		t.Fatal("branch collision changed cleanup resources")
+	}
+	assertNoCleanupMutation(t, fixture.runner.calls)
 }
 
 func TestCleanupKeepsMappingWhenWorktreeRemovalFails(t *testing.T) {

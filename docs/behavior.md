@@ -364,12 +364,14 @@ destructive operation の前に、次の precondition をすべて検証しな�
 - canonical ownership mapping の存在、regular file 性、supported version
 - mapping の repository、Issue number、filename、branch、deterministic worktree path の整合性
 - expected local branch、worktree path、Git worktree 登録、expected branch checkout の整合性
+- `git worktree list --porcelain` の inspection により、expected Issue branch が expected worktree 以外の path でも checkout されていないこと
 - invoking checkout が cleanup target 自身ではないこと
 - target worktree に tracked changes または non-ignored untracked files がないこと
 - Issue branch tip が invoking checkout の `HEAD` の ancestor であること
 
 invoking checkout 自身の cleanliness は要求しない。
 target worktree が dirty または broken なら cleanup を拒否し、local state を変更してはならない。
+同じ Issue branch が別の worktree にも checkout されている場合は branch/worktree collision として cleanup を拒否し、worktree、local branch、ownership mapping を変更してはならない。
 
 ancestor 検証は概念的に次と同等である。
 
