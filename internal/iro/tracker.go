@@ -77,9 +77,6 @@ func sortIssueComments(comments []issueComment) error {
 		if strings.TrimSpace(comment.ID) == "" {
 			return fmt.Errorf("comment %d has no immutable identifier", i+1)
 		}
-		if strings.TrimSpace(comment.Author.Login) == "" {
-			return fmt.Errorf("comment %s has no author", comment.ID)
-		}
 		createdAt, err := time.Parse(time.RFC3339Nano, comment.CreatedAt)
 		if err != nil {
 			return fmt.Errorf("comment %s has invalid createdAt", comment.ID)

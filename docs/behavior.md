@@ -469,11 +469,11 @@ configured remote が存在しない、GitHub repository として解決でき�
 各 Issue comment について、少なくとも次の情報を取得しなければならない。
 
 - immutable な comment identifier
-- author
+- author（nullable。取得できる場合は login）
 - `createdAt`
 - body
 
-Issue comments は `createdAt` の時系列昇順で worker context に渡さなければならない。同一の時刻の comments は immutable な comment identifier の昇順を tie-breaker とし、決定的な順序にしなければならない。Issue または comments の取得・応答の decode・必要な comment 情報の検証に失敗した場合、worker を起動してはならない。
+Issue comments は `createdAt` の時系列昇順で worker context に渡さなければならない。同一の時刻の comments は immutable な comment identifier の昇順を tie-breaker とし、決定的な順序にしなければならない。Issue または comments の取得・応答の decode・必要な comment 情報の検証に失敗した場合、worker を起動してはならない。ただし author が `null`、欠落、または有効な login を取得できない場合も comment は保持し、worker context の author を `(unknown)` として明示しなければならない。author が有効な login を持つ場合はその login を渡さなければならない。
 
 MVP の Codex task payload は少なくとも次を含む。
 

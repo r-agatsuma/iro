@@ -337,6 +337,60 @@ func TestRunPassesIssueCommentsInDeterministicChronologicalOrder(t *testing.T) {
 	}
 }
 
+func TestRunAcceptsIssueCommentsWithoutAuthors(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	runner := &fakeCommandRunner{}
+	runner.fn = func(spec CommandSpec) CommandResult {
+		if spec.Name == "gh" && len(spec.Args) >= 2 && spec.Args[0] == "issue" && spec.Args[1] == "view" {
+			return CommandResult{Stdout: `{
+  "number": 123,
+  "title": "Bootstrap",
+  "body": "Implement the task",
+  "url": "https://github.com/acme/iro/issues/123",
+  "comments": [
+    {"id": "comment-z", "author": null, "createdAt": "2024-01-02T00:00:00Z", "body": "unknown author body\nsecond line"},
+    {"id": "comment-early", "author": {"login": "early"}, "createdAt": "2024-01-01T00:00:00Z", "body": "early body"},
+    {"id": "comment-a", "author": {}, "createdAt": "2024-01-02T00:00:00Z", "body": "missing login body"}
+  ]
+}`, ExitCode: 0}
+		}
+		return standardFakeResult(spec, root, "", false, false)
+	}
+	service := newTestService(t, runner, root)
+	if err := service.Run(123, io.Discard); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	var payload string
+	for _, call := range runner.calls {
+		if call.Name == "codex" && len(call.Args) > 0 && call.Args[len(call.Args)-2] == "--ephemeral" {
+			payload = string(call.Stdin)
+			break
+		}
+	}
+	if payload == "" {
+		t.Fatalf("Codex worker was not started: %+v", runner.calls)
+	}
+	for _, want := range []string{
+		"ID: comment-early\nAuthor: early\nCreated at: 2024-01-01T00:00:00Z\nBody:\nearly body",
+		"ID: comment-a\nAuthor: (unknown)\nCreated at: 2024-01-02T00:00:00Z\nBody:\nmissing login body",
+		"ID: comment-z\nAuthor: (unknown)\nCreated at: 2024-01-02T00:00:00Z\nBody:\nunknown author body\nsecond line",
+	} {
+		if !strings.Contains(payload, want) {
+			t.Errorf("Codex payload does not contain %q: %s", want, payload)
+		}
+	}
+	previous := strings.Index(payload, "Issue comments (ordered by createdAt, then immutable ID):")
+	for _, id := range []string{"comment-early", "comment-a", "comment-z"} {
+		position := strings.Index(payload, "ID: "+id)
+		if position <= previous {
+			t.Fatalf("comments are not in the expected order: %s", payload)
+		}
+		previous = position
+	}
+}
+
 func TestRunAcceptsIssueWithNoComments(t *testing.T) {
 	root := t.TempDir()
 	writeProjectFiles(t, root)

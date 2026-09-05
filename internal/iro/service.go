@@ -447,11 +447,18 @@ func buildIssuePayload(identity RepositoryIdentity, target issue) string {
 		return builder.String()
 	}
 	for i, comment := range target.Comments {
-		fmt.Fprintf(&builder, "\nComment %d:\nID: %s\nAuthor: %s\nCreated at: %s\nBody:\n", i+1, comment.ID, comment.Author.Login, comment.CreatedAt)
+		fmt.Fprintf(&builder, "\nComment %d:\nID: %s\nAuthor: %s\nCreated at: %s\nBody:\n", i+1, comment.ID, normalizedCommentAuthor(comment), comment.CreatedAt)
 		builder.WriteString(comment.Body)
 		builder.WriteString("\n")
 	}
 	return builder.String()
+}
+
+func normalizedCommentAuthor(comment issueComment) string {
+	if strings.TrimSpace(comment.Author.Login) == "" {
+		return "(unknown)"
+	}
+	return comment.Author.Login
 }
 
 func buildResultComment(success bool, issueNumber int, workspace string, result CommandResult) string {
