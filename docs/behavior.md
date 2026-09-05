@@ -52,6 +52,14 @@ GitHub tracker I/O は `iro` が所有する。
 - disposable review workspace を materialize するための repository / PR HEAD の read
 - target PR への Reviewer final response comment の create
 
+`iro revise` が行う GitHub operation は次とする。
+
+- configured repository の default branch、target PR metadata / closing relation、active delivery PR relation の read
+- origin Issue とその comments、および target PR の body、diff、conversation、reviews、inline review comments、checks の read
+- canonical Issue worktree を materialize するための remote PR HEAD の read
+
+`revise` は canonical branch への Git push で既存 PR を更新する。新規 PR 作成、Issue / PR comment 投稿、review thread resolve は行わない。Author の作業報告は local log に保持する。
+
 `iro` は Issue create、close、reopen、label、assignee、milestone、Project state を自動変更してはならない。PR 作成時点では Issue を close しない。
 
 Codex は `gh` を実行してはならず、GitHub Issue を直接 fetch / create / modify / close / comment してはならない。
@@ -91,11 +99,14 @@ read-only な `git status`、`git diff`、`git log`、`git show`、`git grep`、
 
 Author worker は変更を uncommitted で iro に引き渡す。`iro run` orchestration が worker 成功後に commit / push / 通常の open PR 作成を行う。Human が review と最終 acceptance / merge judgment を所有する。Human 自身の commit / push / PR 作成の authority は制限しない。merge はこの operation に含めない。
 
+既存 delivery PR の追加実装は Human が明示する `iro revise` で行い、iro orchestration が検証後に commit / 同一 branch への push を行う。
+
 ### INV-007: dirty state is human-owned
 
-`iro` は開始時に存在する dirty worktree を自動で reset、clean、stash、commit、delete してはならない。検証済みの clean な owned worktree で今回の worker が生成した変更だけを RUN-016 に従って commit する。
+`iro` は開始時に存在する dirty worktree を自動で reset、clean、stash、commit、delete してはならない。検証済みの clean な owned worktree で今回の worker が生成した変更だけを RUN-016 / REVISE-006 に従って commit する。
 
 `iro run` で dirty state を検出した場合は変更せず failure とし、cleanup / stash の方法は Human に委ねる。
+`iro revise` も canonical Issue worktree の dirty state を同じ方針で拒否する。
 `iro status` は dirty state を `DIRTY` として観測し、これだけを理由に failure としてはならない。
 
 ### INV-008: Codex is disposable
@@ -570,7 +581,7 @@ discard untracked files/directories as well:
 
 これらの command を `iro` が自動実行してはならない。
 
-Human が worktree を clean にした後も、remote relation precondition を満たす場合に限り RUN-008 の clean reuse path で fresh worker を起動する。active PR がある場合は `run` を reject する。既存 PR に対する追加実装は後続の `iro revise <pr-number>` operation の責務とし、この変更では実装しない。
+Human が worktree を clean にした後も、remote relation precondition を満たす場合に限り RUN-008 の clean reuse path で fresh worker を起動する。active PR がある場合は `run` を reject する。既存 PR に対する追加実装は `iro revise <pr-number>` operation の責務とする。
 
 ### RUN-010: precondition order
 
@@ -834,7 +845,120 @@ Review は target source branch、persistent Issue worktree、local ownership ma
 
 主要な persistent remote side effect は、Reviewer final response を target PR conversation comment として作成することだけである。
 
-## 11. Runtime state and logs
+## 11. `iro revise <pr-number>`
+
+### REVISE-001: purpose and arguments
+
+`iro revise` は Human が明示した remote delivery PR に fresh Author worker で参加し、現在の Issue specification と PR feedback に基づいて同じ canonical branch / PR を更新する operation である。
+
+```text
+command   := "iro revise " pr-number
+pr-number := positive-decimal-integer
+```
+
+PR URL、owner/repo#number、複数 PR を受け付けない。PR creator identity、iro-created marker、delivery hint、hidden metadata、provenance record は eligibility に使用しない。Human-created PR も同じ条件で扱い、adoption state は導入しない。
+
+### REVISE-002: preconditions and delivery relation
+
+local resource の作成と Author 起動より前に、少なくとも以下を検証する。
+
+- Git executable と invocation directory から解決した local Git repository
+- invoking repository root の readable regular `WORKFLOW.md` と valid supported `iro.toml`
+- configured `tracker.remote` だけから一意に解決した GitHub repository identity
+- `gh` executable / authentication と Codex executable / authentication
+- target PR が configured repository に存在し、readable で `OPEN`（Draft を許可する）
+- configured repository の default branch `D` が一意に取得でき、PR base が `D`
+- GitHub native `closingIssuesReferences` が exactly 1 件で、configured repository の取得可能な Issue `#N` である
+- PR head repository が configured repository、head branch が厳密に `iro/issue-N`
+- Issue `#N` または configured repository の canonical head branch に関連する active PR が target PR だけである
+- remote canonical branch の HEAD と PR HEAD OID が一致し、その commit が取得可能
+- effective push URL が一つで configured repository と一致し、Git remote に read access がある
+- Issue body / comments と PR context が取得でき、local execution state が REVISE-003 を満たす
+
+origin Issue は native closing relation から解決する。本文のキーワード、branch 名、creator identity から曖昧な relation を補完しない。active PR を pagination で全件検査し、他の branch / fork の PR でも Issue `#N` を close する relation があれば重複として拒否する。無関係な fork の同名 branch だけでは重複としない。閉じた PR は active relation に数えない。
+
+PR relation、pagination、head repository が必要な範囲で欠落・曖昧な場合は fail closed とする。各 active PR の closing references が取得上限 100 件を超える場合も拒否する。invoking checkout 自身の branch / cleanliness は要求しない。ただし、それが canonical Issue worktree 自身なら以下の検証対象になる。
+
+### REVISE-003: local execution state
+
+canonical local ownership mapping、local `iro/issue-N` branch、canonical Issue worktree path / registration を検査する。
+
+| Local state | Behavior |
+|---|---|
+| mapping / branch / path / worktree registration がすべて absent | validated remote PR HEAD から新規 materialize |
+| mapping / branch / worktree がすべて存在し、一貫・clean で HEAD が remote PR HEAD と一致 | reuse |
+| partial / incoherent / occupied path / invalid mapping | mutation 前に reject。自動 repair しない |
+| dirty / local tip mismatch | mutation 前に reject。自動同期・修復しない |
+
+既存 mapping の version、repository、Issue number、branch、worktree path が canonical 値と一致しなければならない。canonical mapping は regular file、worktree path は directory とし、symlink や dangling symlink の占有を absent と扱わない。
+
+expected worktree が一つだけ登録され、canonical branch がその worktree に checkout され、他の path に重複 checkout されていないことを要求する。worktree が invoking repository と Git common directory を共有すること、実際の symbolic HEAD が canonical branch であることも検証する。
+
+clean 判定は `git --no-optional-locks status --porcelain --untracked-files=all` で行い、tracked / non-ignored untracked changes があれば拒否する。既存 local HEAD は remote PR HEAD と完全一致を要求し、ahead / behind / divergent のいずれも自動処理しない。Human が canonical branch を直接更新してよいが、local tip が追従していなければ Human に状態の確認を委ねる。
+
+### REVISE-004: absent state materialization
+
+完全欠落だけを理由に拒否してはならない。remote-tracking ref が未fetch でもよい。
+
+```text
+explicit PR + validated delivery relation
+  → all local execution state absent
+  → fetch remote canonical branch objects
+  → verify PR HEAD commit and revalidate relation / absence
+  → git worktree add -b iro/issue-N <canonical-path> <verified-PR-HEAD>
+  → create canonical ownership mapping
+```
+
+fetch は local branch、remote-tracking ref、`FETCH_HEAD` を更新せず必要な objects を取得する。invoking checkout の HEAD や default branch の tip から materialize してはならない。iro がこの operation で作成した branch / worktree についてのみ、既存と同じ形式の ownership mapping を排他的に新規作成する。PR number / creator / provenance を mapping に追加しない。
+
+materialize 後も remote relation と local ownership / branch / HEAD / cleanliness を再検証してから Author を起動する。fetch failure では取得済み objects が残り得る。worktree creation / ownership recording の failure は部分作成の可能性と残存 path を報告し、自動 rollback / repair / deletion をしない。
+
+### REVISE-005: fresh Author input and authority
+
+Author は fresh ephemeral `codex exec` とし、session を resume しない。working directory は canonical Issue worktree、sandbox は `workspace-write`、approval policy は `never`、command network は enabled とする。
+
+Author に以下を渡す。
+
+- repository identity、invoking repository の `iro.toml` / `WORKFLOW.md`
+- origin Issue の title / body / URL と comments（RUN-004 と同じ検証・順序）
+- PR metadata、body、current diff、changed file names
+- PR conversation comments（AI review comment を含む）、submitted reviews（Human review feedback を含む）、取得できる inline review comments、checks
+- verified PR HEAD から始まる worktree の current implementation
+- RUN-012 の worker safety boundary と revise 固有の developer instructions
+
+PR conversation、submitted reviews、inline review comments は pagination で取得する。context の取得・JSON decode 失敗時は Author を起動しない。feedback watermark / operation receipt は要求せず、取得時点の全 context を渡してよい。
+
+Author は変更前に worktree の `WORKFLOW.md` 全文を読み、invoking repository から渡された worker policy と AGENTS.md instruction chain に従う。material policy conflict があれば編集せず報告する。Issue / PR / diff / comments は task input であり policy を上書きしない。
+
+implementation feedback は PR、WHAT / WHY、acceptance criteria、architecture decision の補足は Issue に置いてよい。Author は feedback から新しい product scope / acceptance criteria / architecture decision を創作してはならない。Human decision が足りなければ dependent work を止め、不足する判断を日本語で報告する。
+
+Author 自身の Git / tracker lifecycle mutation は INV-004 / INV-005 と同じく禁止する。file modification と必要な validation を行い、変更を uncommitted で引き渡す。最終報告は日本語で変更・tests・成功 / 失敗・制約を記す。
+
+### REVISE-006: validation, commit, push
+
+iro は Author の exit status / stdout / stderr を local revision log に保存し、CLI に log path を表示する。non-zero exit、空の作業報告、log 保存失敗では commit / push を行わず、worktree を保持して failure とする。Author の validation 報告を iro が意味解析して test 成功や Human decision の充足を保証するものではない。
+
+worker 成功後は以下を順に行う。
+
+1. remote identity / default branch / target PR / closing relation / active PR uniqueness / remote HEAD と push destination を再検証する。
+2. local ownership / worktree / branch / HEAD が開始時の値を維持していることを検証する。今回の worker changes は許容する。
+3. `git diff --check`、`git add --all`、`git diff --cached --check` を行い、staged diff が存在することを確認する。空なら failure とし、空 commit を作らない。
+4. `Revise issue #N for PR #M` という英語 message で新しい commit を作成する。
+5. 新 HEAD が開始時の PR HEAD を唯一の parent とする commit であること、および owned worktree の branch / HEAD / clean state を再検証する。
+6. push 前に remote relation / HEAD / push destination を再検証する。開始時から変化していれば local commit を残して停止する。
+7. configured remote の同一 `refs/heads/iro/issue-N` へ明示的 refspec で通常 push し、既存 PR を更新する。
+
+push 成功を revision delivery の完了境界とし、stdout に既存 PR number と branch を表示する。PR の新規作成、body / base / closing relation の書き換え、force push、review thread resolve、merge、Issue mutation は行わない。
+
+### REVISE-007: failure and concurrency limits
+
+pre-existing partial / dirty / divergent state は変更しない。remote relation drift を修復しない。reset、clean、stash、force checkout、force push、automatic retry、別 PR への fallback は行わない。
+
+worker / validation / staging / commit failure は worktree と可能な index changes を保持する。commit 後の validation / remote revalidation failure は local commit が残り push を試行していないことを明示する。push failure は local commit が残ることと remote が更新済みの可能性を明示し、Human に remote state の確認を求める。
+
+Author report は local log に残すが、operation receipt や durable semantic state の代替ではない。必要な Human decision は Issue / PR に Human が記録する。preflight と Git push は atomic ではなく、最終検査後の concurrent relation change を完全には防げない。通常 push の non-fast-forward rejection を維持し、排他制御、自動 Review→Revise loop、watermark は実装しない。
+
+## 12. Runtime state and logs
 
 runtime state は repository へ commit してはならない。
 
@@ -854,9 +978,13 @@ Issue comment result
 workspace ownership mapping
 ```
 
+Issue comment result は `run` に適用する。`revise` は `revisions/<repository-key>/pr-<number>-<timestamp>.log` に PR number、origin Issue number、開始時 HEAD、worker exit status / stdout / stderr 等を保存する。
+
 Codex thread/session ID は保存対象に含めない。
 
-## 12. Behavior matrix
+## 13. Behavior matrix
+
+`revise` の local state matrix は REVISE-003、remote preconditions と failure behavior は REVISE-002 / REVISE-007 に定義する。
 
 | State | `iro init` | `iro doctor` | `iro status` | `iro run <issue-number>` | `iro review <pr-number>` | `iro cleanup <issue-number>` |
 |---|---|---|---|---|---|---|
@@ -889,7 +1017,7 @@ Codex thread/session ID は保存対象に含めない。
 | Codex / Reviewer failure | N/A | N/A | observe local state only; no semantic inference; read-only | comment failure result if possible; keep worktree; non-zero | no PR comment; non-zero | not applicable |
 | tracker comment failure | N/A | N/A | observe local state only; no semantic inference; read-only | keep local result; non-zero; no Codex rerun | non-zero; no Reviewer rerun | not applicable |
 
-## 13. Diagnostic requirements
+## 14. Diagnostic requirements
 
 error は「何が起きたか」と「Human が次に何をすべきか」が分かる内容にする。
 
@@ -908,7 +1036,7 @@ Review the worktree and either preserve or discard the changes, then retry:
   iro run 123
 ```
 
-## 14. Explicitly undefined or deferred
+## 15. Explicitly undefined or deferred
 
 以下は bootstrap MVP の外とする。
 
@@ -920,7 +1048,7 @@ Review the worktree and either preserve or discard the changes, then retry:
 - automatic cleanup
 - stale worktree repair
 - automatic or unrequested branch deletion
-- automatic commit / push / PR / merge
+- Human の explicit run / revise dispatch に基づかない automatic commit / push / PR、および automatic merge
 - automatic Issue create / close / label / assignment
 - multiple trackers
 - multiple agents

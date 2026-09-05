@@ -107,7 +107,7 @@ func (s *Service) Review(prNumber int, out io.Writer) error {
 		return err
 	}
 
-	target, err := s.inspectReviewTarget(root, identity, prNumber)
+	target, err := s.inspectPRTarget(root, identity, prNumber, "review")
 	if err != nil {
 		return err
 	}
@@ -155,7 +155,7 @@ func (s *Service) Review(prNumber int, out io.Writer) error {
 	return nil
 }
 
-func (s *Service) inspectReviewTarget(root string, identity RepositoryIdentity, number int) (reviewPullRequest, error) {
+func (s *Service) inspectPRTarget(root string, identity RepositoryIdentity, number int, operation string) (reviewPullRequest, error) {
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
 		Args: []string{
@@ -212,10 +212,13 @@ func (s *Service) inspectReviewTarget(root string, identity RepositoryIdentity, 
 		return reviewPullRequest{}, fmt.Errorf("PR #%d does not exist in %s or is unreadable", number, identity.String())
 	}
 	if pr.State != "OPEN" {
-		return reviewPullRequest{}, fmt.Errorf("PR #%d is not reviewable; it must be open", number)
+		if operation == "review" {
+			return reviewPullRequest{}, fmt.Errorf("PR #%d is not reviewable; it must be open", number)
+		}
+		return reviewPullRequest{}, fmt.Errorf("PR #%d must be open for %s", number, operation)
 	}
 	if pr.BaseRefName != repository.DefaultBranchRef.Name {
-		return reviewPullRequest{}, fmt.Errorf("PR #%d targets %q, but review requires default branch %q", number, pr.BaseRefName, repository.DefaultBranchRef.Name)
+		return reviewPullRequest{}, fmt.Errorf("PR #%d targets %q, but %s requires default branch %q", number, pr.BaseRefName, operation, repository.DefaultBranchRef.Name)
 	}
 	relations := pr.ClosingIssuesReferences
 	if relations.TotalCount != 1 || len(relations.Nodes) != 1 {
