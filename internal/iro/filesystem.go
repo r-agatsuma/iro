@@ -12,8 +12,10 @@ type FileSystem interface {
 	WriteFile(name string, data []byte, perm os.FileMode) error
 	CreateNew(name string, perm os.FileMode) (io.WriteCloser, error)
 	Remove(name string) error
+	RemoveAll(path string) error
 	Stat(name string) (os.FileInfo, error)
 	MkdirAll(path string, perm os.FileMode) error
+	MkdirTemp(dir, pattern string) (string, error)
 }
 
 // OSFileSystem operates on the local filesystem.
@@ -43,10 +45,18 @@ func (OSFileSystem) Remove(name string) error {
 	return os.Remove(name)
 }
 
+func (OSFileSystem) RemoveAll(path string) error {
+	return os.RemoveAll(path)
+}
+
 func (OSFileSystem) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
 }
 
 func (OSFileSystem) MkdirAll(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
+}
+
+func (OSFileSystem) MkdirTemp(dir, pattern string) (string, error) {
+	return os.MkdirTemp(dir, pattern)
 }
