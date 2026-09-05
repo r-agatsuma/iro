@@ -419,7 +419,7 @@ Run relevant tests when feasible.
 Return the final work report in Japanese, including changes, tests, success/failure, and known limitations.`
 
 func (s *Service) runCodex(workspace string, identity RepositoryIdentity, target issue) CommandResult {
-	payload := fmt.Sprintf("Repository: %s\nIssue number: %d\nIssue title: %s\nIssue URL: %s\n\nIssue body:\n%s\n", identity.String(), target.Number, target.Title, target.URL, target.Body)
+	payload := buildIssuePayload(identity, target)
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",
 		Args: []string{
@@ -435,6 +435,30 @@ func (s *Service) runCodex(workspace string, identity RepositoryIdentity, target
 		Dir:   workspace,
 		Stdin: []byte(payload),
 	})
+}
+
+func buildIssuePayload(identity RepositoryIdentity, target issue) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Repository: %s\nIssue number: %d\nIssue title: %s\nIssue URL: %s\n\nIssue body:\n", identity.String(), target.Number, target.Title, target.URL)
+	builder.WriteString(target.Body)
+	builder.WriteString("\n\nIssue comments (ordered by createdAt, then immutable ID):\n")
+	if len(target.Comments) == 0 {
+		builder.WriteString("(none)\n")
+		return builder.String()
+	}
+	for i, comment := range target.Comments {
+		fmt.Fprintf(&builder, "\nComment %d:\nID: %s\nAuthor: %s\nCreated at: %s\nBody:\n", i+1, comment.ID, normalizedCommentAuthor(comment), comment.CreatedAt)
+		builder.WriteString(comment.Body)
+		builder.WriteString("\n")
+	}
+	return builder.String()
+}
+
+func normalizedCommentAuthor(comment issueComment) string {
+	if strings.TrimSpace(comment.Author.Login) == "" {
+		return "(unknown)"
+	}
+	return comment.Author.Login
 }
 
 func buildResultComment(success bool, issueNumber int, workspace string, result CommandResult) string {
