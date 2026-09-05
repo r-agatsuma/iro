@@ -4,7 +4,7 @@
 
 ## Install
 
-Go toolchain と Git を事前に用意してください。`iro run` または `iro review` を利用する場合は、さらに `gh` CLI、Codex CLI、および各認証が必要です。`iro` は不足している環境を自動構築しません。
+Go toolchain と Git を事前に用意してください。`iro run`、`iro review`、`iro revise` を利用する場合は、さらに `gh` CLI、Codex CLI、および各認証が必要です。`iro` は不足している環境を自動構築しません。
 
 ```bash
 go install ./cmd/iro
@@ -20,6 +20,7 @@ iro doctor
 iro status
 iro run <issue-number>
 iro review <pr-number>
+iro revise <pr-number>
 iro cleanup <issue-number>
 ```
 
@@ -29,6 +30,10 @@ iro cleanup <issue-number>
 `iro run` は configured repository の default branch の clean な checkout から実行します。worker 成功後、iro が変更を commit / push し、default branch を base とする通常の open PR を作成します。既存の関連 PR がある場合は停止します。PR number と `iro land <pr-number>` を表示し、同じヒントを PR comment に投稿します（`land` command 自体は未実装です）。`iro review` は current checkout の branch、dirty state、target PR の local branch/worktree、ownership mapping を要求しません。AI Review は advisory information であり、Human が merge を判断します。
 
 `iro review` は advisory review であり、prompt-isolation の security boundary ではありません。Reviewer は PR HEAD 上で動作するため、PR が `AGENTS.md` などの agent instruction file を変更する場合、その変更が Reviewer の判断に影響する可能性があります。repository / agent policy 自体を変更する PR は、必要に応じて Human または独立 session で追加レビューしてください。
+
+`iro revise` は Issue 本文・comments と PR feedback を fresh Author に渡し、検証後に新しい commit を同じ `iro/issue-N` branch へ push して既存 PR を更新します。PR は configured repository 内の canonical branch から default branch を base とする open PR で、closing Issue が exactly `#N`、active delivery PR が一つである必要があります。Human が作成した PR も扱います。
+
+対象の local branch / worktree / ownership mapping がすべて存在しなければ remote PR HEAD から作成します。既存 state は整合・clean で local HEAD と remote PR HEAD が一致する場合に再利用し、partial / dirty / divergent state は自動修復せず停止します。Author の日本語作業報告は表示された local log path で確認できます。commit 後の push failure では local commit が残るため、remote state を確認してから対応してください。
 
 `iro init` が生成するファイルの commit / push は引き続き人間の責任です。
 
