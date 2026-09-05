@@ -60,6 +60,12 @@ func writeProjectFiles(t *testing.T, root string) {
 func standardFakeResult(spec CommandSpec, root, workspace string, issueFailure bool, dirtyWorkspace bool) CommandResult {
 	if spec.Name == "git" {
 		switch {
+		case len(spec.Args) > 0 && spec.Args[0] == "symbolic-ref":
+			return CommandResult{Stdout: "refs/heads/main\n"}
+		case len(spec.Args) > 0 && spec.Args[0] == "remote":
+			return CommandResult{Stdout: "git@github.com:acme/iro.git\n"}
+		case len(spec.Args) > 0 && spec.Args[0] == "diff":
+			return CommandResult{ExitCode: 1}
 		case len(spec.Args) >= 2 && spec.Args[0] == "rev-parse" && spec.Args[1] == "--show-toplevel":
 			return CommandResult{Stdout: root + "\n", ExitCode: 0}
 		case len(spec.Args) >= 2 && spec.Args[0] == "rev-parse" && spec.Args[1] == "HEAD":
@@ -80,6 +86,12 @@ func standardFakeResult(spec CommandSpec, root, workspace string, issueFailure b
 		}
 	}
 	if spec.Name == "gh" {
+		if len(spec.Args) > 1 && spec.Args[0] == "api" {
+			if spec.Args[1] == "graphql" {
+				return CommandResult{Stdout: deliveryResponseForTest}
+			}
+			return CommandResult{Stdout: `{ "number":456 }`}
+		}
 		if len(spec.Args) >= 2 && spec.Args[0] == "issue" && spec.Args[1] == "view" {
 			if issueFailure {
 				return CommandResult{ExitCode: 1, Err: errors.New("issue unavailable")}
@@ -271,7 +283,7 @@ func TestRunUsesConfiguredIdentityAndNormativeCodexInvocation(t *testing.T) {
 			t.Errorf("Codex payload does not contain %q: %s", want, codexCall.Stdin)
 		}
 	}
-	if !strings.Contains(commentCall.Args[len(commentCall.Args)-1], "生成された変更は未コミット") {
+	if !strings.Contains(commentCall.Args[len(commentCall.Args)-1], "worker の実装段階が完了") {
 		t.Fatalf("result comment is not a Japanese review checkpoint: %v", commentCall.Args)
 	}
 }

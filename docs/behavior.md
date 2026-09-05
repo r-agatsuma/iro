@@ -2,7 +2,7 @@
 
 ## 1. Status and normative language
 
-この文書は bootstrap MVP における `iro` runtime behavior の唯一の normative specification である。
+この文書は現在の `iro` runtime behavior の唯一の normative specification である。
 
 本文中の `MUST`、`MUST NOT`、`SHOULD`、`SHOULD NOT`、`MAY` は規範的要件を示す。
 
@@ -36,12 +36,15 @@ ownership が不明な branch、worktree、file を iro-owned と推測しては
 
 GitHub tracker I/O は `iro` が所有する。
 
-MVP で `iro` が行ってよい GitHub Issue operation は次だけである。
+`iro run` が行う GitHub operation は次とする。
 
 - target Issue の read
-- target Issue への run result comment の create
+- target Issue への worker result comment の create
+- configured repository の default branch と既存 PR relation の read
+- canonical branch から default branch を base とする通常の open PR の create
+- 作成した PR への delivery hint comment の best-effort create
 
-`iro` は Issue create、close、reopen、label、assignee、milestone、Project state、PR を自動変更してはならない。
+`iro` は Issue create、close、reopen、label、assignee、milestone、Project state を自動変更してはならない。PR 作成時点では Issue を close しない。
 
 Codex は `gh` を実行してはならず、GitHub Issue を直接 fetch / create / modify / close / comment してはならない。
 
@@ -78,14 +81,11 @@ read-only な `git status`、`git diff`、`git log`、`git show`、`git grep`、
 
 ### INV-006: human review checkpoint
 
-Codex が生成した変更は uncommitted working tree changes として残さなければならない。
-MVP で Codex または `iro` が自動 commit、push、merge してはならない。
-
-Git commit は Human が review 後に作る checkpoint である。
+Author worker は変更を uncommitted で iro に引き渡す。`iro run` orchestration が worker 成功後に commit / push / 通常の open PR 作成を行う。Human が review と最終 acceptance / merge judgment を所有する。Human 自身の commit / push / PR 作成の authority は制限しない。merge はこの operation に含めない。
 
 ### INV-007: dirty state is human-owned
 
-`iro` は dirty worktree を自動で reset、clean、stash、commit、delete してはならない。
+`iro` は開始時に存在する dirty worktree を自動で reset、clean、stash、commit、delete してはならない。検証済みの clean な owned worktree で今回の worker が生成した変更だけを RUN-016 に従って commit する。
 
 `iro run` で dirty state を検出した場合は変更せず failure とし、cleanup / stash の方法は Human に委ねる。
 `iro status` は dirty state を `DIRTY` として観測し、これだけを理由に failure としてはならない。
@@ -455,12 +455,16 @@ clean とは、tracked と untracked の通常変更が存在しないことを�
 
 source checkout が dirty の場合、`iro` は failure とし、Git state を変更してはならない。
 
+configured repository の default branch `D` を remote API で解決する。current checkout は named branch `D` でなければならない。detached HEAD / non-default branch は branch 作成・worker 起動前に reject する。別の delivery base を推測しない。
+
 ### RUN-003: repository identity
 
 `iro` は `iro.toml` の `tracker.remote` だけを使って remote URL を解決し、GitHub repository identity を決定しなければならない。
 
 configured remote が存在しない、GitHub repository として解決できない、または曖昧な場合は failure とする。
 別 remote へ fallback してはならない。
+
+run は effective push URL が一つで configured repository と一致すること、および Git remote への read access を確認する。write permission の最終判定は push 時に行う。
 
 ### RUN-004: target Issue fetch
 
@@ -505,7 +509,7 @@ Issue branch 名は厳密に次とする。
 iro/issue-<issue-number>
 ```
 
-初回 run で Issue branch と Issue worktree がともに存在しない場合、branch は invoking checkout の current `HEAD` commit から作成しなければならない。
+初回 run で Issue branch と Issue worktree がともに存在しない場合、branch は default branch `D` の local checkout の検証済み `HEAD` commit から作成しなければならない。remote tip への fetch / pull や自動追従は行わない。
 
 初回 branch 作成後に invoking branch の moving target を追従してはならない。
 
@@ -529,7 +533,7 @@ conceptual path:
 
 | Branch | Expected worktree | State | Behavior |
 |---|---|---|---|
-| absent | absent | initial | branch を source `HEAD` commit から作成し worktree を作成 |
+| absent | absent | initial | branch を default branch の local `HEAD` commit から作成し worktree を作成 |
 | present | present | ownership mapping matches; expected branch checked out there; clean | existing worktree を reuse して fresh Codex run |
 | present | present | ownership mapping matches; dirty | failure; no Git changes |
 | present | present | ownership mapping missing/mismatch or wrong branch | failure; no changes |
@@ -558,7 +562,7 @@ discard untracked files/directories as well:
 
 これらの command を `iro` が自動実行してはならない。
 
-Human が worktree を clean にした後、同じ `iro run <issue-number>` を実行すると RUN-008 の clean reuse path で新しい ephemeral Codex run を開始する。
+Human が worktree を clean にした後も、remote relation precondition を満たす場合に限り RUN-008 の clean reuse path で fresh worker を起動する。active PR がある場合は `run` を reject する。既存 PR に対する追加実装は後続の `iro revise <pr-number>` operation の責務とし、この変更では実装しない。
 
 ### RUN-010: precondition order
 
@@ -571,6 +575,9 @@ source checkout cleanliness
 project files / config
 configured remote / GitHub repository identity
 gh executable / GitHub authentication
+remote default branch / existing PR relations
+current named branch == default branch
+configured push destination / Git remote access
 target Issue and comments fetch
 Codex executable / Codex authentication
 branch/worktree state
@@ -618,7 +625,7 @@ Do not intentionally modify remote services.
 You may edit working tree files, but use Git commands only for read-only inspection.
 Do not perform Git metadata/index/ref/history/remote state changes, including add, commit, fetch, pull, push,
 reset, clean, stash, checkout, switch, restore, merge, rebase, cherry-pick, branch mutation, or tag mutation.
-Leave all repository changes uncommitted for human review.
+Leave all repository changes uncommitted for iro orchestration to commit and deliver for human review.
 Work only on the supplied Issue and avoid unrelated changes.
 Run relevant tests when feasible.
 Return the final work report in Japanese, including changes, tests, success/failure, and known limitations.
@@ -675,13 +682,29 @@ Codex の final stdout は可能な限り Issue result comment の作業報告�
 
 ### RUN-016: Codex success
 
-Codex exit status が 0 の場合:
+Codex exit status が 0 の場合、stdout の validation / 作業報告を回収し、Issue へ worker result comment を投稿し、local log に保存する。この comment は実装段階の結果であり delivery 成功とは区別する。worker が行った validation の内容はその報告に依存し、iro 自身が test の成功を解析・保証するものではない。
 
-- Issue worktree を保持する
-- uncommitted changes を保持する
-- target Issue へ日本語 result comment を投稿する
-- Human review が必要であることを CLI に表示する
-- commit / push / PR / merge / Issue close を行わない
+その後 iro orchestration が次を順に行う。
+
+1. owned worktree の変更を `git add --all` で stage する。
+2. staged diff が存在することを確認する。空の場合は failure とし、空 commit / push / PR を作らない。
+3. `Implement issue #N` という英語 message で commit する。
+4. configured remote へ canonical `refs/heads/iro/issue-N` を明示的な refspec で push する。force push は禁止する。
+5. 通常の open PR を作成する。head は `iro/issue-N`、base は `D`、body は `Closes #N` を含む固定文面とする。worker output を body に展開して追加の closing relation を導入してはならない。
+6. create response の PR number `M` を取得し、stdout に PR number と `iro land M` を表示する。
+7. PR に `## iro delivery` と `Land: ` に続くコード表記の `iro land M` を含む comment を best-effort で投稿する。
+
+PR create 成功と number の取得を required remote delivery の完了境界とする。hint comment 失敗は warning を stderr に出すが exit success を維持する。PR body の post-create update、Issue closing relation の作成直後の再取得は要求しない。Draft PR / Draft option、merge、Issue close API は提供しない。`iro land` 自体の実装はこの変更の対象外である。
+
+stage / commit failure 時は worktree と index を保持して failure とする。push failure 時は local commit の存在と remote 更新の可能性を明示する。push 後の PR creation / response decode failure 時は remote branch が publish 済みであり PR が存在する可能性を明示して failure とする。自動 rollback / retry / repair は行わない。
+
+### RUN-016a: delivery relation
+
+relation は `Issue #N ↔ iro/issue-N ↔ maximum 1 active PR` とする。1 PR の origin Issue は exactly 1 件とする。creator identity / provenance は判断に使用しない。
+
+run は repository の PR を全 state について pagination で取得し、canonical head branch または configured repository の Issue #N との native closing relation を持つ既存 PR があれば branch 作成・worker 起動前に reject する。closed / abandoned / merged PR がある場合も replacement を推測して生成しない。relation mismatch、取得失敗、不完全な relation は fail closed とし、自動 repair しない。各 PR の closing references が取得上限 100 件を超える場合も安全に検証できないため reject する。
+
+local ownership mapping は local resource ownership だけを表し、PR number や provenance を保存しない。後続 operation は実行時の remote state で relation を検証し、delivery hint comment の有無を eligibility に利用してはならない。run の preflight と PR create は atomic ではなく、同時実行の排他制御はこの変更の scope 外である。
 
 ### RUN-017: Codex failure
 
@@ -744,7 +767,7 @@ Codex thread/session ID は保存対象に含めない。
 | Codex auth missing | allowed | report | allowed; no authentication check | error | allowed; no authentication check |
 | source checkout dirty | N/A | report if inspected | allowed; invoking checkout cleanliness is not inspected; read-only | error; no changes | allowed if target is a different clean worktree |
 | Issue or comments not found/unreadable | N/A | N/A | not applicable; no Issue lookup; read-only | error before workspace creation | not applicable; no Issue lookup |
-| Issue branch/worktree both absent | N/A | optional report | `BROKEN`; non-zero if an ownership mapping exists; otherwise no row; no repair | create from current HEAD commit | error; mapping required; no changes |
+| Issue branch/worktree both absent | N/A | optional report | `BROKEN`; non-zero if an ownership mapping exists; otherwise no row; no repair | create from default branch local HEAD commit | error; mapping required; no changes |
 | matching iro-owned Issue worktree clean | N/A | optional report | `CLEAN`; success; read-only | reuse; fresh ephemeral run | remove worktree, safe-delete branch, then remove mapping |
 | matching iro-owned Issue worktree dirty | N/A | report if discoverable | `DIRTY`; success; read-only | error; no cleanup | error; no changes |
 | expected branch/path exists without valid ownership mapping | N/A | report if discoverable | ignore; no ownership guessing; read-only | error; no ownership guessing | error; no ownership guessing |
@@ -753,7 +776,7 @@ Codex thread/session ID は保存対象に含めない。
 | Issue branch tip not in invoking `HEAD` history | N/A | N/A | not applicable; read-only | not applicable | error; no changes |
 | worktree removal or safe branch deletion failure | N/A | N/A | not applicable | not applicable | non-zero; mapping retained |
 | successful full cleanup | N/A | N/A | no mapping remains | not applicable | worktree, local branch, and mapping removed |
-| Codex run success | N/A | N/A | observe local state only; no semantic inference; read-only | comment result; keep worktree; human review | not applicable |
+| Codex run success | N/A | N/A | observe local state only; no semantic inference; read-only | comment worker result; commit / push / open PR; human review | not applicable |
 | Codex run failure | N/A | N/A | observe local state only; no semantic inference; read-only | comment failure result if possible; keep worktree; non-zero | not applicable |
 | Issue comment failure | N/A | N/A | observe local state only; no semantic inference; read-only | keep local result; non-zero; no Codex rerun | not applicable |
 

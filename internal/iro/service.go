@@ -192,6 +192,10 @@ func (s *Service) Doctor(out io.Writer) error {
 }
 
 func (s *Service) Run(issueNumber int, out io.Writer) error {
+	return s.run(issueNumber, out, os.Stderr)
+}
+
+func (s *Service) run(issueNumber int, out, errOut io.Writer) error {
 	if issueNumber <= 0 {
 		return fmt.Errorf("issue number must be a positive decimal integer")
 	}
@@ -204,6 +208,12 @@ func (s *Service) Run(issueNumber int, out io.Writer) error {
 	}
 	if err := s.checkoutClean(root); err != nil {
 		return err
+	}
+	for _, name := range []string{"iro.toml", "WORKFLOW.md"} {
+		present, regular, err := s.fileState(filepath.Join(root, name))
+		if err != nil || !present || !regular {
+			return fmt.Errorf("%s must be a readable regular file", name)
+		}
 	}
 	config, err := s.loadConfig(root)
 	if err != nil {
@@ -222,6 +232,17 @@ func (s *Service) Run(issueNumber int, out io.Writer) error {
 	if err := s.checkAuth("gh", []string{"auth", "status"}, root); err != nil {
 		return err
 	}
+	branch := fmt.Sprintf("iro/issue-%d", issueNumber)
+	base, err := s.deliveryBase(root, identity, issueNumber, branch)
+	if err != nil {
+		return err
+	}
+	if err := s.verifyDeliveryCheckout(root, base); err != nil {
+		return err
+	}
+	if err := s.verifyPushRemote(root, config.TrackerRemote, identity); err != nil {
+		return err
+	}
 	target, err := s.fetchIssue(root, identity, issueNumber)
 	if err != nil {
 		return err
@@ -236,7 +257,6 @@ func (s *Service) Run(issueNumber int, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	branch := fmt.Sprintf("iro/issue-%d", issueNumber)
 	workspace, created, err := s.prepareWorktree(root, identity, issueNumber, branch, head)
 	if err != nil {
 		return err
@@ -270,8 +290,7 @@ func (s *Service) Run(issueNumber int, out io.Writer) error {
 	if logErr != nil {
 		return logErr
 	}
-	fmt.Fprintln(out, "Codex completed; the Issue worktree remains uncommitted for human review")
-	return nil
+	return s.deliver(root, workspace, identity, issueNumber, config.TrackerRemote, branch, base, out, errOut)
 }
 
 func (s *Service) loadConfig(root string) (Config, error) {
@@ -413,7 +432,7 @@ Do not intentionally modify remote services.
 You may edit working tree files, but use Git commands only for read-only inspection.
 Do not perform Git metadata/index/ref/history/remote state changes, including add, commit, fetch, pull, push,
 reset, clean, stash, checkout, switch, restore, merge, rebase, cherry-pick, branch mutation, or tag mutation.
-Leave all repository changes uncommitted for human review.
+Leave all repository changes uncommitted for iro orchestration to commit and deliver for human review.
 Work only on the supplied Issue and avoid unrelated changes.
 Run relevant tests when feasible.
 Return the final work report in Japanese, including changes, tests, success/failure, and known limitations.`
@@ -476,7 +495,7 @@ func buildResultComment(success bool, issueNumber int, workspace string, result 
 		fmt.Fprintf(&builder, "\nCodex のエラー出力:\n%s\n", strings.TrimSpace(result.Stderr))
 	}
 	if success {
-		builder.WriteString("\n生成された変更は未コミットのままです。人間が review してから commit してください。\n")
+		builder.WriteString("\nworker の実装段階が完了しました。iro はこの後 commit / push / PR 作成を試行します。この報告は delivery 成功を意味しません。\n")
 	} else {
 		builder.WriteString("\nCodex は失敗しました。partial changes を保持しているため、人間が確認・cleanup してから再実行してください。\n")
 	}

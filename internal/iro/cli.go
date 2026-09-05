@@ -42,7 +42,7 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
-		err = service.Run(number, out)
+		err = service.run(number, out, errOut)
 	case "cleanup":
 		if len(args) != 2 {
 			fmt.Fprintln(errOut, "error: usage: iro cleanup <issue-number>")
