@@ -269,6 +269,17 @@ func (s *Service) fetchReviewContext(root string, identity RepositoryIdentity, n
 		}
 		return result.Stdout, nil
 	}
+	runPaginated := func(label, endpoint string) (string, error) {
+		stdout, err := run(label, []string{"api", "--paginate", endpoint}, false)
+		if err != nil {
+			return "", err
+		}
+		normalized, err := normalizeJSONPages(stdout)
+		if err != nil {
+			return "", fmt.Errorf("GitHub returned invalid %s for PR #%d: %w", label, number, err)
+		}
+		return normalized, nil
+	}
 
 	changedFiles, err := run("changed files", []string{"pr", "diff", strconv.Itoa(number), "--repo", identity.String(), "--name-only"}, false)
 	if err != nil {
@@ -278,15 +289,15 @@ func (s *Service) fetchReviewContext(root string, identity RepositoryIdentity, n
 	if err != nil {
 		return reviewContext{}, err
 	}
-	conversation, err := run("conversation comments", []string{"api", "--paginate", "--slurp", "repos/" + identity.String() + "/issues/" + strconv.Itoa(number) + "/comments"}, true)
+	conversation, err := runPaginated("conversation comments", "repos/"+identity.String()+"/issues/"+strconv.Itoa(number)+"/comments")
 	if err != nil {
 		return reviewContext{}, err
 	}
-	reviews, err := run("submitted reviews", []string{"api", "--paginate", "--slurp", "repos/" + identity.String() + "/pulls/" + strconv.Itoa(number) + "/reviews"}, true)
+	reviews, err := runPaginated("submitted reviews", "repos/"+identity.String()+"/pulls/"+strconv.Itoa(number)+"/reviews")
 	if err != nil {
 		return reviewContext{}, err
 	}
-	inlineComments, err := run("inline review comments", []string{"api", "--paginate", "--slurp", "repos/" + identity.String() + "/pulls/" + strconv.Itoa(number) + "/comments"}, true)
+	inlineComments, err := runPaginated("inline review comments", "repos/"+identity.String()+"/pulls/"+strconv.Itoa(number)+"/comments")
 	if err != nil {
 		return reviewContext{}, err
 	}
@@ -302,6 +313,29 @@ func (s *Service) fetchReviewContext(root string, identity RepositoryIdentity, n
 		Checks:             checks,
 		InlineReviewThread: inlineComments,
 	}, nil
+}
+
+// normalizeJSONPages wraps a stream of JSON arrays in a single array, preserving page order.
+func normalizeJSONPages(stdout string) (string, error) {
+	decoder := json.NewDecoder(strings.NewReader(stdout))
+	var pages [][]json.RawMessage
+	for {
+		var page []json.RawMessage
+		if err := decoder.Decode(&page); err == io.EOF {
+			break
+		} else if err != nil {
+			return "", fmt.Errorf("could not decode page %d: %w", len(pages)+1, err)
+		}
+		if page == nil {
+			return "", fmt.Errorf("page %d must be a JSON array", len(pages)+1)
+		}
+		pages = append(pages, page)
+	}
+	if len(pages) == 0 {
+		return "", fmt.Errorf("expected at least one JSON array page")
+	}
+	normalized, err := json.Marshal(pages)
+	return string(normalized), err
 }
 
 func (s *Service) materializeReviewWorkspace(root string, identity RepositoryIdentity, target reviewPullRequest) (string, error) {

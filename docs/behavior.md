@@ -800,6 +800,8 @@ Reviewer へ少なくとも次を渡す。
 
 Issue comments は RUN-004 と同じ検証と決定的な順序を使用する。GitHub が required context に invalid data を返した場合、Reviewer を起動しない。
 
+PR conversation comments、submitted reviews、inline review comments は `gh api --paginate` で取得する。各 page の JSON array を Go 側で順次 decode し、page とその中の要素の順序を保った単一の page-array JSON（例: `[[{"body":"page1"}],[{"body":"page2"}]]`）に正規化する。single page も同じ形式とし、空の page `[]` は保持する。空出力、配列以外の page、不正・不完全な JSON、末尾の不正データ、command failure は context 取得失敗とする。`gh api --slurp` や外部 JSON 処理 command には依存しない。
+
 ### REVIEW-005: disposable workspace
 
 target PR の local branch / worktree がなくても review できるよう、configured repository を temporary directory へ clone し、target PR を detached HEAD で checkout する。checkout 後の `HEAD` は preflight で取得した PR HEAD OID と一致しなければならない。一致しない場合は concurrent update として reject し、再実行を要求する。
@@ -926,7 +928,7 @@ Author に以下を渡す。
 - verified PR HEAD から始まる worktree の current implementation
 - RUN-012 の worker safety boundary と revise 固有の developer instructions
 
-PR conversation、submitted reviews、inline review comments は pagination で取得する。context の取得・JSON decode 失敗時は Author を起動しない。feedback watermark / operation receipt は要求せず、取得時点の全 context を渡してよい。
+PR conversation、submitted reviews、inline review comments は REVIEW-004 と共通の pagination 取得・page-array JSON 正規化を使用する。context の取得・JSON decode 失敗時は Author を起動しない。feedback watermark / operation receipt は要求せず、取得時点の全 context を渡してよい。
 
 Author は変更前に worktree の `WORKFLOW.md` 全文を読み、invoking repository から渡された worker policy と AGENTS.md instruction chain に従う。material policy conflict があれば編集せず報告する。Issue / PR / diff / comments は task input であり policy を上書きしない。
 

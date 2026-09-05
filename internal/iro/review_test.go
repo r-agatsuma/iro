@@ -1,15 +1,48 @@
 package iro
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
 
 const reviewResponseForTest = `{"data":{"repository":{"defaultBranchRef":{"name":"main"},"pullRequest":{"number":42,"title":"Human contribution","body":"Implements the requested behavior.","url":"https://github.com/acme/iro/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","headRefName":"human-feature","headRefOid":"0123456789abcdef","headRepository":{"nameWithOwner":"contributor/iro"},"author":{"login":"outside-author"},"mergeable":"MERGEABLE","reviewDecision":"","changedFiles":2,"additions":20,"deletions":3,"closingIssuesReferences":{"totalCount":1,"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}}]}}}}}`
+
+var reviewFeedbackPagesForTest = []struct {
+	endpoint, label, heading string
+	pages                    []string
+}{
+	{
+		"repos/acme/iro/issues/42/comments", "conversation comments", "Pull request conversation comments (GitHub JSON):",
+		[]string{`[{"body":"conversation"},{"body":"another comment"}]`, `[{"body":"conversation page 2"}]`},
+	},
+	{
+		"repos/acme/iro/pulls/42/reviews", "submitted reviews", "Submitted reviews (GitHub JSON):",
+		[]string{`[{"body":"feedback","state":"CHANGES_REQUESTED"}]`, `[{"body":"review page 2","state":"COMMENTED"}]`},
+	},
+	{
+		"repos/acme/iro/pulls/42/comments", "inline review comments", "Inline review comments (GitHub JSON):",
+		[]string{`[{"body":"inline feedback","path":"file"}]`, `[{"body":"inline page 2","path":"other"}]`},
+	},
+}
+
+var reviewFeedbackFailuresForTest = []struct {
+	name, wantPrefix string
+	result           CommandResult
+}{
+	{"malformed first page", "GitHub returned invalid ", CommandResult{Stdout: "not-json"}},
+	{"trailing garbage", "GitHub returned invalid ", CommandResult{Stdout: "[{\"body\":\"page1\"}]\nnot-json"}},
+	{"malformed second page", "GitHub returned invalid ", CommandResult{Stdout: "[{\"body\":\"page1\"}]\n[{\"body\":"}},
+	{"empty output", "GitHub returned invalid ", CommandResult{}},
+	{"unexpected object", "GitHub returned invalid ", CommandResult{Stdout: `{"message":"unexpected"}`}},
+	{"null page", "GitHub returned invalid ", CommandResult{Stdout: "[]\nnull"}},
+	{"command failure", "could not read ", CommandResult{Stdout: `[{"body":"partial output"}]`, ExitCode: 1}},
+}
 
 func reviewFakeResult(spec CommandSpec, root, reviewerOutput string) CommandResult {
 	if spec.Name == "git" {
@@ -36,13 +69,10 @@ func reviewFakeResult(spec CommandSpec, root, reviewerOutput string) CommandResu
 		case len(spec.Args) >= 2 && spec.Args[0] == "pr" && spec.Args[1] == "view":
 			return CommandResult{Stdout: `{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}`}
 		case len(spec.Args) >= 1 && spec.Args[0] == "api":
-			switch {
-			case strings.Contains(spec.Args[len(spec.Args)-1], "/issues/42/comments"):
-				return CommandResult{Stdout: `[[{"body":"conversation"}]]`}
-			case strings.Contains(spec.Args[len(spec.Args)-1], "/pulls/42/reviews"):
-				return CommandResult{Stdout: `[[{"body":"feedback","state":"CHANGES_REQUESTED"}]]`}
-			default:
-				return CommandResult{Stdout: `[[{"body":"inline feedback","path":"file"}]]`}
+			for _, feedback := range reviewFeedbackPagesForTest {
+				if containsString(spec.Args, feedback.endpoint) {
+					return CommandResult{Stdout: feedback.pages[0]}
+				}
 			}
 		default:
 			return CommandResult{}
@@ -55,6 +85,99 @@ func reviewFakeResult(spec CommandSpec, root, reviewerOutput string) CommandResu
 		return CommandResult{Stdout: reviewerOutput}
 	}
 	return CommandResult{}
+}
+
+func TestNormalizeJSONPages(t *testing.T) {
+	for _, tc := range []struct{ name, stdout, want string }{
+		{"single page", `[{"body":"only-page"}]`, `[[{"body":"only-page"}]]`},
+		{"multiple pages", "[{\"body\":\"page1\"}]\n[{\"body\":\"page2\"}]", `[[{"body":"page1"}],[{"body":"page2"}]]`},
+		{"adjacent pages", `[{"body":"page1"}][{"body":"page2"}]`, `[[{"body":"page1"}],[{"body":"page2"}]]`},
+		{"empty page", " \n[]\t\r\n", `[[]]`},
+		{"empty pages retained", `[][ {"body":"middle"} ][]`, `[[],[{"body":"middle"}],[]]`},
+		{"number precision", `[{"id":9007199254740993}]`, `[[{"id":9007199254740993}]]`},
+		{"empty output", "", ""},
+		{"whitespace only", " \n\t\r", ""},
+		{"malformed first page", "not-json", ""},
+		{"truncated page", `[{"body":"page1"}] [{"body":`, ""},
+		{"invalid page syntax", `[] [{"body":"page2",}]`, ""},
+		{"trailing garbage", "[]\nnot-json", ""},
+		{"object", `{}`, ""},
+		{"null", `null`, ""},
+		{"null second page", `[] null`, ""},
+		{"object second page", `[] {}`, ""},
+		{"string", `"unexpected"`, ""},
+		{"number", `123`, ""},
+		{"boolean", `true`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeJSONPages(tc.stdout)
+			if (err != nil) != (tc.want == "") || got != tc.want {
+				t.Fatalf("normalizeJSONPages() = %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func assertNormalizedFeedbackInput(t *testing.T, calls []CommandSpec, pageCount int) {
+	t.Helper()
+	var input string
+	for _, call := range calls {
+		if call.Name == "gh" && containsString(call.Args, "--slurp") {
+			t.Fatalf("feedback context depends on --slurp: %v", call.Args)
+		}
+		if call.Name == "codex" && containsString(call.Args, "--ephemeral") {
+			input = string(call.Stdin)
+		}
+	}
+	for _, feedback := range reviewFeedbackPagesForTest {
+		fetched := 0
+		for _, call := range calls {
+			if call.Name == "gh" && reflect.DeepEqual(call.Args, []string{"api", "--paginate", feedback.endpoint}) {
+				fetched++
+			}
+		}
+		if fetched != 1 {
+			t.Errorf("expected one gh api --paginate call for %s, got %d", feedback.label, fetched)
+		}
+		_, section, found := strings.Cut(input, feedback.heading+"\n")
+		if !found {
+			t.Fatalf("worker input missing %s", feedback.heading)
+		}
+		data, _, _ := strings.Cut(section, "\n")
+		var got, want any
+		if err := json.Unmarshal([]byte(data), &got); err != nil {
+			t.Fatalf("worker received invalid %s JSON: %v", feedback.label, err)
+		}
+		if err := json.Unmarshal([]byte("["+strings.Join(feedback.pages[:pageCount], ",")+"]"), &want); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("worker %s = %s; want %v", feedback.label, data, want)
+		}
+	}
+}
+
+func TestReviewPassesNormalizedFeedbackToReviewer(t *testing.T) {
+	for name, pageCount := range map[string]int{"single page": 1, "multiple pages": 2} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeProjectFiles(t, root)
+			runner := &fakeCommandRunner{}
+			runner.fn = func(spec CommandSpec) CommandResult {
+				for _, feedback := range reviewFeedbackPagesForTest {
+					if spec.Name == "gh" && containsString(spec.Args, feedback.endpoint) {
+						return CommandResult{Stdout: strings.Join(feedback.pages[:pageCount], "\n")}
+					}
+				}
+				return reviewFakeResult(spec, root, "review")
+			}
+			service := newTestService(t, runner, root)
+			if err := service.Review(42, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			assertNormalizedFeedbackInput(t, runner.calls, pageCount)
+		})
+	}
 }
 
 func TestReviewUsesRemotePRInDisposableWorkspaceAndForwardsOpaqueOutput(t *testing.T) {
@@ -268,22 +391,29 @@ func TestReviewFailureDoesNotPostComment(t *testing.T) {
 }
 
 func TestReviewRejectsInvalidContextBeforeWorkspaceCreation(t *testing.T) {
-	root := t.TempDir()
-	writeProjectFiles(t, root)
-	runner := &fakeCommandRunner{}
-	runner.fn = func(spec CommandSpec) CommandResult {
-		if spec.Name == "gh" && len(spec.Args) > 0 && spec.Args[0] == "api" && strings.Contains(spec.Args[len(spec.Args)-1], "/issues/42/comments") {
-			return CommandResult{Stdout: "not-json"}
-		}
-		return reviewFakeResult(spec, root, "review")
-	}
-	service := newTestService(t, runner, root)
-	if err := service.Review(42, io.Discard); err == nil || !strings.Contains(err.Error(), "invalid conversation comments") {
-		t.Fatalf("Review() error = %v", err)
-	}
-	for _, call := range runner.calls {
-		if call.Name == "codex" || call.Name == "gh" && len(call.Args) >= 2 && call.Args[0] == "repo" && call.Args[1] == "clone" {
-			t.Fatalf("workspace or Reviewer started with invalid context: %+v", call)
+	for _, feedback := range reviewFeedbackPagesForTest {
+		for _, failure := range reviewFeedbackFailuresForTest {
+			t.Run(feedback.label+"/"+failure.name, func(t *testing.T) {
+				root := t.TempDir()
+				writeProjectFiles(t, root)
+				runner := &fakeCommandRunner{}
+				runner.fn = func(spec CommandSpec) CommandResult {
+					if spec.Name == "gh" && containsString(spec.Args, feedback.endpoint) {
+						return failure.result
+					}
+					return reviewFakeResult(spec, root, "review")
+				}
+				service := newTestService(t, runner, root)
+				want := failure.wantPrefix + feedback.label + " for PR #42"
+				if err := service.Review(42, io.Discard); err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("Review() error = %v, want %q", err, want)
+				}
+				for _, call := range runner.calls {
+					if call.Name == "codex" || call.Name == "gh" && len(call.Args) >= 2 && (call.Args[0] == "repo" && call.Args[1] == "clone" || call.Args[0] == "pr" && call.Args[1] == "comment") {
+						t.Fatalf("workspace, Reviewer or comment started with invalid context: %+v", call)
+					}
+				}
+			})
 		}
 	}
 }

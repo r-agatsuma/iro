@@ -152,6 +152,54 @@ func revisionMutations(calls []CommandSpec) []string {
 	return stages
 }
 
+func TestRevisePassesNormalizedFeedbackToFreshAuthor(t *testing.T) {
+	for name, pageCount := range map[string]int{"single page": 1, "multiple pages": 2} {
+		t.Run(name, func(t *testing.T) {
+			f := newReviseFixture(t, false)
+			f.runner.fn = func(spec CommandSpec) CommandResult {
+				for _, feedback := range reviewFeedbackPagesForTest {
+					if spec.Name == "gh" && containsString(spec.Args, feedback.endpoint) {
+						return CommandResult{Stdout: strings.Join(feedback.pages[:pageCount], "\n")}
+					}
+				}
+				return f.respond(spec)
+			}
+			if err := f.service.Revise(42, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			assertNormalizedFeedbackInput(t, f.runner.calls, pageCount)
+		})
+	}
+}
+
+func TestReviseRejectsInvalidFeedbackBeforeMutation(t *testing.T) {
+	for _, feedback := range reviewFeedbackPagesForTest {
+		for _, failure := range reviewFeedbackFailuresForTest {
+			t.Run(feedback.label+"/"+failure.name, func(t *testing.T) {
+				f := newReviseFixture(t, false)
+				f.runner.fn = func(spec CommandSpec) CommandResult {
+					if spec.Name == "gh" && containsString(spec.Args, feedback.endpoint) {
+						return failure.result
+					}
+					return f.respond(spec)
+				}
+				want := failure.wantPrefix + feedback.label + " for PR #42"
+				if err := f.service.Revise(42, io.Discard); err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("Revise() error = %v, want %q", err, want)
+				}
+				if stages := revisionMutations(f.runner.calls); len(stages) != 0 {
+					t.Fatal("mutation before context rejection", stages)
+				}
+				for _, path := range []string{f.workspace, ownershipPath(f.service.Dirs, f.identity, 123)} {
+					if _, err := os.Stat(path); !os.IsNotExist(err) {
+						t.Fatalf("invalid context created local state %s: %v", path, err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestReviseMaterializesOrReusesHumanPRAndPushesSameBranch(t *testing.T) {
 	for _, existing := range []bool{false, true} {
 		t.Run(fmt.Sprintf("existing=%t", existing), func(t *testing.T) {
