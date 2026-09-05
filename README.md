@@ -25,8 +25,10 @@ iro cleanup <issue-number>
 `iro init` は `WORKFLOW.md` と `iro.toml` を新規作成します。`iro doctor` は環境と設定を read-only で診断します。`iro status` は ownership mapping に対応するローカル Issue workspace の機械状態を read-only で表示します。`iro run` は configured remote の GitHub Issue を取得し、Issue 専用 worktree で fresh ephemeral Codex run を開始します。
 `iro cleanup` は Human が明示した Issue について、ownership を検証できる clean な local worktree と local branch を安全に削除し、最後に ownership mapping を削除します。GitHub Issue / PR の状態や remote branch は確認・変更しません。
 
-Codex が生成した変更は commit されません。人間が worktree を review し、必要な Git 操作と Issue の lifecycle 操作を行ってください。
+`iro run` は configured repository の default branch の clean な checkout から実行します。worker 成功後、iro が変更を commit / push し、default branch を base とする通常の open PR を作成します。既存の関連 PR がある場合は停止します。PR number と `iro land <pr-number>` を表示し、同じヒントを PR comment に投稿します（`land` command 自体は未実装です）。人間が PR を review し、merge を判断してください。
+
+`iro init` が生成するファイルの commit / push は引き続き人間の責任です。
 
 ## Scope
 
-bootstrap MVP は local execution と human dispatch に限定されます。daemon、scheduler、automatic commit/push/merge、Issue の自動 close、Codex session の resume は含みません。
+実行は human dispatch に限定されます。daemon、scheduler、自動 merge、Issue の直接 close、Draft PR option、Codex session の resume は含みません。Author worker は file modification と validation だけを担当し、Git / tracker lifecycle mutation は iro が担当します。
