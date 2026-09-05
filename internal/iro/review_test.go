@@ -162,6 +162,33 @@ func TestReviewDoesNotInterpretReviewerOutput(t *testing.T) {
 	}
 }
 
+func TestReviewAllowsDraftPR(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	response := strings.Replace(reviewResponseForTest, `"isDraft":false`, `"isDraft":true`, 1)
+	runner := &fakeCommandRunner{}
+	runner.fn = func(spec CommandSpec) CommandResult {
+		if spec.Name == "gh" && len(spec.Args) >= 2 && spec.Args[0] == "api" && spec.Args[1] == "graphql" {
+			return CommandResult{Stdout: response}
+		}
+		return reviewFakeResult(spec, root, "draft review")
+	}
+	service := newTestService(t, runner, root)
+
+	if err := service.Review(42, io.Discard); err != nil {
+		t.Fatalf("Review() rejected draft PR: %v", err)
+	}
+	for _, call := range runner.calls {
+		if call.Name == "codex" && containsString(call.Args, "--ephemeral") {
+			if !strings.Contains(string(call.Stdin), "Draft: true") {
+				t.Fatalf("Reviewer payload omitted draft metadata: %s", call.Stdin)
+			}
+			return
+		}
+	}
+	t.Fatal("draft PR did not reach Reviewer")
+}
+
 func TestReviewRejectsInvalidRemoteRelationBeforeReviewer(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -174,7 +201,7 @@ func TestReviewRejectsInvalidRemoteRelationBeforeReviewer(t *testing.T) {
 		{"different repository origin", `"nameWithOwner":"acme/iro"}}]`, `"nameWithOwner":"other/iro"}}]`, "configured repository"},
 		{"non-default base", `"baseRefName":"main"`, `"baseRefName":"release"`, "default branch"},
 		{"closed", `"state":"OPEN"`, `"state":"CLOSED"`, "not reviewable"},
-		{"draft", `"isDraft":false`, `"isDraft":true`, "not reviewable"},
+		{"merged", `"state":"OPEN"`, `"state":"MERGED"`, "not reviewable"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -211,8 +211,8 @@ func (s *Service) inspectReviewTarget(root string, identity RepositoryIdentity, 
 	if pr == nil || pr.Number != number || pr.URL == "" {
 		return reviewPullRequest{}, fmt.Errorf("PR #%d does not exist in %s or is unreadable", number, identity.String())
 	}
-	if pr.State != "OPEN" || pr.IsDraft {
-		return reviewPullRequest{}, fmt.Errorf("PR #%d is not reviewable; it must be open and not a draft", number)
+	if pr.State != "OPEN" {
+		return reviewPullRequest{}, fmt.Errorf("PR #%d is not reviewable; it must be open", number)
 	}
 	if pr.BaseRefName != repository.DefaultBranchRef.Name {
 		return reviewPullRequest{}, fmt.Errorf("PR #%d targets %q, but review requires default branch %q", number, pr.BaseRefName, repository.DefaultBranchRef.Name)

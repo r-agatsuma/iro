@@ -762,7 +762,7 @@ Reviewer 起動と disposable workspace 作成より前に、次を検証する�
 
 - `gh` executable と authentication
 - target PR が configured repository に存在し readable
-- target PR が `OPEN` かつ non-draft
+- target PR が `OPEN`（Draft を許可する）
 - configured repository の default branch が一意に取得でき、target PR の base と一致
 - GitHub native `closingIssuesReferences` が exactly 1 件
 - closing relation の origin Issue が configured repository に属し、取得可能
@@ -872,7 +872,8 @@ Codex thread/session ID は保存対象に含めない。
 | Codex auth missing | allowed | report | allowed; no authentication check | error | error | allowed; no authentication check |
 | source checkout dirty or non-default | N/A | report if inspected | allowed; invoking checkout cleanliness is not inspected; read-only | error; no changes | allowed; not inspected | allowed if target is a different clean worktree |
 | Issue or comments not found/unreadable | N/A | N/A | not applicable; no Issue lookup; read-only | error before workspace creation | origin Issue error before Reviewer | not applicable; no Issue lookup |
-| PR absent, closed, draft, or non-default base | N/A | N/A | not applicable | not applicable | error before Reviewer | not applicable |
+| PR absent, closed, merged, or non-default base | N/A | N/A | not applicable | not applicable | error before Reviewer | not applicable |
+| Open Draft PR | N/A | N/A | not applicable | not applicable | allowed | not applicable |
 | PR origin closing relation count is not exactly 1 | N/A | N/A | not applicable | not applicable | error before Reviewer | not applicable |
 | target PR branch/worktree/ownership absent or unrelated | N/A | N/A | observe mapped state only | not applicable | allowed; disposable workspace only | not applicable |
 | Issue branch/worktree both absent | N/A | optional report | `BROKEN`; non-zero if an ownership mapping exists; otherwise no row; no repair | create from default branch local HEAD commit | not inspected | error; mapping required; no changes |
