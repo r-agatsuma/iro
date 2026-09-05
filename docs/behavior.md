@@ -464,7 +464,16 @@ configured remote が存在しない、GitHub repository として解決でき�
 
 ### RUN-004: target Issue fetch
 
-`iro` は branch/worktree を作成する前に target Issue が存在し readable であることを `gh` で検証し、その内容を取得しなければならない。
+`iro` は branch/worktree を作成する前に target Issue が存在し readable であることを `gh` で検証し、Issue 本文と Issue comments を取得しなければならない。
+
+各 Issue comment について、少なくとも次の情報を取得しなければならない。
+
+- immutable な comment identifier
+- author
+- `createdAt`
+- body
+
+Issue comments は `createdAt` の時系列昇順で worker context に渡さなければならない。同一の時刻の comments は immutable な comment identifier の昇順を tie-breaker とし、決定的な順序にしなければならない。Issue または comments の取得・応答の decode・必要な comment 情報の検証に失敗した場合、worker を起動してはならない。
 
 MVP の Codex task payload は少なくとも次を含む。
 
@@ -474,7 +483,10 @@ issue number
 issue title
 issue body
 issue URL
+Issue comments
 ```
+
+Issue body は Issue comments より先に配置しなければならない。各 comment は worker が author、created time、body、および順序決定に使った identifier を識別できる形式で配置しなければならない。comments が 0 件の場合も正常な payload とする。
 
 ### RUN-005: Codex preconditions
 
@@ -559,7 +571,7 @@ source checkout cleanliness
 project files / config
 configured remote / GitHub repository identity
 gh executable / GitHub authentication
-target Issue fetch
+target Issue and comments fetch
 Codex executable / Codex authentication
 branch/worktree state
 ```
@@ -643,7 +655,7 @@ codex \
   "Implement the GitHub Issue supplied on stdin."
 ```
 
-Issue payload は stdin で追加 context として渡してよい。payload encoding は deterministic で、Issue body を lossless に保持しなければならない。
+Issue payload は stdin で追加 context として渡してよい。payload encoding は deterministic で、Issue body と各 comment body を lossless に保持しなければならない。Issue body を先に、その後に `createdAt` 昇順（同一時刻は immutable identifier 昇順）の comments を配置しなければならない。
 
 `danger-full-access`、`--yolo`、deprecated `--full-auto` を使用してはならない。
 
@@ -731,7 +743,7 @@ Codex thread/session ID は保存対象に含めない。
 | Codex missing | allowed | report | allowed; no Codex access | error | allowed; no Codex access |
 | Codex auth missing | allowed | report | allowed; no authentication check | error | allowed; no authentication check |
 | source checkout dirty | N/A | report if inspected | allowed; invoking checkout cleanliness is not inspected; read-only | error; no changes | allowed if target is a different clean worktree |
-| Issue not found/unreadable | N/A | N/A | not applicable; no Issue lookup; read-only | error before workspace creation | not applicable; no Issue lookup |
+| Issue or comments not found/unreadable | N/A | N/A | not applicable; no Issue lookup; read-only | error before workspace creation | not applicable; no Issue lookup |
 | Issue branch/worktree both absent | N/A | optional report | `BROKEN`; non-zero if an ownership mapping exists; otherwise no row; no repair | create from current HEAD commit | error; mapping required; no changes |
 | matching iro-owned Issue worktree clean | N/A | optional report | `CLEAN`; success; read-only | reuse; fresh ephemeral run | remove worktree, safe-delete branch, then remove mapping |
 | matching iro-owned Issue worktree dirty | N/A | report if discoverable | `DIRTY`; success; read-only | error; no cleanup | error; no changes |

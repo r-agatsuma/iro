@@ -84,7 +84,7 @@ func standardFakeResult(spec CommandSpec, root, workspace string, issueFailure b
 			if issueFailure {
 				return CommandResult{ExitCode: 1, Err: errors.New("issue unavailable")}
 			}
-			return CommandResult{Stdout: `{"number":123,"title":"Bootstrap","body":"Implement the task","url":"https://github.com/acme/iro/issues/123"}`, ExitCode: 0}
+			return CommandResult{Stdout: `{"number":123,"title":"Bootstrap","body":"Implement the task","url":"https://github.com/acme/iro/issues/123","comments":[]}`, ExitCode: 0}
 		}
 		return CommandResult{ExitCode: 0}
 	}
@@ -257,6 +257,9 @@ func TestRunUsesConfiguredIdentityAndNormativeCodexInvocation(t *testing.T) {
 	if !containsArgs(issueFetchCall.Args, "--repo", "acme/iro") {
 		t.Fatalf("Issue fetch did not use configured repository: %v", issueFetchCall.Args)
 	}
+	if !containsArgs(issueFetchCall.Args, "--json", "number,title,body,url,comments") {
+		t.Fatalf("Issue fetch did not request comments: %v", issueFetchCall.Args)
+	}
 	joined := strings.Join(codexCall.Args, " ")
 	for _, want := range []string{"--sandbox workspace-write", "--ask-for-approval never", "sandbox_workspace_write.network_access=true", "developer_instructions=", "exec", "--ephemeral"} {
 		if !strings.Contains(joined, want) {
@@ -270,6 +273,110 @@ func TestRunUsesConfiguredIdentityAndNormativeCodexInvocation(t *testing.T) {
 	}
 	if !strings.Contains(commentCall.Args[len(commentCall.Args)-1], "生成された変更は未コミット") {
 		t.Fatalf("result comment is not a Japanese review checkpoint: %v", commentCall.Args)
+	}
+}
+
+func TestRunPassesIssueCommentsInDeterministicChronologicalOrder(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	runner := &fakeCommandRunner{}
+	runner.fn = func(spec CommandSpec) CommandResult {
+		if spec.Name == "gh" && len(spec.Args) >= 2 && spec.Args[0] == "issue" && spec.Args[1] == "view" {
+			return CommandResult{Stdout: `{
+  "number": 123,
+  "title": "Bootstrap",
+  "body": "Implement the task",
+  "url": "https://github.com/acme/iro/issues/123",
+  "comments": [
+    {"id": "comment-later", "author": {"login": "late"}, "createdAt": "2024-01-03T00:00:00Z", "body": "later body"},
+    {"id": "comment-b", "author": {"login": "bob"}, "createdAt": "2024-01-02T00:00:00Z", "body": "b body"},
+    {"id": "comment-early", "author": {"login": "early"}, "createdAt": "2024-01-01T00:00:00Z", "body": "early body"},
+    {"id": "comment-a", "author": {"login": "alice"}, "createdAt": "2024-01-02T00:00:00Z", "body": "a body"}
+  ]
+}`, ExitCode: 0}
+		}
+		return standardFakeResult(spec, root, "", false, false)
+	}
+	service := newTestService(t, runner, root)
+	if err := service.Run(123, io.Discard); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	var payload string
+	for _, call := range runner.calls {
+		if call.Name == "codex" && len(call.Args) > 0 && call.Args[len(call.Args)-2] == "--ephemeral" {
+			payload = string(call.Stdin)
+			break
+		}
+	}
+	if payload == "" {
+		t.Fatalf("Codex payload was not captured: %+v", runner.calls)
+	}
+	bodyPosition := strings.Index(payload, "Issue body:\nImplement the task")
+	commentsPosition := strings.Index(payload, "Issue comments (ordered by createdAt, then immutable ID):")
+	if bodyPosition < 0 || commentsPosition < 0 || bodyPosition >= commentsPosition {
+		t.Fatalf("Issue body was not placed before comments: %s", payload)
+	}
+	orderedIDs := []string{"comment-early", "comment-a", "comment-b", "comment-later"}
+	previous := commentsPosition
+	for _, id := range orderedIDs {
+		position := strings.Index(payload, "ID: "+id)
+		if position <= previous {
+			t.Fatalf("comments are not in the expected order: %s", payload)
+		}
+		previous = position
+	}
+	for _, want := range []string{
+		"Author: early\nCreated at: 2024-01-01T00:00:00Z\nBody:\nearly body",
+		"Author: alice\nCreated at: 2024-01-02T00:00:00Z\nBody:\na body",
+		"Author: bob\nCreated at: 2024-01-02T00:00:00Z\nBody:\nb body",
+	} {
+		if !strings.Contains(payload, want) {
+			t.Errorf("Codex payload does not identify comment fields %q: %s", want, payload)
+		}
+	}
+}
+
+func TestRunAcceptsIssueWithNoComments(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	runner := &fakeCommandRunner{}
+	runner.fn = func(spec CommandSpec) CommandResult {
+		return standardFakeResult(spec, root, "", false, false)
+	}
+	service := newTestService(t, runner, root)
+	if err := service.Run(123, io.Discard); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	for _, call := range runner.calls {
+		if call.Name == "codex" && strings.Contains(string(call.Stdin), "Issue comments (ordered by createdAt, then immutable ID):\n(none)") {
+			return
+		}
+	}
+	t.Fatal("Codex payload did not represent an empty comment list")
+}
+
+func TestRunInvalidIssueCommentStopsBeforeWorktreeCreation(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	runner := &fakeCommandRunner{}
+	runner.fn = func(spec CommandSpec) CommandResult {
+		if spec.Name == "gh" && len(spec.Args) >= 2 && spec.Args[0] == "issue" && spec.Args[1] == "view" {
+			return CommandResult{Stdout: `{"number":123,"title":"Bootstrap","body":"Implement the task","url":"https://github.com/acme/iro/issues/123","comments":[{"id":"comment-1","author":{"login":"alice"},"createdAt":"not-a-timestamp","body":"broken"}]}`, ExitCode: 0}
+		}
+		return standardFakeResult(spec, root, "", false, false)
+	}
+	service := newTestService(t, runner, root)
+	if err := service.Run(123, io.Discard); err == nil {
+		t.Fatal("Run() unexpectedly accepted an invalid Issue comment")
+	}
+	for _, call := range runner.calls {
+		if call.Name == "codex" {
+			t.Fatal("Codex was started after invalid Issue comment data")
+		}
+		if len(call.Args) >= 2 && call.Name == "git" && call.Args[0] == "worktree" && call.Args[1] == "add" {
+			t.Fatal("worktree was created after invalid Issue comment data")
+		}
 	}
 }
 
