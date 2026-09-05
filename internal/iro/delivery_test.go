@@ -133,11 +133,11 @@ func TestRunRejectsDeliveryPreconditionsBeforeWorker(t *testing.T) {
 					case "graphql error":
 						response = `{"errors":[{"message":"denied"}]}`
 					case "existing canonical PR", "closed PR":
-						response = strings.Replace(response, `"nodes":[]`, `"nodes":[{"number":7,"headRefName":"iro/issue-123","closingIssuesReferences":{"totalCount":0,"nodes":[]}}]`, 1)
+						response = strings.Replace(response, `"nodes":[]`, `"nodes":[{"number":7,"headRefName":"iro/issue-123","headRepository":{"nameWithOwner":"ACME/IRO"},"closingIssuesReferences":{"totalCount":0,"nodes":[]}}]`, 1)
 					case "existing issue PR":
-						response = strings.Replace(response, `"nodes":[]`, `"nodes":[{"number":8,"headRefName":"human-branch","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}}]}}]`, 1)
+						response = strings.Replace(response, `"nodes":[]`, `"nodes":[{"number":8,"headRefName":"human-branch","headRepository":{"nameWithOwner":"other/iro"},"closingIssuesReferences":{"totalCount":1,"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}}]}}]`, 1)
 					case "truncated relations":
-						response = strings.Replace(response, `"nodes":[]`, `"nodes":[{"number":8,"headRefName":"other","closingIssuesReferences":{"totalCount":101,"nodes":[]}}]`, 1)
+						response = strings.Replace(response, `"nodes":[]`, `"nodes":[{"number":8,"headRefName":"other","headRepository":{"nameWithOwner":"other/iro"},"closingIssuesReferences":{"totalCount":101,"nodes":[]}}]`, 1)
 					}
 					return CommandResult{Stdout: response}
 				}
@@ -154,6 +154,32 @@ func TestRunRejectsDeliveryPreconditionsBeforeWorker(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunAllowsForkPRWithCanonicalBranchBeforeWorker(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	runner := &fakeCommandRunner{}
+	runner.fn = func(spec CommandSpec) CommandResult {
+		if spec.Name == "gh" && len(spec.Args) > 1 && spec.Args[0] == "api" && spec.Args[1] == "graphql" {
+			if !strings.Contains(strings.Join(spec.Args, " "), "headRepository{nameWithOwner}") {
+				t.Fatal("delivery query does not request the head repository identity")
+			}
+			response := strings.Replace(deliveryResponseForTest, `"nodes":[]`, `"nodes":[{"number":7,"headRefName":"iro/issue-123","headRepository":{"nameWithOwner":"other/iro"},"closingIssuesReferences":{"totalCount":0,"nodes":[]}}]`, 1)
+			return CommandResult{Stdout: response}
+		}
+		return standardFakeResult(spec, root, "", false, false)
+	}
+	service := newTestService(t, runner, root)
+	if err := service.Run(123, io.Discard); err != nil {
+		t.Fatalf("Run() rejected unrelated fork PR: %v", err)
+	}
+	for _, call := range runner.calls {
+		if call.Name == "codex" && len(call.Args) > 0 && call.Args[0] == "--cd" {
+			return
+		}
+	}
+	t.Fatal("worker was not started")
 }
 
 func TestDeliveryRelationPagination(t *testing.T) {

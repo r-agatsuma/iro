@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const deliveryQuery = `query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){defaultBranchRef{name} pullRequests(first:100,after:$cursor,states:[OPEN,CLOSED,MERGED]){nodes{number headRefName closingIssuesReferences(first:100){totalCount nodes{number repository{nameWithOwner}}}} pageInfo{hasNextPage endCursor}}}}`
+const deliveryQuery = `query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){defaultBranchRef{name} pullRequests(first:100,after:$cursor,states:[OPEN,CLOSED,MERGED]){nodes{number headRefName headRepository{nameWithOwner} closingIssuesReferences(first:100){totalCount nodes{number repository{nameWithOwner}}}} pageInfo{hasNextPage endCursor}}}}`
 
 // deliveryBase rejects any prior relation, including abandoned PRs, without using authorship.
 func (s *Service) deliveryBase(root string, identity RepositoryIdentity, number int, branch string) (string, error) {
@@ -29,6 +29,7 @@ func (s *Service) deliveryBase(root string, identity RepositoryIdentity, number 
 						Nodes []struct {
 							Number                  int
 							HeadRefName             string
+							HeadRepository          *struct{ NameWithOwner string }
 							ClosingIssuesReferences struct {
 								TotalCount int
 								Nodes      []struct {
@@ -60,7 +61,7 @@ func (s *Service) deliveryBase(root string, identity RepositoryIdentity, number 
 			if pr.Number <= 0 || pr.HeadRefName == "" || pr.ClosingIssuesReferences.TotalCount != len(pr.ClosingIssuesReferences.Nodes) {
 				return "", fmt.Errorf("incomplete PR relation data; inspect repository PRs manually")
 			}
-			related := pr.HeadRefName == branch
+			related := pr.HeadRefName == branch && pr.HeadRepository != nil && strings.EqualFold(pr.HeadRepository.NameWithOwner, identity.String())
 			for _, origin := range pr.ClosingIssuesReferences.Nodes {
 				if origin.Number == number && strings.EqualFold(origin.Repository.NameWithOwner, identity.String()) {
 					related = true
