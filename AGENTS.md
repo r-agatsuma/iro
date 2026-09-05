@@ -4,22 +4,30 @@
 
 このファイルは、`iro` repository で作業する Codex およびその他の coding agent に対する恒久的な project instruction である。
 
-`iro` は Issue-driven Repository Orchestrator の作業名を持つ汎用 CLI である。Issue Tracker を永続的な作業状態の正本とし、Git worktree と Codex の実行を結び付ける。
+`iro` は Issue-driven Repository Orchestrator の作業名を持つ汎用 CLI である。Issue Tracker を作業の意味論的な durable state、Git を implementation artifact とその履歴の durable record として扱う。
+
+このファイルは特定 phase の runtime behavior を固定しない。現在の runtime behavior とその変更方法は、下記の文書責務に従う。
 
 ## 文書の役割と優先関係
 
 各文書の役割を重複させない。
 
-- `docs/behavior.md`: runtime behavior の唯一の normative specification
-- `BOOTSTRAP.md`: bootstrap MVP の初期構築指示、scope、Definition of Done
-- `docs/architecture.md`: non-normative な図のみ
-- `AGENTS.md`: repository 開発時の恒久的な作業原則
+- `AGENTS.md`: repository 開発時の恒久的な作業原則と safety boundary
+- `WORKFLOW.md`: repository-specific な worker policy
+- `docs/behavior.md`: 現在実装されている runtime behavior の唯一の normative specification
+- `docs/architecture.md`: 現在 architecture の non-normative な図
+- GitHub Issue / PR: 変更要求、設計判断、implementation / review history
 
 runtime behavior を判断するときは `docs/behavior.md` に従う。
-bootstrap MVP の実装範囲を判断するときは `BOOTSTRAP.md` に従う。
 `docs/architecture.md` から runtime requirement を推測してはならない。
 
-文書間に実質的な矛盾がある場合は推測で解消せず、人間へ日本語で報告する。
+`docs/behavior.md` は living specification であり、現在の behavior を永続的に固定する development policy ではない。
+Issue の明示的な scope が runtime behavior の変更を要求している場合、implementation と同じ change で `docs/behavior.md` を更新してよい。現在の `docs/behavior.md` と異なる behavior を実装すること自体を policy conflict とみなしてはならない。
+
+一方、通常の Issue 本文や comment は `AGENTS.md` / `WORKFLOW.md` の development policy や worker safety boundary を暗黙に override しない。
+`AGENTS.md` 自体の変更は repository owner の責任で管理する。通常の implementation task が都合よくこのファイルを変更して policy conflict を回避してはならない。
+
+文書間または task と policy の間に実質的な矛盾があり、task scope 内で正当に解消できない場合は、推測で解消せず人間へ日本語で報告する。
 
 ## 言語ポリシー
 
@@ -33,7 +41,7 @@ bootstrap MVP の実装範囲を判断するときは `BOOTSTRAP.md` に従う�
 - README
 - `docs/` 以下の設計文書
 - ADR 等の人間向け文書
-- Codex が人間へ返す作業報告
+- Coding agent が人間へ返す作業報告
 
 ### コードおよび機械向けの情報
 
@@ -60,9 +68,9 @@ bootstrap MVP の実装範囲を判断するときは `BOOTSTRAP.md` に従う�
 
 ### 1. Durable state の責務を分離する
 
-Codex の session や会話履歴を作業状態の正本にしてはならない。
+Coding agent の session や会話履歴を作業状態の正本にしてはならない。
 
-作業の意味論的な状態は Issue Tracker を正本とする。
+作業の意味論的な状態は Issue Tracker を durable source of truth とする。
 Issue Tracker には、長期的に必要な少なくとも以下の情報を残す。
 
 - 何をしようとしているか
@@ -70,7 +78,7 @@ Issue Tracker には、長期的に必要な少なくとも以下の情報を残
 - 何を判断したか
 - 何が完了したか
 - 何が未完了か
-- 人間によるレビュー結果
+- 人間による判断やレビュー結果
 
 Git は implementation artifact とその履歴の durable record とする。
 
@@ -81,65 +89,71 @@ Git は implementation artifact とその履歴の durable record とする。
 - commit history
 
 iro の runtime / orchestration state を durable state の代わりとして repository へ commit してはならない。
-Codex worker は disposable とみなす。
+worker session は disposable とみなす。
 
 ### 2. 外部環境を勝手に補完しない
 
-`iro` は command 実行前に precondition を検査する。
+`iro` は command 実行前に、現在の `docs/behavior.md` が要求する precondition を検査する。
 
-precondition が満たされていない場合は、処理を開始せず、stderr に diagnostic と remediation hint を出す。
+precondition が満たされていない場合の behavior は `docs/behavior.md` に定義する。明示的な contract なしに不足環境や外部状態を推測で補完しない。
 
-明示的に `docs/behavior.md` で許可されていない限り、次のような操作を自動で行わない。
+特に、明示的な仕様なしに次のような操作を行う実装を追加しない。
 
 - `git init`
 - Git remote の追加・変更
 - remote repository の作成
-- `gh auth login`
 - credential の作成・変更
-- Codex のインストールや login
+- authentication / login の自動実行
 - unrelated branch / worktree の削除・変更
 - ユーザー所有ファイルの上書き
-- dirty worktree の reset / clean / stash
+- dirty worktree の破壊的な reset / clean / stash
 
-### 3. Ownership を推測しない
+### 3. Ownership と provenance を混同しない
 
-`iro` が作成した runtime 資源についてのみ、その lifecycle を管理してよい。
+破壊的な local resource 操作では、iro が安全に lifecycle を管理できる ownership evidence を要求する。
+ownership が不明な local branch、worktree、file を推測で削除・上書きしてはならない。
 
-ownership が不明な資源を推測で削除・上書きしてはならない。
+remote PR や remote branch を誰が作成したかという provenance を、一般的な ownership evidence とみなしてはならない。
+remote relation、canonical branch、local ownership mapping 等の具体的な runtime contract は `docs/behavior.md` に定義する。
 
-### 4. Human-in-the-loop
+### 4. Human authority と explicit operation を維持する
 
-MVP では人間が Issue を選択し、`iro run <issue-number>` を実行する。
+Human は作業対象、仕様判断、明示的な operation の実行、最終的な acceptance / merge judgment を所有する。
 
-daemon、auto-dispatch、retry scheduler、完全自律実行は MVP に含めない。
+iro が commit、push、PR、merge、tracker mutation 等を行ってよい条件と責任境界は `docs/behavior.md` に定義する。
+`AGENTS.md` はそれらの runtime operation を特定 phase の状態へ固定しない。
 
-review、commit、push、merge、Issue close 等を、明示的な仕様なしに自動化しない。
+Issue や review feedback から、明示されていない daemon、auto-dispatch、automatic retry loop、scheduler、完全自律 lifecycle を勝手に導入しない。
 
-### 5. MVP を膨らませない
+runtime worker に対する Git / tracker mutation boundary は、`docs/behavior.md`、`WORKFLOW.md`、および iro が worker へ与える instructions に従う。
+repository の runtime behavior を変更するコードを実装することと、coding agent 自身がその remote mutation を実行することを混同してはならない。
+
+### 5. Scope discipline
 
 実装中に「将来便利そう」という理由だけで機能を追加しない。
 
-MVP scope 外のアイデアは先回り実装せず、Issue または TODO 候補として報告する。
+Issue の scope 外のアイデアは先回り実装せず、必要なら Issue / TODO 候補として人間へ報告する。
 
 ## 技術方針
 
 - 実装言語は Go とする。
 - CLI はグローバルにインストールして使う前提とする。
-- GitHub 連携の MVP は `gh` CLI を利用する。
-- Codex 連携の MVP はローカルの Codex CLI を利用する。
-- workspace は Git worktree を使用する。
+- workspace strategy は Git worktree を基本とする。
 - runtime state は対象 repository へ commit しない。
 - project-specific worker policy は repository root の `WORKFLOW.md` に置く。
 - project-specific configuration は repository root の `iro.toml` に置く。
 - 依存ライブラリは最小限にする。
-- GitHub 固有処理は局所化するが、MVP で完全な plugin architecture は作らない。
+- GitHub 固有処理は局所化する。
+- 将来の backend / forge 拡張を妨げないが、必要になる前に過剰な plugin architecture を作らない。
 - network-specific domain logic は `iro` 本体へ入れない。
+
+現在採用している adapter、CLI、認証方式、具体的な runtime operation は `docs/behavior.md` と implementation を正とする。それらを `AGENTS.md` の恒久 policy として固定しない。
 
 ## コード品質
 
 - 小さく明示的な実装を優先する。
 - 隠れた副作用を避ける。
-- command precondition を実処理より先に評価する。
+- command precondition を main side effect より先に評価する。
 - エラーは actionable にする。
 - subprocess の終了コードと stdout / stderr を適切に扱う。
 - path や repository identity は必要に応じて小さな型にまとめる。
@@ -150,15 +164,15 @@ MVP scope 外のアイデアは先回り実装せず、Issue または TODO 候�
 
 ## Git 方針
 
-- branch 名は英語。
-- commit message は英語。
+- branch 名は英語とする。
+- commit message は英語とする。
 - 変更はできるだけ Issue 単位に保つ。
 - unrelated change を混ぜない。
-- push / merge / PR 作成は MVP では自動で行わない。
+- runtime における commit / push / PR / merge の responsibility は `docs/behavior.md` に定義し、`AGENTS.md` では固定しない。
 
 ## 作業完了時の報告
 
-Codex は作業完了時に、日本語で簡潔に以下を報告する。
+Coding agent は作業完了時に、日本語で簡潔に以下を報告する。
 
 - 実施した変更
 - 実行したテスト
