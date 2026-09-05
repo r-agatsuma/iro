@@ -4,7 +4,7 @@
 
 ## Install
 
-Go toolchain と Git を事前に用意してください。`iro run` を利用する場合は、さらに `gh` CLI、Codex CLI、および各認証が必要です。`iro` は不足している環境を自動構築しません。
+Go toolchain と Git を事前に用意してください。`iro run` または `iro review` を利用する場合は、さらに `gh` CLI、Codex CLI、および各認証が必要です。`iro` は不足している環境を自動構築しません。
 
 ```bash
 go install ./cmd/iro
@@ -19,13 +19,14 @@ iro init
 iro doctor
 iro status
 iro run <issue-number>
+iro review <pr-number>
 iro cleanup <issue-number>
 ```
 
-`iro init` は `WORKFLOW.md` と `iro.toml` を新規作成します。`iro doctor` は環境と設定を read-only で診断します。`iro status` は ownership mapping に対応するローカル Issue workspace の機械状態を read-only で表示します。`iro run` は configured remote の GitHub Issue を取得し、Issue 専用 worktree で fresh ephemeral Codex run を開始します。
+`iro init` は `WORKFLOW.md` と `iro.toml` を新規作成します。`iro doctor` は環境と設定を read-only で診断します。`iro status` は ownership mapping に対応するローカル Issue workspace の機械状態を read-only で表示します。`iro run` は configured remote の GitHub Issue を取得し、Issue 専用 worktree で fresh ephemeral Codex run を開始します。`iro review` は default branch を base とし、exactly 1 件の origin Issue closing relation を持つ open non-draft PR を disposable workspace の fresh Reviewer で独立評価し、最終報告をそのまま PR comment に投稿します。
 `iro cleanup` は Human が明示した Issue について、ownership を検証できる clean な local worktree と local branch を安全に削除し、最後に ownership mapping を削除します。GitHub Issue / PR の状態や remote branch は確認・変更しません。
 
-`iro run` は configured repository の default branch の clean な checkout から実行します。worker 成功後、iro が変更を commit / push し、default branch を base とする通常の open PR を作成します。既存の関連 PR がある場合は停止します。PR number と `iro land <pr-number>` を表示し、同じヒントを PR comment に投稿します（`land` command 自体は未実装です）。人間が PR を review し、merge を判断してください。
+`iro run` は configured repository の default branch の clean な checkout から実行します。worker 成功後、iro が変更を commit / push し、default branch を base とする通常の open PR を作成します。既存の関連 PR がある場合は停止します。PR number と `iro land <pr-number>` を表示し、同じヒントを PR comment に投稿します（`land` command 自体は未実装です）。`iro review` は current checkout の branch、dirty state、target PR の local branch/worktree、ownership mapping を要求しません。AI Review は advisory information であり、Human が merge を判断します。
 
 `iro init` が生成するファイルの commit / push は引き続き人間の責任です。
 
