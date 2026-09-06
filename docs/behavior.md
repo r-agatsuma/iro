@@ -811,7 +811,7 @@ Reviewer へ少なくとも次を渡す。
 
 base branch と base OID は同じ preflight の remote PR metadata `baseRefName` / `baseRefOid` から取得し、invoking checkout の HEAD から推測しない。base branch は configured repository の default branch と一致検証する。report の `Base: <branch> @ <base OID>` と `Reviewed HEAD: <head OID>` は観測した endpoint を表し、`A..B` 等の厳密な Git diff range や merge-base を表さない。
 
-現在の adapter は model 選択を Codex runtime に委ねる。現在使用する `codex exec` interface では起動前に解決済み model identity を確実に取得できないため、trusted Model 値は常に `(unknown; not exposed by runtime)` とする。設定ファイルや環境変数から model を推測せず、stdout / stderr の header scraping、model 取得用の Reviewer 二重起動、新しい remote side effect を導入しない。確認した Codex CLI 0.153.4 の help と[公式 CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli)の model 指定 option は選択用であり、現在の呼び出しの解決済み identity を起動前に返すものではない。[公式 non-interactive mode documentation](https://learn.chatgpt.com/docs/non-interactive-mode)の JSONL event は実行中の output interface であり、起動前の trusted metadata 取得には使用しない。
+現在の adapter は model 選択を Codex runtime に委ねる。resolved model identity を runtime interface から確実に取得できない場合、trusted Model 値は `(unknown; not exposed by runtime)` として取得不能を明示しなければならない。設定ファイルや環境変数から model を推測せず、stdout / stderr の header scraping、model 取得用の Reviewer 二重起動、新しい remote side effect を導入しない。
 
 Issue comments は RUN-004 と同じ検証と決定的な順序を使用する。GitHub が required context に invalid data を返した場合、Reviewer を起動しない。
 

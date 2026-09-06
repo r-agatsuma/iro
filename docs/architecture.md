@@ -1,107 +1,157 @@
 # iro Architecture
 
-> Non-normative diagrams only. Runtime requirements are defined only by `docs/behavior.md`.
+> 現在 architecture の non-normative diagrams。runtime requirement の正本は `docs/behavior.md` だけである。
+
+## Authority and durable state
 
 ```mermaid
 flowchart TB
-    H[Human\ncreate/select Issue\ndispatch/review/commit/push/merge/close]
-    I[iro\npreconditions/orchestration/reporting]
-    GH[GitHub via gh\nIssue read + result comment]
-    G[Git\nbranch + worktree]
-    C[Codex CLI\ndisposable implementation worker]
-    W[Issue worktree\nuncommitted changes]
+    H["Human<br/>repository authority<br/>specification / target selection / final judgment"]
+    ISSUE["GitHub Issue<br/>WHAT / WHY authority<br/>durable semantic state"]
+    PR["Pull Request<br/>implementation / review surface<br/>durable discussion"]
+    GIT["Git<br/>durable artifacts + history"]
+    IRO["iro<br/>explicit operation executor"]
+    AUTHOR["disposable Author worker"]
+    REVIEWER["disposable independent Reviewer worker"]
+    BOUNDARY["worker boundary<br/>no Git metadata / history / remote<br/>no tracker mutation"]
 
-    H -->|iro run issue-number| I
-    I <--> GH
-    I <--> G
-    I -->|developer instructions + Issue task| C
-    C --> W
-    G --> W
-    W -->|human review| H
+    H -->|"specification / decisions"| ISSUE
+    ISSUE -->|"current WHAT / WHY"| H
+    H -->|"Run / Review / Revise / Land / Cleanup"| IRO
+    H -->|"direct commit / push is allowed"| GIT
+    H -->|"direct PR / review / merge judgment"| PR
+    ISSUE -->|"task WHAT / WHY"| IRO
+    IRO -->|"launch fresh session"| AUTHOR
+    IRO -->|"launch fresh session"| REVIEWER
+    AUTHOR -->|"uncommitted file changes + report"| IRO
+    REVIEWER -->|"opaque final response"| IRO
+    AUTHOR -.->|"must not cross"| BOUNDARY
+    REVIEWER -.->|"must not cross"| BOUNDARY
+    IRO -->|"Issue read / result comment"| ISSUE
+    IRO -->|"PR create / comment / merge"| PR
+    IRO -->|"branch / worktree / commit / push"| GIT
 ```
+
+## Remote delivery lifecycle
 
 ```mermaid
 flowchart LR
-    D1[Durable source of truth\nGitHub Issue\nsemantic work state]
-    D2[Durable record\nGit\nimplementation artifacts + history]
-    P1[Project policy\nWORKFLOW.md]
-    P2[Project config\niro.toml]
-    R1[Disposable\nCodex ephemeral session]
-    R2[Runtime\nIssue worktree]
-    R3[Local runtime\nrun log]
-
-    D1 --- D2
-    P1 --- P2
-    D1 --> R1
-    P1 --> R1
-    R1 --> R2
-    R1 --> R3
+    ISSUE["Executable Issue"] --> RUN["Run"]
+    RUN --> PR["normal open PR"]
+    PR --> HUMAN["Human judgment"]
+    PR -.-> REVIEW["optional Review"]
+    REVIEW -->|"opaque PR comment"| PR
+    PR -.-> REVISE["optional Revise"]
+    REVISE -->|"same branch / same PR"| PR
+    HUMAN -->|"iro land invocation<br/>is merge authorization"| LAND["Land"]
+    LAND --> MERGE["normal merge commit"]
+    MERGE --> CLOSE["GitHub native<br/>Issue close"]
+    MERGE -.->|"separate operation, later if needed"| CLEANUP["Cleanup"]
 ```
 
+## Canonical delivery relation
+
 ```mermaid
-sequenceDiagram
-    autonumber
-    actor Human
-    participant IRO as iro
-    participant Git as Git
-    participant GH as gh / GitHub
-    participant Codex as Codex CLI
-    participant WS as Issue worktree
+flowchart LR
+    subgraph REPO["configured repository"]
+        D["default branch D<br/>canonical integration base"]
+        B["iro/issue-N<br/>canonical delivery branch"]
+        PR["normal open PR<br/>creator identity is not eligibility"]
+        ISSUE["Issue #N<br/>WHAT / WHY"]
 
-    Human->>IRO: iro run 123
-    IRO->>Git: validate repo + clean source checkout
-    IRO->>IRO: load iro.toml + WORKFLOW.md
-    IRO->>Git: resolve configured remote
-    IRO->>GH: validate auth + fetch Issue #123
-    GH-->>IRO: number/title/body/url
-    IRO->>Codex: codex login status
-    IRO->>Git: validate Issue branch/worktree state
-
-    alt initial state
-        IRO->>Git: create iro/issue-123 from source HEAD commit
-        IRO->>Git: create Issue worktree
-    else matching clean worktree
-        IRO->>Git: reuse existing worktree
-    else collision or dirty state
-        IRO-->>Human: error without Git mutation
+        D -->|"Run from clean named<br/>default-branch checkout"| B
+        B -->|"head"| PR
+        D -->|"base"| PR
+        PR ---|"GitHub native closing relation<br/>exactly Issue #N"| ISSUE
+        PR -->|"Land merge"| D
     end
 
-    IRO->>Codex: exec --ephemeral in Issue worktree
-    Note over IRO,Codex: workspace-write / approval never / network on
-    Note over IRO,Codex: remote non-mutation is policy, not a hard network sandbox guarantee
-    Note over IRO,Codex: developer_instructions + Issue task payload
-    Codex->>WS: inspect / edit / test
-    Codex-->>IRO: exit + stdout/stderr
-    IRO->>GH: post Japanese run result comment
-    IRO-->>Human: review required
+    HINT["delivery hint comment<br/>Human UX only"] -.-> PR
+    CHECK["eligibility<br/>Issue / canonical branch / PR relation<br/>not PR provenance"] -.-> PR
 ```
 
-```mermaid
-stateDiagram-v2
-    [*] --> NoIssueWorkspace
-    NoIssueWorkspace --> CleanIssueWorkspace: first run creates branch/worktree
-    CleanIssueWorkspace --> DirtyIssueWorkspace: Codex writes files
-    CleanIssueWorkspace --> CleanIssueWorkspace: Codex makes no changes
-    DirtyIssueWorkspace --> HumanCheckpoint: Human reviews + commits
-    HumanCheckpoint --> CleanIssueWorkspace: branch HEAD becomes checkpoint
-    DirtyIssueWorkspace --> CleanIssueWorkspace: Human stash/reset/clean
-    CleanIssueWorkspace --> DirtyIssueWorkspace: fresh ephemeral rerun
-    DirtyIssueWorkspace --> DirtyIssueWorkspace: iro refuses automatic recovery
-```
+## Local workspace responsibilities
 
 ```mermaid
 flowchart TB
-    DI[iro developer_instructions\nrun control]
-    AG[AGENTS.md chain\nCodex auto-discovery]
-    WF[WORKFLOW.md\nrepository worker policy]
-    IS[GitHub Issue payload\nuser task data]
-    CX[Codex]
+    subgraph RUNPATH["Run"]
+        RUN["Run"] --> MAP["local runtime<br/>ownership mapping"]
+        RUN --> CWS["local runtime<br/>canonical Issue worktree<br/>iro/issue-N"]
+        RUN --> AW["fresh disposable Author"]
+        AW -->|"files / tests / report"| CWS
+        CWS -->|"iro commits and delivers"| REMOTEPR["remote delivery PR"]
+    end
 
-    DI --> CX
-    AG --> CX
-    WF --> CX
-    IS --> CX
+    subgraph REVIEWPATH["Review"]
+        REVIEW["Review<br/>no target local state required"] --> TMP["temporary clone<br/>detached verified PR HEAD"]
+        TMP --> RW["fresh independent Reviewer"]
+        RW -->|"final response"| COMMENT["PR comment"]
+        RW -->|"after process"| REMOVE["remove disposable workspace"]
+    end
 
-    DI -. requires reading .-> WF
-    DI -. declares Issue is not policy .-> IS
+    subgraph REVISEPATH["Revise"]
+        REVISE["Revise"] --> LOCAL{"canonical local state"}
+        LOCAL -->|"all absent"| MATERIALIZE["materialize from<br/>validated remote PR HEAD"]
+        LOCAL -->|"consistent + clean<br/>same HEAD"| REUSE["reuse canonical worktree"]
+        LOCAL -->|"partial / dirty / divergent"| STOP["stop; no automatic repair"]
+        MATERIALIZE --> MAP
+        MATERIALIZE --> CWS
+        REUSE --> CWS
+    end
+
+    subgraph FINISHPATH["Remote completion and local teardown"]
+        LAND["Land<br/>remote-only relative to target Issue state"] --> REMOTEPR
+        CLEANUP["Cleanup<br/>local-only"] --> VERIFY["verify ownership + clean state"]
+        VERIFY --> ORDER["remove worktree<br/>then safe-delete branch<br/>then remove mapping last"]
+    end
+
+    LAND -.->|"does not run"| CLEANUP
+```
+
+## Review snapshot provenance and opaque forwarding
+
+```mermaid
+flowchart LR
+    META["PR preflight metadata"] --> BASE["observed base branch D<br/>observed base OID B"]
+    META --> HEAD["observed PR HEAD OID H"]
+    HEAD --> VERIFY["disposable workspace<br/>verify workspace HEAD == H"]
+    MODEL["resolved model identity<br/>if unavailable: explicit unknown<br/>never inferred"] --> TRUST["trusted provenance<br/>supplied by iro"]
+    BASE --> TRUST
+    VERIFY -->|"verified Reviewed HEAD OID H"| TRUST
+    TRUST --> REVIEWER["Reviewer"]
+    REVIEWER -->|"final response as opaque bytes"| IRO["iro<br/>no parse / normalize / reconstruct<br/>no prepend / append"]
+    IRO -->|"unchanged body"| COMMENT["PR conversation comment"]
+    TRUST -.->|"snapshot identification only<br/>not freshness or Land gate"| HUMAN["Human"]
+```
+
+## HEAD-bound Land on the configured host
+
+```mermaid
+flowchart LR
+    HUMAN["Human<br/>explicit iro land PR"] --> VALIDATE["validate selected PR"]
+    REL["open non-Draft PR<br/>iro/issue-N to default branch D<br/>closing Issues exactly N<br/>creator ignored"] --> VALIDATE
+    POLICY["repository merge policy<br/>BEHIND alone is allowed"] --> VALIDATE
+    HOST["configured remote host<br/>github.com only<br/>ignore GH_HOST / GH_REPO rerouting"] --> VALIDATE
+    VALIDATE -->|"validated PR HEAD OID H"| API["github.com merge API<br/>normal merge, sha = H"]
+    API --> GITHUB{"GitHub final policy enforcement"}
+    GITHUB -->|"accepted"| MERGED["merge / native Issue close"]
+    GITHUB -->|"up-to-date policy rejection<br/>or HEAD drift"| FAILURE["failure<br/>no bypass / branch update / retry<br/>no merge-method fallback"]
+    API -.->|"no target Issue worktree required<br/>no local cleanup"| LOCAL["local Issue resources unchanged"]
+```
+
+## Instruction and policy layers
+
+```mermaid
+flowchart TB
+    DI["iro developer instructions<br/>operation control + safety boundary"]
+    AG["AGENTS.md<br/>repository development policy"]
+    WF["WORKFLOW.md<br/>repository worker policy"]
+    TASK["Issue / PR payload<br/>task and review input, not policy"]
+    WORKER["Author or Reviewer worker"]
+
+    DI --> WORKER
+    AG --> WORKER
+    WF --> WORKER
+    TASK --> WORKER
+    DI -.->|"requires reading"| WF
 ```
