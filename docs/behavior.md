@@ -1017,6 +1017,8 @@ AI Review の実行、PASS、AI comment、GitHub Human approval、review comment
 
 Git executable、invocation directory から解決した local Git repository、repository root の readable regular `WORKFLOW.md` と valid supported `iro.toml`、configured `tracker.remote` だけから一意に解決できる GitHub repository identity、`gh` executable / authentication を要求する。
 
+現在 support する configured remote host は `github.com` のみとする。Land の `gh auth status`、target PR / repository policy の GraphQL、全 page の active delivery PR GraphQL、merge REST API はすべて `--hostname github.com` を明示する。`GH_HOST` / `GH_REPO` 等の実行環境で configured repository 以外へ接続先を変更しない。
+
 main など任意の checkout から実行できる。current branch / HEAD / cleanliness、target Issue の local branch / worktree / ownership mapping、fetched branch / commit を検査・要求しない。local execution state が absent、partial、dirty でも Land eligibility に影響しない。Codex、Issue body / comments、PR diff / review feedback の取得も要求しない。
 
 ### LAND-003: remote delivery relation
@@ -1044,7 +1046,9 @@ PR creator identity、iro-created provenance、hidden delivery metadata、adopti
 
 remote metadata で repository が非 archived かつ normal merge commit を許可し、実行者が `WRITE` / `MAINTAIN` / `ADMIN` の repository permission を持つことを検証する。
 
-PR の `mergeable` は `MERGEABLE`、`mergeStateStatus` は `CLEAN` / `UNSTABLE` / `HAS_HOOKS` のいずれかでなければならない。`UNSTABLE` の non-required failing checks を iro 独自の品質 gate にしない。`BLOCKED`、`BEHIND`、conflict、unknown / incomplete state は merge 前に拒否し、Human に remote state / rules / required checks / reviews の確認を案内する。管理者であってもこの検査を免除しない。
+PR の `mergeable` は `MERGEABLE`、`mergeStateStatus` は `CLEAN` / `UNSTABLE` / `HAS_HOOKS` / `BEHIND` のいずれかでなければならない。`UNSTABLE` の non-required failing checks を iro 独自の品質 gate にしない。`BLOCKED`、conflict、unknown / incomplete state は merge 前に拒否し、Human に remote state / rules / required checks / reviews の確認を案内する。管理者であってもこの検査を免除しない。
+
+`BEHIND` 自体を merge 禁止とみなさず、validated HEAD OID を `sha` に bind して normal merge commit を試行する。repository policy が許可すれば成功可能とし、up-to-date が required で merge endpoint が拒否した場合は failure とする。HEAD が検証後に変更された場合も同じ `sha` guard で failure とする。admin bypass、branch の auto-update、retry、別 merge method への fallback は行わない。
 
 merge queue が必要な PR、または queue policy を取得できない PR は拒否する。Land は immediate merge のみを扱い、auto-merge の予約や queue への登録・制御を行わない。
 
@@ -1063,7 +1067,7 @@ iro は Draft を自動解除せず、Ready for review への transition を行�
 
 ### LAND-006: validated HEAD binding and merge
 
-validation で取得した `H` を実際の merge operation に bind しなければならない。実装は configured repository と明示した PR number に対し、`gh api repos/<owner>/<repo>/pulls/<number>/merge --method PUT --input -` を一度だけ実行する。JSON payload は `sha: H` と `merge_method: merge` を指定する。
+validation で取得した `H` を実際の merge operation に bind しなければならない。実装は configured repository と明示した PR number に対し、`gh api repos/<owner>/<repo>/pulls/<number>/merge --hostname github.com --method PUT --input -` を一度だけ実行する。JSON payload は `sha: H` と `merge_method: merge` を指定する。
 
 この同期 [GitHub REST merge API](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request) の `sha` guard は `--match-head-commit H` 相当の contract とする。validation 後に HEAD が変更された場合、新しい HEAD を暗黙に再承認せず failure とする。Human が current state を確認し、改めて `iro land <pr-number>` を実行する。
 
@@ -1114,6 +1118,8 @@ Codex thread/session ID は保存対象に含めない。
 | valid delivery relation / merge policy | validated HEAD を normal merge commit で merge |
 | Human-created PR / no delivery hint / no AI Review / AI FINDING | allowed; provenance / verdict を判定しない |
 | no GitHub approval | repository policy が許す限り allowed |
+| `GH_HOST` / `GH_REPO` が別 host を指定 | 認証確認・全 API を configured host の `github.com` に固定 |
+| BEHIND | validated HEAD で normal merge を試行し、up-to-date requirement 等による endpoint の拒否は failure |
 | main / non-target checkout、target local state absent / partial / dirty | allowed; local execution state を検査しない |
 | Draft / relation mismatch / wrong base / multiple active delivery PRs | merge 前に error; no repair |
 | required checks / reviews 未充足、merge conflict、policy unknown、merge queue required | merge 前に error; no bypass / scheduling |

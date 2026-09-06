@@ -25,7 +25,8 @@ func (s *Service) inspectDeliveryPRs(root string, identity RepositoryIdentity, n
 		query = strings.Replace(query, "states:[OPEN,CLOSED,MERGED]", "states:[OPEN]", 1)
 	}
 	for {
-		args := []string{"api", "graphql", "-f", "query=" + query, "-f", "owner=" + identity.Owner, "-f", "name=" + identity.Name}
+		// Match the supported configured remote host on every page, ignoring GH_HOST.
+		args := []string{"api", "graphql", "--hostname", "github.com", "-f", "query=" + query, "-f", "owner=" + identity.Owner, "-f", "name=" + identity.Name}
 		if cursor != "" {
 			args = append(args, "-f", "cursor="+cursor)
 		}

@@ -43,7 +43,8 @@ func (s *Service) Land(prNumber int, out io.Writer) error {
 	if err := s.requireExecutable("gh"); err != nil {
 		return err
 	}
-	if err := s.checkAuth("gh", []string{"auth", "status"}, root); err != nil {
+	// Repository identity resolution currently accepts only github.com remotes.
+	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", "github.com"}, root); err != nil {
 		return err
 	}
 	target, err := s.inspectLandTarget(root, identity, prNumber)
@@ -56,7 +57,7 @@ func (s *Service) Land(prNumber int, out io.Writer) error {
 func (s *Service) inspectLandTarget(root string, identity RepositoryIdentity, number int) (landTarget, error) {
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
-		Args: []string{"api", "graphql", "-f", "query=" + landPreflightQuery, "-f", "owner=" + identity.Owner, "-f", "name=" + identity.Name, "-F", "number=" + strconv.Itoa(number)},
+		Args: []string{"api", "graphql", "--hostname", "github.com", "-f", "query=" + landPreflightQuery, "-f", "owner=" + identity.Owner, "-f", "name=" + identity.Name, "-F", "number=" + strconv.Itoa(number)},
 		Dir:  root,
 	})
 	var response struct {
@@ -141,10 +142,10 @@ func (s *Service) inspectLandTarget(root string, identity RepositoryIdentity, nu
 	if pr.Mergeable != "MERGEABLE" {
 		return landTarget{}, fmt.Errorf("PR #%d mergeability is %q; resolve conflicts or wait for GitHub to determine mergeability, then retry land", number, pr.Mergeable)
 	}
-	// These states allow a normal attempt, including non-required failing checks.
-	// Never reinterpret BLOCKED or BEHIND using the viewer's admin permissions.
+	// The merge endpoint enforces any up-to-date requirement for BEHIND heads.
+	// Never reinterpret BLOCKED using the viewer's admin permissions.
 	switch pr.MergeStateStatus {
-	case "CLEAN", "UNSTABLE", "HAS_HOOKS":
+	case "CLEAN", "UNSTABLE", "HAS_HOOKS", "BEHIND":
 	default:
 		return landTarget{}, fmt.Errorf("PR #%d merge state %q does not allow land; inspect repository rules and required checks/reviews, then retry after they are satisfied", number, pr.MergeStateStatus)
 	}
@@ -164,7 +165,7 @@ func (s *Service) mergeLandTarget(root string, identity RepositoryIdentity, targ
 	payload, _ := json.Marshal(map[string]string{"sha": target.HeadOID, "merge_method": "merge"})
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
-		Args: []string{"api", "repos/" + identity.String() + "/pulls/" + strconv.Itoa(target.Number) + "/merge", "--method", "PUT", "--input", "-"},
+		Args: []string{"api", "repos/" + identity.String() + "/pulls/" + strconv.Itoa(target.Number) + "/merge", "--hostname", "github.com", "--method", "PUT", "--input", "-"},
 		Dir:  root, Stdin: payload,
 	})
 	var response struct {

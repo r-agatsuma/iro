@@ -91,7 +91,7 @@ func (f *landFixture) respond(spec CommandSpec) CommandResult {
 		}
 	}
 	if spec.Name == "gh" && spec.Dir == f.root {
-		if reflect.DeepEqual(spec.Args, []string{"auth", "status"}) {
+		if reflect.DeepEqual(spec.Args, []string{"auth", "status", "--hostname", "github.com"}) {
 			return CommandResult{}
 		}
 		if containsArgs(spec.Args, "api", "graphql") {
@@ -116,7 +116,7 @@ func (f *landFixture) respond(spec CommandSpec) CommandResult {
 				return result
 			}
 		}
-		if reflect.DeepEqual(spec.Args, []string{"api", "repos/acme/iro/pulls/42/merge", "--method", "PUT", "--input", "-"}) {
+		if reflect.DeepEqual(spec.Args, []string{"api", "repos/acme/iro/pulls/42/merge", "--hostname", "github.com", "--method", "PUT", "--input", "-"}) {
 			f.mergeCalls++
 			if f.page != len(f.pages) {
 				f.t.Fatal("merge attempted before checking all active delivery PRs")
@@ -165,6 +165,37 @@ func TestLandUsesOnlyRemoteDeliveryStateAndExplicitHumanAuthorization(t *testing
 				t.Fatalf("unexpected merge/output: calls=%d, stdout=%q, stderr=%q", f.mergeCalls, out.String(), errOut.String())
 			}
 		})
+	}
+}
+
+func TestLandBindsConfiguredHostDespiteEnvironment(t *testing.T) {
+	t.Setenv("GH_HOST", "github.enterprise.example")
+	t.Setenv("GH_REPO", "github.enterprise.example/acme/iro")
+	f := newLandFixture(t)
+	f.pages = []string{landDeliveryPage(landActivePRForTest, true, "next"), landDeliveryPage("", false, "")}
+	requests := 0
+	f.runner.fn = func(spec CommandSpec) CommandResult {
+		if spec.Name == "gh" {
+			requests++
+			// Model host selection at the command boundary without contacting GitHub.
+			host := os.Getenv("GH_HOST")
+			for i := 0; i+1 < len(spec.Args); i++ {
+				if spec.Args[i] == "--hostname" {
+					host = spec.Args[i+1]
+				}
+			}
+			if host != "github.com" {
+				t.Fatalf("command reached an unconfigured host %q: %+v", host, spec)
+			}
+		}
+		return f.respond(spec)
+	}
+	if err := f.service.Land(42, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	// Authentication, target metadata, two delivery pages, and one merge.
+	if requests != 5 || f.page != 2 || f.mergeCalls != 1 || !f.merged {
+		t.Fatalf("requests=%d, pages=%d, merges=%d, merged=%t", requests, f.page, f.mergeCalls, f.merged)
 	}
 }
 
@@ -229,7 +260,6 @@ func TestLandRejectsInvalidTargetBeforeMerge(t *testing.T) {
 		{"conflicts", `"MERGEABLE"`, `"CONFLICTING"`, "resolve conflicts"},
 		{"pending mergeability", `"MERGEABLE"`, `"UNKNOWN"`, "wait for GitHub"},
 		{"blocked", `"CLEAN"`, `"BLOCKED"`, "does not allow land"},
-		{"behind", `"CLEAN"`, `"BEHIND"`, "does not allow land"},
 		{"dirty", `"CLEAN"`, `"DIRTY"`, "does not allow land"},
 		{"pending policy", `"CLEAN"`, `"UNKNOWN"`, "does not allow land"},
 		{"unknown policy", `"CLEAN"`, `"FUTURE_STATE"`, "does not allow land"},
@@ -294,6 +324,42 @@ func TestLandChecksEveryActiveDeliveryRelationBeforeMerge(t *testing.T) {
 		if err := f.service.Land(42, io.Discard); err == nil || f.mergeCalls != 0 {
 			t.Fatalf("invalid active relation allowed: %v, merges=%d", err, f.mergeCalls)
 		}
+	}
+}
+
+func TestLandBehindDefersToMergeEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		upToDate    bool
+		changedHead bool
+		wantSuccess bool
+	}{
+		{name: "policy allows", wantSuccess: true},
+		{name: "up-to-date required", upToDate: true},
+		{name: "HEAD changed after validation", changedHead: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLandFixture(t)
+			f.target = strings.Replace(f.target, `"CLEAN"`, `"BEHIND"`, 1)
+			if tc.upToDate {
+				f.mergeResult = CommandResult{ExitCode: 1, Stderr: "HTTP 405: branch must be up to date"}
+			}
+			if tc.changedHead {
+				f.liveHead = landMergeForTest
+			}
+			var out, errOut strings.Builder
+			code := Execute([]string{"land", "42"}, &out, &errOut, f.service)
+			if (code == 0) != tc.wantSuccess || f.mergeCalls != 1 || f.merged != tc.wantSuccess {
+				t.Fatalf("exit=%d, calls=%d, merged=%t, stderr=%q", code, f.mergeCalls, f.merged, errOut.String())
+			}
+			if tc.wantSuccess {
+				if !strings.Contains(out.String(), landMergeForTest) || errOut.Len() != 0 {
+					t.Fatalf("stdout=%q, stderr=%q", out.String(), errOut.String())
+				}
+			} else if code != 1 || out.Len() != 0 || !strings.Contains(errOut.String(), landHeadForTest) || !strings.Contains(errOut.String(), "no automatic retry") {
+				t.Fatalf("exit=%d, stdout=%q, stderr=%q", code, out.String(), errOut.String())
+			}
+		})
 	}
 }
 
