@@ -29,8 +29,10 @@ precondition failure 時に不足環境を自動 provisioning してはならな
 
 ### INV-003: ownership
 
-`iro` は ownership を確認できる runtime resource だけを変更してよい。
+破壊的な local resource 操作では、`iro` は ownership を確認できる resource だけを変更してよい。
 ownership が不明な branch、worktree、file を iro-owned と推測してはならない。
+
+`land` の remote eligibility は LAND-003 の delivery relation に従う。local ownership mapping や remote PR の creator identity を要求しない。
 
 ### INV-004: tracker authority
 
@@ -60,7 +62,12 @@ GitHub tracker I/O は `iro` が所有する。
 
 `revise` は canonical branch への Git push で既存 PR を更新する。新規 PR 作成、Issue / PR comment 投稿、review thread resolve は行わない。Author の作業報告は local log に保持する。
 
-`iro` は Issue create、close、reopen、label、assignee、milestone、Project state を自動変更してはならない。PR 作成時点では Issue を close しない。
+`iro land` が行う GitHub operation は次とする。
+
+- configured repository の default branch、target PR metadata / closing relation、active delivery PR relation、merge policy の read
+- Human が明示した PR の validated HEAD に bind した normal merge commit による merge
+
+`iro` は Issue create、close、reopen、label、assignee、milestone、Project state を API で自動変更してはならない。PR 作成時点では Issue を close しない。`land` の merge 成功に伴う origin Issue の close は GitHub native closing relation に委ねる。
 
 Codex は `gh` を実行してはならず、GitHub Issue を直接 fetch / create / modify / close / comment してはならない。
 
@@ -100,6 +107,8 @@ read-only な `git status`、`git diff`、`git log`、`git show`、`git grep`、
 Author worker は変更を uncommitted で iro に引き渡す。`iro run` orchestration が worker 成功後に commit / push / 通常の open PR 作成を行う。Human が review と最終 acceptance / merge judgment を所有する。Human 自身の commit / push / PR 作成の authority は制限しない。merge はこの operation に含めない。
 
 既存 delivery PR の追加実装は Human が明示する `iro revise` で行い、iro orchestration が検証後に commit / 同一 branch への push を行う。
+
+Human による `iro land <pr-number>` の明示実行自体を、その PR の merge authorization とする。AI Review は optional / advisory であり、verdict や review の存在を merge authorization に使わない。
 
 ### INV-007: dirty state is human-owned
 
@@ -713,7 +722,7 @@ Codex exit status が 0 の場合、stdout の validation / 作業報告を回�
 6. create response の PR number `M` を取得し、stdout に PR number と `iro land M` を表示する。
 7. PR に `## iro delivery` と `Land: ` に続くコード表記の `iro land M` を含む comment を best-effort で投稿する。
 
-PR create 成功と number の取得を required remote delivery の完了境界とする。hint comment 失敗は warning を stderr に出すが exit success を維持する。PR body の post-create update、Issue closing relation の作成直後の再取得は要求しない。Draft PR / Draft option、merge、Issue close API は提供しない。`iro land` 自体の実装はこの変更の対象外である。
+PR create 成功と number の取得を required remote delivery の完了境界とする。hint comment 失敗は warning を stderr に出すが exit success を維持する。PR body の post-create update、Issue closing relation の作成直後の再取得は要求しない。`run` は Draft PR / Draft option、merge、Issue close API を提供しない。merge は Human が明示する `iro land`（LAND-001 以降）で行う。
 
 stage / commit failure 時は worktree と index を保持して failure とする。push failure 時は local commit の存在と remote 更新の可能性を明示する。push 後の PR creation / response decode failure 時は remote branch が publish 済みであり PR が存在する可能性を明示して failure とする。自動 rollback / retry / repair は行わない。
 
@@ -987,7 +996,94 @@ worker / validation / staging / commit failure は worktree と可能な index c
 
 Author report は local log に残すが、operation receipt や durable semantic state の代替ではない。必要な Human decision は Issue / PR に Human が記録する。preflight と Git push は atomic ではなく、最終検査後の concurrent relation change を完全には防げない。通常 push の non-fast-forward rejection を維持し、排他制御、自動 Review→Revise loop、watermark は実装しない。
 
-## 12. Runtime state and logs
+## 12. `iro land <pr-number>`
+
+### LAND-001: Human authorization and target selection
+
+`iro land` は Human が明示した delivery PR を normal merge commit で merge する remote operation である。
+
+```text
+command   := "iro land " pr-number
+pr-number := positive-decimal-integer
+```
+
+PR URL、owner/repo#number、複数 PR、confirmation flag は受け付けない。command invocation 自体を merge authorization とし、確認 prompt を追加しない。
+
+Human は target selection と品質判断を所有し、iro は選択された target の operation integrity を検証する。別の valid な delivery PR number を Human が誤入力した場合、その選択を推測して防止しない。
+
+AI Review の実行、PASS、AI comment、GitHub Human approval、review comment、理由 comment の存在を iro 独自の precondition にしてはならない。AI `FINDING` を Human が許容して Land してよい。ただし repository が要求する checks / reviews 等は LAND-004 に従う。
+
+### LAND-002: local repository context
+
+Git executable、invocation directory から解決した local Git repository、repository root の readable regular `WORKFLOW.md` と valid supported `iro.toml`、configured `tracker.remote` だけから一意に解決できる GitHub repository identity、`gh` executable / authentication を要求する。
+
+現在 support する configured remote host は `github.com` のみとする。Land の `gh auth status`、target PR / repository policy の GraphQL、全 page の active delivery PR GraphQL、merge REST API はすべて `--hostname github.com` を明示する。`GH_HOST` / `GH_REPO` 等の実行環境で configured repository 以外へ接続先を変更しない。
+
+main など任意の checkout から実行できる。current branch / HEAD / cleanliness、target Issue の local branch / worktree / ownership mapping、fetched branch / commit を検査・要求しない。local execution state が absent、partial、dirty でも Land eligibility に影響しない。Codex、Issue body / comments、PR diff / review feedback の取得も要求しない。
+
+### LAND-003: remote delivery relation
+
+main remote mutation 前に次をすべて検証しなければならない。
+
+- configured repository の default branch `D` を remote API から一意に取得できる
+- 指定した PR が configured repository に存在し、readable で `OPEN`、かつ Draft ではない
+- GitHub native `closingIssuesReferences` が exactly 1 件で、configured repository の Issue `#N` である
+- PR head repository が configured repository、head branch が厳密に `iro/issue-N`
+- PR base が `D`
+- Issue `#N` または configured repository の canonical head branch に関連する active PR が target PR だけである
+- PR head OID `H` が取得でき、有効な commit OID である
+- LAND-004 の remote merge policy を満たす
+
+origin Issue は native closing relation から解決し、closing Issues は exactly `{N}` とする。branch 名や本文のキーワードだけから不足 relation を推測しない。
+
+active PR は pagination で全件検査する。他の branch / fork であっても Issue `#N` を close する PR は重複として拒否する。無関係な fork の同名 branch だけでは重複としない。closed / merged PR は active relation に数えない。
+
+relation / pagination data が欠落・曖昧、closing references が取得上限 100 件を超過、または検査中に default branch が変化した場合は fail closed とする。Issue relation、base、canonical branch を自動 repair しない。
+
+PR creator identity、iro-created provenance、hidden delivery metadata、adoption state、delivery hint comment、local ownership mapping は要求・記録・repair しない。Human による canonical branch の commit / push や PR 作成自体を拒否理由にしてはならない。
+
+### LAND-004: repository merge policy
+
+remote metadata で repository が非 archived かつ normal merge commit を許可し、実行者が `WRITE` / `MAINTAIN` / `ADMIN` の repository permission を持つことを検証する。
+
+PR の `mergeable` は `MERGEABLE`、`mergeStateStatus` は `CLEAN` / `UNSTABLE` / `HAS_HOOKS` / `BEHIND` のいずれかでなければならない。`UNSTABLE` の non-required failing checks を iro 独自の品質 gate にしない。`BLOCKED`、conflict、unknown / incomplete state は merge 前に拒否し、Human に remote state / rules / required checks / reviews の確認を案内する。管理者であってもこの検査を免除しない。
+
+`BEHIND` 自体を merge 禁止とみなさず、validated HEAD OID を `sha` に bind して normal merge commit を試行する。repository policy が許可すれば成功可能とし、up-to-date が required で merge endpoint が拒否した場合は failure とする。HEAD が検証後に変更された場合も同じ `sha` guard で failure とする。admin bypass、branch の auto-update、retry、別 merge method への fallback は行わない。
+
+merge queue が必要な PR、または queue policy を取得できない PR は拒否する。Land は immediate merge のみを扱い、auto-merge の予約や queue への登録・制御を行わない。
+
+preflight は merge 試行の可否を検査する。最終的な repository protection / ruleset の適用は GitHub に委ね、その拒否を failure とする。admin bypass、force merge、policy の書き換えを行ってはならない。
+
+### LAND-005: Draft remediation
+
+Draft PR は merge 前に failure とし、例えば次を stderr に表示する。
+
+```text
+error: pull request #123 is a draft and cannot be landed
+remediation: mark the pull request ready for review, then retry `iro land 123`
+```
+
+iro は Draft を自動解除せず、Ready for review への transition を行わない。Human または external actor が remote state を解消してから再実行する。
+
+### LAND-006: validated HEAD binding and merge
+
+validation で取得した `H` を実際の merge operation に bind しなければならない。実装は configured repository と明示した PR number に対し、`gh api repos/<owner>/<repo>/pulls/<number>/merge --hostname github.com --method PUT --input -` を一度だけ実行する。JSON payload は `sha: H` と `merge_method: merge` を指定する。
+
+この同期 [GitHub REST merge API](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request) の `sha` guard は `--match-head-commit H` 相当の contract とする。validation 後に HEAD が変更された場合、新しい HEAD を暗黙に再承認せず failure とする。Human が current state を確認し、改めて `iro land <pr-number>` を実行する。
+
+normal merge commit だけを使用し、squash / rebase / force merge、別 method への fallback、automatic retry を行わない。command 成功と response の `merged: true` および有効な merge commit OID を確認した場合だけ success とし、stdout に PR number、origin Issue number、merge commit OID を表示する。
+
+merge 成功により `Closes #N` 等の native relation に従って GitHub が origin Issue を close する。iro は Issue を別 API で直接 close しない。
+
+### LAND-007: failure and remote/local separation
+
+precondition failure では merge を試行しない。merge command failure / invalid response / merge 未確認は non-zero とし、remote PR、current HEAD、repository policy を Human が確認してから明示的に再実行するよう案内する。通信失敗等で merge 済みか不明な場合に成功を推測したり自動再試行したりしない。
+
+Land は remote delivery completion、Cleanup は verified local resource teardown として分離する。成功・失敗にかかわらず、local Issue worktree / branch / ownership mapping を作成・変更・削除せず、local log や provenance state も作成しない。remote branch の明示的削除や repository の branch deletion 設定変更を行わない。GitHub 自身の repository 設定による動作は変更しない。
+
+HEAD の一致は merge API の atomic guard で保証する。preflight の全 relation / policy read と merge は単一 transaction ではなく、検証後の base / closing relation 等の concurrent change まで lock するものではない。排他制御、独自 merge queue、automatic repair は導入しない。
+
+## 13. Runtime state and logs
 
 runtime state は repository へ commit してはならない。
 
@@ -1011,9 +1107,25 @@ Issue comment result は `run` に適用する。`revise` は `revisions/<reposi
 
 Codex thread/session ID は保存対象に含めない。
 
-## 13. Behavior matrix
+## 14. Behavior matrix
 
 `revise` の local state matrix は REVISE-003、remote preconditions と failure behavior は REVISE-002 / REVISE-007 に定義する。
+
+`land` の preconditions と failure behavior は LAND-002 から LAND-007 に定義する。
+
+| State | `iro land <pr-number>` |
+|---|---|
+| valid delivery relation / merge policy | validated HEAD を normal merge commit で merge |
+| Human-created PR / no delivery hint / no AI Review / AI FINDING | allowed; provenance / verdict を判定しない |
+| no GitHub approval | repository policy が許す限り allowed |
+| `GH_HOST` / `GH_REPO` が別 host を指定 | 認証確認・全 API を configured host の `github.com` に固定 |
+| BEHIND | validated HEAD で normal merge を試行し、up-to-date requirement 等による endpoint の拒否は failure |
+| main / non-target checkout、target local state absent / partial / dirty | allowed; local execution state を検査しない |
+| Draft / relation mismatch / wrong base / multiple active delivery PRs | merge 前に error; no repair |
+| required checks / reviews 未充足、merge conflict、policy unknown、merge queue required | merge 前に error; no bypass / scheduling |
+| HEAD changed after validation | merge API が拒否; error; no retry |
+| merge rejected / result unconfirmed | error; Human に remote state 確認を案内 |
+| successful merge | native Issue close に委ね、local cleanup / remote branch deletion を実行しない |
 
 | State | `iro init` | `iro doctor` | `iro status` | `iro run <issue-number>` | `iro review <pr-number>` | `iro cleanup <issue-number>` |
 |---|---|---|---|---|---|---|
@@ -1046,7 +1158,7 @@ Codex thread/session ID は保存対象に含めない。
 | Codex / Reviewer failure | N/A | N/A | observe local state only; no semantic inference; read-only | comment failure result if possible; keep worktree; non-zero | no PR comment; non-zero | not applicable |
 | tracker comment failure | N/A | N/A | observe local state only; no semantic inference; read-only | keep local result; non-zero; no Codex rerun | non-zero; no Reviewer rerun | not applicable |
 
-## 14. Diagnostic requirements
+## 15. Diagnostic requirements
 
 error は「何が起きたか」と「Human が次に何をすべきか」が分かる内容にする。
 
@@ -1065,7 +1177,7 @@ Review the worktree and either preserve or discard the changes, then retry:
   iro run 123
 ```
 
-## 15. Explicitly undefined or deferred
+## 16. Explicitly undefined or deferred
 
 以下は bootstrap MVP の外とする。
 
