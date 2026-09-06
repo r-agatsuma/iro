@@ -1,49 +1,86 @@
 # iro
 
-`iro` は Issue Tracker を作業状態の正本として扱い、Issue ごとの Git worktree で Codex worker を実行する独立した CLI です。OpenAI Symphony の設計思想に着想を得ていますが、fork、公式配布物、または OpenAI の公式実装ではありません。
+`iro` は、GitHub Issue を WHAT / WHY の正本、Pull Request を implementation / review の場として扱う Issue-driven Repository Orchestrator です。Issue ごとの Git worktree で disposable な Codex worker を実行し、Git と GitHub に durable state を残します。OpenAI Symphony の設計思想に着想を得ていますが、fork、公式配布物、または OpenAI の公式実装ではありません。
+
+```text
+Executable Issue
+  → iro run
+  → normal open PR
+  → optional iro review / iro revise
+  → Human judgment
+  → iro land
+  → merge / GitHub native Issue close
+
+必要なら後で: iro cleanup
+```
 
 ## Install
 
-Go toolchain と Git を事前に用意してください。`iro run`、`iro review`、`iro revise` を利用する場合は、さらに `gh` CLI、Codex CLI、および各認証が必要です。`iro land` は `gh` CLI と GitHub 認証を必要とし、Codex は要求しません。`iro` は不足している環境を自動構築しません。
+Go toolchain と Git を事前に用意してください。`iro run`、`iro review`、`iro revise` には `gh` CLI、Codex CLI、および各認証も必要です。`iro land` は `gh` CLI と GitHub 認証を必要とし、Codex は要求しません。現在 support する configured remote host は `github.com` のみです。`iro` は不足する環境や認証を自動構築しません。
 
 ```bash
 go install ./cmd/iro
 ```
 
-## Bootstrap
+## Commands
 
 既存の Git repository の root またはその配下で実行します。
 
 ```bash
 iro init
 iro doctor
-iro status
 iro run <issue-number>
 iro review <pr-number>
 iro revise <pr-number>
 iro land <pr-number>
+iro status
 iro cleanup <issue-number>
 ```
 
-`iro init` は `WORKFLOW.md` と `iro.toml` を新規作成します。`iro doctor` は環境と設定を read-only で診断します。`iro status` は ownership mapping に対応するローカル Issue workspace の機械状態を read-only で表示します。`iro run` は configured remote の GitHub Issue を取得し、Issue 専用 worktree で fresh ephemeral Codex run を開始します。`iro review` は default branch を base とし、exactly 1 件の origin Issue closing relation を持つ open PR（Draft を含む）を disposable workspace の fresh Reviewer で独立評価し、最終報告をそのまま PR comment に投稿します。
-`iro cleanup` は Human が明示した Issue について、ownership を検証できる clean な local worktree と local branch を安全に削除し、最後に ownership mapping を削除します。GitHub Issue / PR の状態や remote branch は確認・変更しません。
+`iro init` は repository root に `iro.toml` と `WORKFLOW.md` を新規生成する local scaffold operation です。既存 file を上書きせず、commit や push も行いません。生成した file を Git へ記録するかどうかは Human が判断します。
 
-`iro run` は configured repository の default branch の clean な checkout から実行します。worker 成功後、iro が変更を commit / push し、default branch を base とする通常の open PR を作成します。既存の関連 PR がある場合は停止します。PR number と `iro land <pr-number>` を表示し、同じヒントを PR comment に投稿します。`iro review` は current checkout の branch、dirty state、target PR の local branch/worktree、ownership mapping を要求しません。AI Review は advisory information であり、Human が merge を判断します。
+`iro doctor` は環境・認証・設定を read-only で診断します。`iro status` は ownership mapping に対応する local Issue workspace の機械状態だけを read-only で表示し、Issue や PR の進捗を推測しません。
 
-Review report には、開始時に観測した base branch / commit OID と、workspace で検証した PR HEAD OID を記載するよう Reviewer に指示します。model identity は現在の runtime interface では取得できないため、取得不能であることを明示します。PR 更新後も、過去の report が対象とした HEAD を確認できます。
+## Remote delivery
 
-`iro review` は advisory review であり、prompt-isolation の security boundary ではありません。Reviewer は PR HEAD 上で動作するため、PR が `AGENTS.md` などの agent instruction file を変更する場合、その変更が Reviewer の判断に影響する可能性があります。repository / agent policy 自体を変更する PR は、必要に応じて Human または独立 session で追加レビューしてください。
+### Run
 
-`iro revise` は Issue 本文・comments と PR feedback を fresh Author に渡し、検証後に新しい commit を同じ `iro/issue-N` branch へ push して既存 PR を更新します。PR は configured repository 内の canonical branch から default branch を base とする open PR で、closing Issue が exactly `#N`、active delivery PR が一つである必要があります。Human が作成した PR も扱います。
+`iro run <issue-number>` は configured repository の default branch を canonical delivery base とします。開始時の checkout は clean かつその default branch の named checkout でなければならず、non-default branch や detached HEAD からは開始しません。その検証済み local HEAD から `iro/issue-N` branch と canonical Issue worktree を作り、fresh Author worker を実行します。
 
-対象の local branch / worktree / ownership mapping がすべて存在しなければ remote PR HEAD から作成します。既存 state は整合・clean で local HEAD と remote PR HEAD が一致する場合に再利用し、partial / dirty / divergent state は自動修復せず停止します。Author の日本語作業報告は表示された local log path で確認できます。commit 後の push failure では local commit が残るため、remote state を確認してから対応してください。
+worker 成功後は iro が変更を commit / push し、`iro/issue-N` を head、default branch を base、Issue `#N` を GitHub native closing relation とする通常の open PR を作成します。iro 自身は Draft PR を作りません。PR に投稿する `iro land` の delivery hint は Human 向け UX にすぎず、remote state、ownership、creator provenance、後続 operation の eligibility の正本ではありません。
 
-`iro land <pr-number>` は Human の明示実行を merge authorization とし、確認 prompt なしで指定 PR を normal merge commit で merge します。有効な `iro.toml` / `WORKFLOW.md` があれば main などから実行でき、target の local branch / worktree / ownership mapping は不要です。Human-created PR も対象にでき、AI Review 未実施・FINDING や GitHub approval の不在は、repository policy が許す限り妨げになりません。
+### Review and Revise
 
-Land は configured repository の `iro/issue-N` → default branch、closing Issue が exactly `#N`、active delivery PR が一つという relation と merge policy を検証します。Draft は Ready for review にしてから再実行してください。検証した HEAD を merge API に bind し、HEAD の変化や policy 拒否では停止します。auto-merge、merge queue、bypass、自動 retry は行いません。成功後の Issue close は GitHub native relation に委ね、local cleanup や remote branch の明示的削除は実行しません。
+`iro review <pr-number>` は optional / advisory です。configured repository の default branch を base とし、exactly 1 件の同 repository内 origin Issue への GitHub native closing relation を持つ open PR を、fresh で独立した Reviewer が disposable workspace で評価します。target の local branch、Issue worktree、ownership mapping は不要で、Draft や Human / fork 由来の PR も relation を満たせば review できます。
 
-`iro init` が生成するファイルの commit / push は引き続き人間の責任です。
+Review report では、開始時に観測した base branch / base OID と、disposable workspace の HEAD と一致を検証した Reviewed HEAD OID を識別できる trusted provenance を Reviewer へ渡します。resolved model identity を runtime interface から確実に取得できない場合は推測せず、取得不能であることを明示します。これは Human が review 対象 snapshot を後から識別するための情報であり、review freshness gate や Land authorization ではありません。
 
-## Scope
+Reviewer の final response は opaque text です。iro は provenance、`PASS` / `FINDING`、format を parse / normalize / 再構成せず、response 全体をそのまま PR comment へ forward します。`FINDING` でも command 自体は成功し得ます。
 
-実行は human dispatch に限定されます。daemon、scheduler、自動 merge、Issue の直接 close、`iro run` による Draft PR 作成 option、Codex session の resume は含みません。Author worker は file modification と validation だけを担当し、Git / tracker lifecycle mutation は iro が担当します。
+Review は prompt-isolation の security boundary ではありません。Reviewer は PR HEAD 上で動くため、PR が `AGENTS.md` などの agent instruction file を変更する場合は、その影響も考慮して Human または独立 session で追加確認してください。
+
+`iro revise <pr-number>` は fresh Author で既存の delivery PR を更新します。PR は configured repository の `iro/issue-N` を head、default branch を base とし、GitHub native closing Issues が exactly `{N}`、その Issue / canonical branch の active delivery PR が target だけでなければなりません。PR creator identity や iro-created marker は要求せず、Human が canonical relation で作成した PR も対象です。
+
+canonical local mapping / branch / worktree がすべて欠落していれば、validated remote PR HEAD から materialize できます。一貫して clean で local HEAD が remote PR HEAD と一致する state は再利用しますが、partial、dirty、divergent な state は自動修復しません。成功後は iro が新しい commit を同じ branch へ通常 push し、同じ PR を更新します。
+
+### Land
+
+`iro land <pr-number>` の明示的な invocation 自体が、その PR に対する Human の merge authorization です。target selection と品質判断は Human が所有します。AI Review の実行や内容、PR creator identity、delivery hint、local Issue branch / worktree / ownership mapping は Land precondition ではありません。
+
+Land は configured repository の default branch を base、同 repository の `iro/issue-N` を head、GitHub native closing Issues を exactly `{N}` とする一意な active delivery relation、および repository merge policy を検証します。Draft PR は対象外で、iro は自動的に Ready for review へ変更しません。
+
+validation で取得した PR HEAD OID を実際の normal merge operation に bind するため、検証後の HEAD drift は merge failure になります。`mergeStateStatus == BEHIND` であることだけでは拒否せず、validated HEAD を指定して merge を試み、up-to-date requirement などの最終判断を GitHub の repository policy に委ねます。policy rejection や HEAD drift 時に admin bypass、branch auto-update、自動 retry、別 merge method への fallback は行いません。
+
+Land の authentication、GraphQL、merge API は configured host の `github.com` へ明示的に bind され、`GH_HOST` / `GH_REPO` などで別 host や repository へ reroute されません。Land は remote delivery の完了だけを担い、local cleanup や remote branch の明示的削除は行いません。merge 後の Issue close は GitHub native closing relation に委ねます。
+
+### Cleanup
+
+`iro cleanup <issue-number>` は Land とは独立した local resource operation です。Human が明示した Issue について、ownership mapping で所有を検証できる clean な canonical worktree と local branch だけを安全に削除し、最後に mapping を削除します。GitHub Issue / PR や remote branch は確認・変更しません。
+
+## Responsibility boundary
+
+Human は repository を直接操作する authority、仕様判断、command の target selection、最終 merge judgment を所有します。Human は canonical branch への commit / push や delivery PR 作成を直接行えます。
+
+Author / Reviewer worker は disposable です。working tree file の変更や検証は行えますが、Git metadata / history / remote state と tracker lifecycle を変更しません。commit、push、PR / comment 作成、merge、verified local cleanup は、Human が明示した operation の範囲で iro が担います。daemon、scheduler、自動 merge、自動 retry loop、Codex session resume は提供しません。
+
+runtime contract の詳細は [`docs/behavior.md`](docs/behavior.md)、現在構成の non-normative diagrams は [`docs/architecture.md`](docs/architecture.md) を参照してください。
