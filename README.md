@@ -29,6 +29,8 @@ iro cleanup <issue-number>
 
 `iro run` は configured repository の default branch の clean な checkout から実行します。worker 成功後、iro が変更を commit / push し、default branch を base とする通常の open PR を作成します。既存の関連 PR がある場合は停止します。PR number と `iro land <pr-number>` を表示し、同じヒントを PR comment に投稿します（`land` command 自体は未実装です）。`iro review` は current checkout の branch、dirty state、target PR の local branch/worktree、ownership mapping を要求しません。AI Review は advisory information であり、Human が merge を判断します。
 
+Review report には、開始時に観測した base branch / commit OID と、workspace で検証した PR HEAD OID を記載するよう Reviewer に指示します。model identity は現在の runtime interface では取得できないため、取得不能であることを明示します。PR 更新後も、過去の report が対象とした HEAD を確認できます。
+
 `iro review` は advisory review であり、prompt-isolation の security boundary ではありません。Reviewer は PR HEAD 上で動作するため、PR が `AGENTS.md` などの agent instruction file を変更する場合、その変更が Reviewer の判断に影響する可能性があります。repository / agent policy 自体を変更する PR は、必要に応じて Human または独立 session で追加レビューしてください。
 
 `iro revise` は Issue 本文・comments と PR feedback を fresh Author に渡し、検証後に新しい commit を同じ `iro/issue-N` branch へ push して既存 PR を更新します。PR は configured repository 内の canonical branch から default branch を base とする open PR で、closing Issue が exactly `#N`、active delivery PR が一つである必要があります。Human が作成した PR も扱います。

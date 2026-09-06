@@ -775,6 +775,7 @@ Reviewer 起動と disposable workspace 作成より前に、次を検証する�
 - target PR が configured repository に存在し readable
 - target PR が `OPEN`（Draft を許可する）
 - configured repository の default branch が一意に取得でき、target PR の base と一致
+- remote PR metadata の `baseRefOid` が取得でき、40 桁または 64 桁の小文字 hexadecimal commit OID として valid（missing / empty / invalid は fail closed）
 - GitHub native `closingIssuesReferences` が exactly 1 件
 - closing relation の origin Issue が configured repository に属し、取得可能
 - PR review context と Codex executable / authentication が取得・検証可能
@@ -797,6 +798,11 @@ Reviewer へ少なくとも次を渡す。
 - PR conversation comments、submitted reviews、inline review comments
 - status check information
 - verified PR HEAD 時点の repository contents
+- iro が supplied developer instruction として渡す trusted review provenance: model identity の明示値、preflight で観測した base branch / base OID、REVIEW-005 で workspace HEAD と一致検証した PR HEAD OID
+
+base branch と base OID は同じ preflight の remote PR metadata `baseRefName` / `baseRefOid` から取得し、invoking checkout の HEAD から推測しない。base branch は configured repository の default branch と一致検証する。report の `Base: <branch> @ <base OID>` と `Reviewed HEAD: <head OID>` は観測した endpoint を表し、`A..B` 等の厳密な Git diff range や merge-base を表さない。
+
+現在の adapter は model 選択を Codex runtime に委ねる。現在使用する `codex exec` interface では起動前に解決済み model identity を確実に取得できないため、trusted Model 値は常に `(unknown; not exposed by runtime)` とする。設定ファイルや環境変数から model を推測せず、stdout / stderr の header scraping、model 取得用の Reviewer 二重起動、新しい remote side effect を導入しない。確認した Codex CLI 0.153.4 の help と[公式 CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli)の model 指定 option は選択用であり、現在の呼び出しの解決済み identity を起動前に返すものではない。[公式 non-interactive mode documentation](https://learn.chatgpt.com/docs/non-interactive-mode)の JSONL event は実行中の output interface であり、起動前の trusted metadata 取得には使用しない。
 
 Issue comments は RUN-004 と同じ検証と決定的な順序を使用する。GitHub が required context に invalid data を返した場合、Reviewer を起動しない。
 
@@ -805,6 +811,8 @@ PR conversation comments、submitted reviews、inline review comments は `gh ap
 ### REVIEW-005: disposable workspace
 
 target PR の local branch / worktree がなくても review できるよう、configured repository を temporary directory へ clone し、target PR を detached HEAD で checkout する。checkout 後の `HEAD` は preflight で取得した PR HEAD OID と一致しなければならない。一致しない場合は concurrent update として reject し、再実行を要求する。
+
+provenance の Reviewed HEAD OID はこの一致検証を通過した PR HEAD OID とする。HEAD mismatch 時は Reviewer を起動せず comment を投稿しない。base OID は review 開始時の観測値を保持し、取得後に base が変わっても再検証しない。Review 完了後の PR HEAD 再検証、strong transaction binding、review freshness の自動判定は行わない。
 
 workspace は Review 専用の disposable resource であり、canonical Issue branch/worktree または delivery ownership state とみなさない。ownership mapping、persistent branch、persistent worktree を作成しない。Reviewer 終了後、PR comment 投稿前に disposable workspace を削除する。materialize / cleanup failure は command failure とする。
 
@@ -819,7 +827,25 @@ injected developer instructions は少なくとも次を要求する。
 - Git metadata/history/remote、GitHub、その他の remote service を変更しない
 - Git command は read-only inspection に限定
 - implementation を修正せず、concrete な correctness / safety / regression / specification / test coverage issue を評価
-- Human-facing final response は日本語で `## iro review`、`Verdict: PASS | FINDING`、summary、findings を含む convention に従う
+- Human-facing final response は日本語で下記の convention に従う
+- provenance は iro が developer instruction 内で supplied した値をそのまま出力し、model / branch / commit を自分で推測・置換・省略しない。model の明示的な unknown 値もそのまま使用する
+
+```text
+## iro review
+
+Verdict: PASS | FINDING
+
+Review provenance:
+- Model: <supplied Model>
+- Base: <supplied Base branch> @ <supplied Base OID>
+- Reviewed HEAD: <supplied Reviewed HEAD OID>
+
+Summary:
+...
+
+Findings:
+...
+```
 
 ### REVIEW-007: opaque output and command success
 
@@ -827,10 +853,11 @@ output convention を生成する責任は Reviewer にある。iro は Reviewer
 
 - parse / regex matching
 - `PASS` / `FINDING` またはその他の semantic information の抽出
-- schema validation
+- provenance field の parse / 値の post-validation、schema validation
 - normalize / trim
 - template reconstruction
-- verdict に基づく control flow branching
+- header 等の prepend / append による comment 本文の加工
+- verdict / provenance に基づく control flow branching
 
 Reviewer process が exit status 0 で non-empty final stdout を返した場合、iro は stdout 全体を byte-for-byte の同じ comment body として target PR へ 1 回投稿する。format 逸脱や `FINDING` は command failure にしてはならない。
 
