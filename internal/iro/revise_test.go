@@ -34,7 +34,7 @@ func newReviseFixture(t *testing.T, existing bool) *reviseFixture {
 	f.runner = &fakeCommandRunner{}
 	f.service = newTestService(t, f.runner, f.root)
 	f.workspace = worktreePath(f.service.Dirs, f.identity, 123)
-	f.target = strings.NewReplacer(`"human-feature"`, `"iro/issue-123"`, `"contributor/iro"`, `"acme/iro"`, "0123456789abcdef", revisionHead).Replace(reviewResponseForTest)
+	f.target = strings.NewReplacer(`"human-feature"`, `"iro/issue-123"`, `"contributor/iro"`, `"acme/iro"`, reviewHeadForTest, revisionHead).Replace(reviewResponseForTest)
 	f.active = strings.Replace(deliveryResponseForTest, `"nodes":[]`, `"nodes":[`+activeRevisionPR+`]`, 1)
 	if existing {
 		f.createWorktree()

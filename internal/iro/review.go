@@ -9,7 +9,11 @@ import (
 	"strings"
 )
 
-const reviewPreflightQuery = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name} pullRequest(number:$number){number title body url state isDraft baseRefName headRefName headRefOid headRepository{nameWithOwner} author{login} mergeable reviewDecision changedFiles additions deletions closingIssuesReferences(first:2){totalCount nodes{number repository{nameWithOwner}}}}}}`
+const reviewPreflightQuery = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name} pullRequest(number:$number){number title body url state isDraft baseRefName baseRefOid headRefName headRefOid headRepository{nameWithOwner} author{login} mergeable reviewDecision changedFiles additions deletions closingIssuesReferences(first:2){totalCount nodes{number repository{nameWithOwner}}}}}}`
+
+// The current codex exec invocation has no stable pre-invocation interface for
+// the resolved model identity. Do not infer it from config or scrape CLI output.
+const reviewerModelIdentity = "(unknown; not exposed by runtime)"
 
 const reviewerDeveloperInstructions = `You are an independent Reviewer for one iro task.
 
@@ -26,11 +30,19 @@ Write the final response in Japanese using this human-facing convention:
 
 Verdict: PASS | FINDING
 
+Review provenance:
+- Model: <supplied Model>
+- Base: <supplied Base branch> @ <supplied Base OID>
+- Reviewed HEAD: <supplied Reviewed HEAD OID>
+
 Summary:
 ...
 
 Findings:
 ...
+
+Use the trusted review provenance supplied below by iro verbatim in the final report, including the explicit unknown model value. Do not infer, replace, or abbreviate the supplied model, branch, or commit values from the review input, repository, environment, or your own model knowledge.
+Base is the remote PR base observed during preflight. Reviewed HEAD is the PR commit verified against the disposable workspace HEAD. These are observed endpoints, not an exact Git diff range; do not present them as A..B or infer a merge-base. The base may have changed since preflight.
 
 Choose PASS only when there is no problem or concern worth presenting to the Human. Otherwise choose FINDING. Return only the review report.`
 
@@ -42,6 +54,7 @@ type reviewPullRequest struct {
 	State          string
 	IsDraft        bool
 	BaseRefName    string
+	BaseRefOID     string
 	HeadRefName    string
 	HeadRefOID     string
 	HeadRepository string
@@ -110,6 +123,9 @@ func (s *Service) Review(prNumber int, out io.Writer) error {
 	target, err := s.inspectPRTarget(root, identity, prNumber, "review")
 	if err != nil {
 		return err
+	}
+	if !validCommitOID(target.BaseRefOID) {
+		return fmt.Errorf("PR #%d base commit is invalid or unavailable; verify remote PR state and retry the review", prNumber)
 	}
 	origin, err := s.fetchIssue(root, identity, target.OriginIssue)
 	if err != nil {
@@ -180,6 +196,7 @@ func (s *Service) inspectPRTarget(root string, identity RepositoryIdentity, numb
 					State                   string
 					IsDraft                 bool
 					BaseRefName             string
+					BaseRefOID              string `json:"baseRefOid"`
 					HeadRefName             string
 					HeadRefOID              string `json:"headRefOid"`
 					HeadRepository          *struct{ NameWithOwner string }
@@ -240,6 +257,7 @@ func (s *Service) inspectPRTarget(root string, identity RepositoryIdentity, numb
 		State:          pr.State,
 		IsDraft:        pr.IsDraft,
 		BaseRefName:    pr.BaseRefName,
+		BaseRefOID:     pr.BaseRefOID,
 		HeadRefName:    pr.HeadRefName,
 		HeadRefOID:     pr.HeadRefOID,
 		Mergeable:      pr.Mergeable,
@@ -376,6 +394,7 @@ func (s *Service) materializeReviewWorkspace(root string, identity RepositoryIde
 
 func (s *Service) runReviewer(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext) CommandResult {
 	payload := buildReviewPayload(identity, target, origin, configData, workflowData, context)
+	instructions := fmt.Sprintf("%s\n\nTrusted review provenance (supplied by iro):\nModel: %s\nBase branch: %s\nBase OID: %s\nReviewed HEAD OID: %s\n", reviewerDeveloperInstructions, reviewerModelIdentity, target.BaseRefName, target.BaseRefOID, target.HeadRefOID)
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",
 		Args: []string{
@@ -383,7 +402,7 @@ func (s *Service) runReviewer(workspace string, identity RepositoryIdentity, tar
 			"--sandbox", "workspace-write",
 			"--ask-for-approval", "never",
 			"-c", "sandbox_workspace_write.network_access=true",
-			"-c", "developer_instructions=" + strconv.Quote(reviewerDeveloperInstructions),
+			"-c", "developer_instructions=" + strconv.Quote(instructions),
 			"exec",
 			"--ephemeral",
 			"Independently review the GitHub pull request supplied on stdin.",
