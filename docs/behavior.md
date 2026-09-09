@@ -41,10 +41,10 @@ GitHub tracker I/O は `iro` が所有する。
 `iro run` が行う GitHub operation は次とする。
 
 - target Issue の read
-- target Issue への worker result comment の create
+- target Issue への Author / delivery failure report comment の create
 - configured repository の default branch と既存 PR relation の read
 - canonical branch から default branch を base とする通常の open PR の create
-- 作成した PR への delivery hint comment の best-effort create
+- 作成した PR への Author report と Land hint を含む delivery comment の best-effort create
 
 `iro review` が行う GitHub operation は次とする。
 
@@ -706,11 +706,11 @@ Codex が Git state-changing command を試みて失敗しても、`iro` は san
 
 MVP は Codex JSONL event stream、thread ID、resume metadata を解析・保存する必要はない。
 
-Codex の final stdout は可能な限り Issue result comment の作業報告として利用する。
+Codex の final stdout は local log に保持し、成功時は delivery PR comment、失敗時は Issue failure comment の作業報告として利用する。
 
 ### RUN-016: Codex success
 
-Codex exit status が 0 の場合、stdout の validation / 作業報告を回収し、Issue へ worker result comment を投稿し、local log に保存する。この comment は実装段階の結果であり delivery 成功とは区別する。worker が行った validation の内容はその報告に依存し、iro 自身が test の成功を解析・保証するものではない。
+Codex exit status が 0 の場合、stdout の validation / 作業報告を回収し、delivery 前に local log に保存する。Issue へ成功 report は投稿しない。log 保存失敗時は delivery を開始せず Issue へ診断と Author report の投稿を試みる。worker が行った validation の内容はその報告に依存し、iro 自身が test の成功を解析・保証するものではない。
 
 その後 iro orchestration が次を順に行う。
 
@@ -720,11 +720,11 @@ Codex exit status が 0 の場合、stdout の validation / 作業報告を回�
 4. configured remote へ canonical `refs/heads/iro/issue-N` を明示的な refspec で push する。force push は禁止する。
 5. 通常の open PR を作成する。head は `iro/issue-N`、base は `D`、body は `Closes #N` を含む固定文面とする。worker output を body に展開して追加の closing relation を導入してはならない。
 6. create response の PR number `M` を取得し、stdout に PR number と `iro land M` を表示する。
-7. PR に `## iro delivery` と `Land: ` に続くコード表記の `iro land M` を含む comment を best-effort で投稿する。
+7. PR に `## iro delivery` header、`Author report:`、Author final stdout、`Land:`、コード表記の `iro land M` を順に含む単一 comment を best-effort で投稿する。Author report の意味を解釈・再生成せず、固定 header / footer の間に配置する。
 
-PR create 成功と number の取得を required remote delivery の完了境界とする。hint comment 失敗は warning を stderr に出すが exit success を維持する。PR body の post-create update、Issue closing relation の作成直後の再取得は要求しない。`run` は Draft PR / Draft option、merge、Issue close API を提供しない。merge は Human が明示する `iro land`（LAND-001 以降）で行う。
+PR create 成功と number の取得を required remote delivery の完了境界とする。delivery comment 失敗は warning を stderr に出すが exit success を維持する。PR body の post-create update、Issue closing relation の作成直後の再取得は要求しない。`run` は Draft PR / Draft option、merge、Issue close API を提供しない。merge は Human が明示する `iro land`（LAND-001 以降）で行う。
 
-stage / commit failure 時は worktree と index を保持して failure とする。push failure 時は local commit の存在と remote 更新の可能性を明示する。push 後の PR creation / response decode failure 時は remote branch が publish 済みであり PR が存在する可能性を明示して failure とする。自動 rollback / retry / repair は行わない。
+stage / commit failure 時は worktree と index を保持して failure とする。push failure 時は local commit の存在と remote 更新の可能性を明示する。push 後の PR creation / response decode failure 時は remote branch が publish 済みであり PR が存在する可能性を明示して failure とする。これらの failure と staged diff の検査失敗・空 diff では、origin Issue へ Author report と失敗 step を識別できる diagnostic を含む delivery failure report の投稿を試みる。取得済み Author report は local log に保持する。original operation failure を主原因として non-zero で終了し、自動 rollback / retry / repair は行わない。
 
 ### RUN-016a: delivery relation
 
@@ -748,14 +748,16 @@ Codex exit status が non-zero の場合:
 
 ### RUN-018: Issue result comment failure
 
-Issue comment の投稿に失敗した場合:
+Author / delivery failure の Issue comment 投稿に失敗した場合:
 
 - Codex result を local log に保持する
 - worktree を変更しない
-- comment failure を stderr に出す
-- `iro run` は non-zero で終了する
+- comment failure を追加 diagnostic として stderr に出し、original operation failure を隠さない
+- `iro run` は original operation failure により non-zero で終了する
 
 Issue comment failure を理由に Codex を再実行してはならない。
+
+Issue comment の結果を local run log へ反映する際は、一時ファイルへの書き込み完了後にログを置き換える。書き込みまたは置き換えが失敗しても、保存済み Author report を含む既存ログを保持し、更新失敗を追加 diagnostic として表示する。
 
 ## 10. `iro review <pr-number>`
 
@@ -1103,7 +1105,7 @@ Issue comment result
 workspace ownership mapping
 ```
 
-Issue comment result は `run` に適用する。`revise` は `revisions/<repository-key>/pr-<number>-<timestamp>.log` に PR number、origin Issue number、開始時 HEAD、worker exit status / stdout / stderr 等を保存する。
+Issue comment result は `run` に適用し、投稿していない場合は `not attempted` を記録する。`revise` は `revisions/<repository-key>/pr-<number>-<timestamp>.log` に PR number、origin Issue number、開始時 HEAD、worker exit status / stdout / stderr 等を保存する。
 
 Codex thread/session ID は保存対象に含めない。
 
@@ -1154,9 +1156,9 @@ Codex thread/session ID は保存対象に含めない。
 | Issue branch tip not in invoking `HEAD` history | N/A | N/A | not applicable; read-only | not applicable | not inspected | error; no changes |
 | worktree removal or safe branch deletion failure | N/A | N/A | not applicable | not applicable | not applicable | non-zero; mapping retained |
 | successful full cleanup | N/A | N/A | no mapping remains | not applicable | not applicable | worktree, local branch, and mapping removed |
-| Codex / Reviewer success | N/A | N/A | observe local state only; no semantic inference; read-only | comment worker result; commit / push / open PR; human review | opaque final response を PR comment; `FINDING` でも success | not applicable |
+| Codex / Reviewer success | N/A | N/A | observe local state only; no semantic inference; read-only | log worker result; commit / push / open PR; PR delivery report; human review | opaque final response を PR comment; `FINDING` でも success | not applicable |
 | Codex / Reviewer failure | N/A | N/A | observe local state only; no semantic inference; read-only | comment failure result if possible; keep worktree; non-zero | no PR comment; non-zero | not applicable |
-| tracker comment failure | N/A | N/A | observe local state only; no semantic inference; read-only | keep local result; non-zero; no Codex rerun | non-zero; no Reviewer rerun | not applicable |
+| tracker comment failure | N/A | N/A | observe local state only; no semantic inference; read-only | keep local result; Issue failure report error preserves original failure; PR delivery comment error only warns; no Codex rerun | non-zero; no Reviewer rerun | not applicable |
 
 ## 15. Diagnostic requirements
 

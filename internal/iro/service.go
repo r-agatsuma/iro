@@ -270,27 +270,33 @@ func (s *Service) run(issueNumber int, out, errOut io.Writer) error {
 	started := s.Now().UTC()
 	codexResult := s.runCodex(workspace, identity, target)
 	finished := s.Now().UTC()
-	success := commandSucceeded(codexResult)
-	comment := buildResultComment(success, issueNumber, workspace, codexResult)
-	commentErr := s.postResult(root, identity, issueNumber, comment)
-	_, logErr := s.writeRunLog(identity, issueNumber, started, finished, branch, workspace, codexResult, commentErr)
-
-	if !success {
+	if !commandSucceeded(codexResult) {
+		operationErr := fmt.Errorf("Codex exited with status %d (%v); worktree was kept for human inspection", codexResult.ExitCode, codexResult.Err)
+		commentErr := s.postResult(root, identity, issueNumber, buildFailureComment(issueNumber, workspace, codexResult, operationErr))
+		_, logErr := s.writeRunLog(identity, issueNumber, started, finished, branch, workspace, codexResult, issueCommentStatus(commentErr))
 		if commentErr != nil {
-			return fmt.Errorf("Codex failed and result comment failed; worktree was kept: %v", commentErr)
+			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", commentErr)
 		}
 		if logErr != nil {
-			return fmt.Errorf("Codex failed and run log could not be written: %v", logErr)
+			fmt.Fprintf(errOut, "warning: %v\n", logErr)
 		}
-		return fmt.Errorf("Codex exited with status %d; worktree was kept for human inspection", codexResult.ExitCode)
+		return operationErr
 	}
-	if commentErr != nil {
-		return commentErr
+	_, logErr := s.writeRunLog(identity, issueNumber, started, finished, branch, workspace, codexResult, "not attempted")
+	operationErr := logErr
+	if operationErr == nil {
+		operationErr = s.deliver(root, workspace, identity, issueNumber, config.TrackerRemote, branch, base, codexResult.Stdout, out, errOut)
 	}
-	if logErr != nil {
-		return logErr
+	if operationErr != nil {
+		commentErr := s.postResult(root, identity, issueNumber, buildFailureComment(issueNumber, workspace, codexResult, operationErr))
+		if commentErr != nil {
+			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", commentErr)
+		}
+		if _, err := s.writeRunLog(identity, issueNumber, started, finished, branch, workspace, codexResult, issueCommentStatus(commentErr)); err != nil {
+			fmt.Fprintf(errOut, "warning: %v\n", err)
+		}
 	}
-	return s.deliver(root, workspace, identity, issueNumber, config.TrackerRemote, branch, base, out, errOut)
+	return operationErr
 }
 
 func (s *Service) loadConfig(root string) (Config, error) {
@@ -480,26 +486,25 @@ func normalizedCommentAuthor(comment issueComment) string {
 	return comment.Author.Login
 }
 
-func buildResultComment(success bool, issueNumber int, workspace string, result CommandResult) string {
-	status := "失敗"
-	if success {
-		status = "成功"
-	}
-	report := strings.TrimSpace(result.Stdout)
-	if report == "" {
-		report = "（Codex の標準出力は空でした。）"
+func buildFailureComment(issueNumber int, workspace string, result CommandResult, operationErr error) string {
+	phase := "Author"
+	if commandSucceeded(result) {
+		phase = "delivery（Author は成功）"
 	}
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "## iro 実行結果\n\n状態: %s\nIssue: #%d\n作業用 worktree: %s\n\nCodex の作業報告:\n%s\n", status, issueNumber, workspace, report)
-	if !success && strings.TrimSpace(result.Stderr) != "" {
-		fmt.Fprintf(&builder, "\nCodex のエラー出力:\n%s\n", strings.TrimSpace(result.Stderr))
+	fmt.Fprintf(&builder, "## iro 実行結果\n\n状態: 失敗\n失敗段階: %s\nIssue: #%d\n作業用 worktree: %s\n\n診断:\n%v\n\nAuthor report:\n%s\n", phase, issueNumber, workspace, operationErr, result.Stdout)
+	if strings.TrimSpace(result.Stderr) != "" {
+		fmt.Fprintf(&builder, "\nCodex のエラー出力:\n%s\n", result.Stderr)
 	}
-	if success {
-		builder.WriteString("\nworker の実装段階が完了しました。iro はこの後 commit / push / PR 作成を試行します。この報告は delivery 成功を意味しません。\n")
-	} else {
-		builder.WriteString("\nCodex は失敗しました。partial changes を保持しているため、人間が確認・cleanup してから再実行してください。\n")
-	}
+	builder.WriteString("\nworktree と取得済みの作業報告を保持します。再実行前に local / remote state と診断を確認してください。自動 retry / rollback / repair は行いません。\n")
 	return builder.String()
+}
+
+func issueCommentStatus(err error) string {
+	if err != nil {
+		return "failure: " + err.Error()
+	}
+	return "success"
 }
 
 func parseIssueNumber(value string) (int, error) {

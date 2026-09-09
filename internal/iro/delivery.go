@@ -142,7 +142,7 @@ func (s *Service) verifyPushRemote(root, remote string, identity RepositoryIdent
 	return nil
 }
 
-func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, number int, remote, branch, base string, out, errOut io.Writer) error {
+func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, number int, remote, branch, base, authorReport string, out, errOut io.Writer) error {
 	// Stage only worker changes in the previously verified clean, owned worktree.
 	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"add", "--all"}, Dir: workspace})
 	if !commandSucceeded(result) {
@@ -173,10 +173,10 @@ func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, n
 		return fmt.Errorf("PR creation failed or response was invalid; remote branch %s was pushed and local commit remains at %s; a PR may exist, inspect remote state before retrying", branch, workspace)
 	}
 	fmt.Fprintf(out, "Created PR #%d\nLand: iro land %d\n", pr.Number, pr.Number)
-	hint := fmt.Sprintf("## iro delivery\n\nLand: `iro land %d`\n", pr.Number)
-	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"pr", "comment", strconv.Itoa(pr.Number), "--repo", identity.String(), "--body", hint}, Dir: root})
+	report := fmt.Sprintf("## iro delivery\n\nAuthor report:\n\n%s\n\nLand:\n\n`iro land %d`\n", authorReport, pr.Number)
+	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"pr", "comment", strconv.Itoa(pr.Number), "--repo", identity.String(), "--body", report}, Dir: root})
 	if !commandSucceeded(result) {
-		fmt.Fprintf(errOut, "warning: PR #%d was created, but delivery hint comment failed; Land: iro land %d\n", pr.Number, pr.Number)
+		fmt.Fprintf(errOut, "warning: PR #%d was created, but delivery report comment failed; Land: iro land %d\n", pr.Number, pr.Number)
 	}
 	return nil
 }

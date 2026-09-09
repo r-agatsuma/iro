@@ -89,21 +89,27 @@ func (s *Service) writeOwnership(path string, mapping ownershipMapping) error {
 	return nil
 }
 
-func (s *Service) writeRunLog(identity RepositoryIdentity, issueNumber int, started, finished time.Time, branch, worktree string, codexResult CommandResult, commentError error) (string, error) {
+func (s *Service) writeRunLog(identity RepositoryIdentity, issueNumber int, started, finished time.Time, branch, worktree string, codexResult CommandResult, commentStatus string) (string, error) {
 	logDir := filepath.Join(s.Dirs.StateRoot, "runs", identity.Key())
 	if err := s.FileSystem.MkdirAll(logDir, 0755); err != nil {
 		return "", fmt.Errorf("create run log directory: %w", err)
 	}
 	logName := fmt.Sprintf("issue-%d-%d.log", issueNumber, started.UnixNano())
 	logPath := filepath.Join(logDir, logName)
-	commentStatus := "success"
-	if commentError != nil {
-		commentStatus = "failure: " + commentError.Error()
-	}
 	content := fmt.Sprintf("repository: %s\nissue_number: %d\nbranch: %s\nworktree: %s\nstarted: %s\nfinished: %s\ncodex_exit_status: %d\ncodex_error: %v\nissue_comment: %s\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n",
 		identity.String(), issueNumber, branch, worktree, started.UTC().Format(time.RFC3339Nano), finished.UTC().Format(time.RFC3339Nano), codexResult.ExitCode, codexResult.Err, commentStatus, codexResult.Stdout, codexResult.Stderr)
-	if err := s.FileSystem.WriteFile(logPath, []byte(content), 0600); err != nil {
+	// Keep the previous report intact until the replacement is fully written.
+	tempDir, err := s.FileSystem.MkdirTemp(logDir, ".run-log-*")
+	if err != nil {
+		return "", fmt.Errorf("create run log temporary directory: %w", err)
+	}
+	defer s.FileSystem.RemoveAll(tempDir)
+	tempPath := filepath.Join(tempDir, logName)
+	if err := s.FileSystem.WriteFile(tempPath, []byte(content), 0600); err != nil {
 		return "", fmt.Errorf("write run log: %w", err)
+	}
+	if err := s.FileSystem.Rename(tempPath, logPath); err != nil {
+		return "", fmt.Errorf("replace run log: %w", err)
 	}
 	return logPath, nil
 }

@@ -259,7 +259,7 @@ func TestRunUsesConfiguredIdentityAndNormativeCodexInvocation(t *testing.T) {
 		if call.Name == "gh" && len(call.Args) >= 2 && call.Args[0] == "issue" && call.Args[1] == "view" {
 			issueFetchCall = call
 		}
-		if call.Name == "gh" && len(call.Args) >= 2 && call.Args[0] == "issue" && call.Args[1] == "comment" {
+		if call.Name == "gh" && len(call.Args) >= 2 && call.Args[0] == "pr" && call.Args[1] == "comment" {
 			commentCall = call
 		}
 	}
@@ -283,8 +283,8 @@ func TestRunUsesConfiguredIdentityAndNormativeCodexInvocation(t *testing.T) {
 			t.Errorf("Codex payload does not contain %q: %s", want, codexCall.Stdin)
 		}
 	}
-	if !strings.Contains(commentCall.Args[len(commentCall.Args)-1], "worker の実装段階が完了") {
-		t.Fatalf("result comment is not a Japanese review checkpoint: %v", commentCall.Args)
+	if !strings.Contains(commentCall.Args[len(commentCall.Args)-1], "Author report:") {
+		t.Fatalf("delivery comment is missing the Author report: %v", commentCall.Args)
 	}
 }
 
@@ -480,38 +480,50 @@ func TestRunReusesMatchingCleanOwnedWorkspace(t *testing.T) {
 }
 
 func TestRunFailureKeepsWorktreeAndPostsFailureResult(t *testing.T) {
-	root := t.TempDir()
-	writeProjectFiles(t, root)
-	runner := &fakeCommandRunner{}
-	runner.fn = func(spec CommandSpec) CommandResult {
-		result := standardFakeResult(spec, root, "", false, false)
-		if spec.Name == "codex" && len(spec.Args) > 0 && spec.Args[0] == "--cd" {
-			return CommandResult{Stdout: "途中まで変更しました。", Stderr: "test failed", ExitCode: 9, Err: errors.New("exit status 9")}
+	for _, commentFailure := range []bool{false, true} {
+		root := t.TempDir()
+		writeProjectFiles(t, root)
+		runner := &fakeCommandRunner{}
+		runner.fn = func(spec CommandSpec) CommandResult {
+			if commentFailure && spec.Name == "gh" && containsArgs(spec.Args, "issue", "comment") {
+				return CommandResult{ExitCode: 1}
+			}
+			result := standardFakeResult(spec, root, "", false, false)
+			if spec.Name == "codex" && len(spec.Args) > 0 && spec.Args[0] == "--cd" {
+				return CommandResult{Stdout: "途中まで変更しました。", Stderr: "test failed", ExitCode: 9, Err: errors.New("exit status 9")}
+			}
+			return result
 		}
-		return result
-	}
-	service := newTestService(t, runner, root)
-	if err := service.Run(123, io.Discard); err == nil {
-		t.Fatal("Run() unexpectedly succeeded after Codex failure")
-	}
-	commentFound := false
-	for _, call := range runner.calls {
-		if call.Name == "gh" && len(call.Args) >= 2 && call.Args[0] == "issue" && call.Args[1] == "comment" {
-			commentFound = true
-			if !strings.Contains(call.Args[len(call.Args)-1], "状態: 失敗") {
-				t.Fatalf("failure result comment has wrong status: %s", call.Args[len(call.Args)-1])
+		service := newTestService(t, runner, root)
+		var errOut strings.Builder
+		if err := service.run(123, io.Discard, &errOut); err == nil || !strings.Contains(err.Error(), "status 9") {
+			t.Fatal("Run() unexpectedly succeeded after Codex failure")
+		}
+		if commentFailure && !strings.Contains(errOut.String(), "failure report comment failed") {
+			t.Fatal(errOut.String())
+		}
+		commentFound := false
+		for _, call := range runner.calls {
+			if call.Name == "git" && (call.Args[0] == "add" || call.Args[0] == "commit" || call.Args[0] == "push") {
+				t.Fatalf("delivery attempted after Author failure: %v", call)
+			}
+			if call.Name == "gh" && len(call.Args) >= 2 && call.Args[0] == "issue" && call.Args[1] == "comment" {
+				commentFound = true
+				if !strings.Contains(call.Args[len(call.Args)-1], "状態: 失敗") {
+					t.Fatalf("failure result comment has wrong status: %s", call.Args[len(call.Args)-1])
+				}
 			}
 		}
-	}
-	if !commentFound {
-		t.Fatal("failure result comment was not attempted")
-	}
-	logs, err := filepath.Glob(filepath.Join(service.Dirs.StateRoot, "runs", identityKeyForTest(), "*.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(logs) == 0 {
-		t.Fatal("Codex failure was not retained in a local run log")
+		if !commentFound {
+			t.Fatal("failure result comment was not attempted")
+		}
+		logs, err := filepath.Glob(filepath.Join(service.Dirs.StateRoot, "runs", identityKeyForTest(), "*.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(logs) == 0 {
+			t.Fatal("Codex failure was not retained in a local run log")
+		}
 	}
 }
 
