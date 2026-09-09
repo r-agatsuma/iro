@@ -10,6 +10,7 @@ type FileSystem interface {
 	ReadFile(name string) ([]byte, error)
 	ReadDir(name string) ([]os.DirEntry, error)
 	WriteFile(name string, data []byte, perm os.FileMode) error
+	Rename(oldpath, newpath string) error
 	CreateNew(name string, perm os.FileMode) (io.WriteCloser, error)
 	Remove(name string) error
 	RemoveAll(path string) error
@@ -35,6 +36,10 @@ func (OSFileSystem) ReadDir(name string) ([]os.DirEntry, error) {
 
 func (OSFileSystem) WriteFile(name string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(name, data, perm)
+}
+
+func (OSFileSystem) Rename(oldpath, newpath string) error {
+	return os.Rename(oldpath, newpath)
 }
 
 func (OSFileSystem) CreateNew(name string, perm os.FileMode) (io.WriteCloser, error) {

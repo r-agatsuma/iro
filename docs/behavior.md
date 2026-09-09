@@ -757,6 +757,8 @@ Author / delivery failure の Issue comment 投稿に失敗した場合:
 
 Issue comment failure を理由に Codex を再実行してはならない。
 
+Issue comment の結果を local run log へ反映する際は、一時ファイルへの書き込み完了後にログを置き換える。書き込みまたは置き換えが失敗しても、保存済み Author report を含む既存ログを保持し、更新失敗を追加 diagnostic として表示する。
+
 ## 10. `iro review <pr-number>`
 
 ### REVIEW-001: purpose and argument grammar
