@@ -8,12 +8,18 @@ import (
 // Execute dispatches the bootstrap MVP CLI commands and returns an exit status.
 func Execute(args []string, out, errOut io.Writer, service *Service) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "error: command is required (init, doctor, status, run <issue-number>, review <pr-number>, revise <pr-number>, land <pr-number>, or cleanup <issue-number>)")
+		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number>, review <pr-number>, revise <pr-number>, land <pr-number>, or cleanup <issue-number>)")
 		return 2
 	}
 
 	var err error
 	switch args[0] {
+	case "version":
+		if len(args) != 1 {
+			fmt.Fprintln(errOut, "error: version does not accept arguments")
+			return 2
+		}
+		writeVersion(out)
 	case "init":
 		if len(args) != 1 {
 			fmt.Fprintln(errOut, "error: init does not accept arguments")

@@ -7,7 +7,7 @@
 本文中の `MUST`、`MUST NOT`、`SHOULD`、`SHOULD NOT`、`MAY` は規範的要件を示す。
 
 `BOOTSTRAP.md` は実装 scope と Definition of Done を定義するが、runtime behavior を上書きしない。
-`docs/architecture.md` は non-normative である。
+`docs/architecture.md` と `docs/cookbook.md` は non-normative である。
 
 ## 2. Global invariants
 
@@ -299,6 +299,25 @@ MVP では automatic repair と `--force` を実装しない。
 
 DOC-002 の診断対象がすべて healthy なら 0、そうでなければ non-zero とする。
 診断一覧は可能な限り最後まで表示する。
+
+### DOC-005: operator diagnostics
+
+既存 health check に加えて、次を可能な範囲で表示しなければならない。
+
+- iro 自身の executable path と VERSION-001 の build 情報
+- git / gh / codex の PATH 上の executable path と `--version` の version 情報
+- repository root、`iro.toml`、`WORKFLOW.md` の path
+- configured remote 名、解決した GitHub host、owner/repository
+
+付加情報が取得不能なら `unknown` 等で明示し、それだけを理由に health check を failure にしてはならない。認証状態の検査方法と既存 executable / configuration health contract は変更しない。remote URL の credential を表示してはならない。
+
+## 6a. `iro version`
+
+### VERSION-001: standalone build identification
+
+`iro version` は引数を受け付けず、Git repository、project file、外部 executable、認証を要求せず binary 単体で実行できなければならない。
+
+Go 標準 library の `runtime/debug.ReadBuildInfo()` から module/build version、VCS revision、VCS time、VCS modified state、Go toolchain version を取得可能な範囲で簡潔な human-readable text として表示しなければならない。未取得 field は推測せず `unknown` と表示する。`ReadBuildInfo()` 自体が利用不能でも panic せず結果を表示し、success とする。manual version constant や独自 release versioning は導入しない。
 
 ## 7. `iro status`
 

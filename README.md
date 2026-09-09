@@ -20,13 +20,20 @@ Go toolchain と Git を事前に用意してください。`iro run`、`iro rev
 
 ```bash
 go install ./cmd/iro
+go env GOBIN
+go env GOPATH
+command -v iro
+iro version
 ```
+
+repository の source root で install します。install 先は設定済みの `GOBIN`、未設定なら通常 `$(go env GOPATH)/bin` です。その directory が `PATH` に含まれている必要があります。`command -v iro` で選ばれる binary と `iro version` の build 情報を確認してください。PATH の設定は Human が利用環境に合わせて行います。
 
 ## Commands
 
-既存の Git repository の root またはその配下で実行します。
+`iro version` は project 外でも実行できます。その他は既存の Git repository の root またはその配下で実行します。
 
 ```bash
+iro version
 iro init
 iro doctor
 iro run <issue-number>
@@ -39,7 +46,7 @@ iro cleanup <issue-number>
 
 `iro init` は repository root に `iro.toml` と `WORKFLOW.md` を新規生成する local scaffold operation です。既存 file を上書きせず、commit や push も行いません。生成した file を Git へ記録するかどうかは Human が判断します。
 
-`iro doctor` は環境・認証・設定を read-only で診断します。`iro status` は ownership mapping に対応する local Issue workspace の機械状態だけを read-only で表示し、Issue や PR の進捗を推測しません。
+`iro doctor` は環境・認証・設定を read-only で診断し、iro / git / gh / codex の executable path と version、project / repository の識別情報も表示します。`iro status` は ownership mapping に対応する local Issue workspace の機械状態だけを read-only で表示し、Issue や PR の進捗を推測しません。
 
 ## Remote delivery
 
@@ -84,3 +91,5 @@ Human は repository を直接操作する authority、仕様判断、command �
 Author / Reviewer worker は disposable です。working tree file の変更や検証は行えますが、Git metadata / history / remote state と tracker lifecycle を変更しません。commit、push、PR / comment 作成、merge、verified local cleanup は、Human が明示した operation の範囲で iro が担います。daemon、scheduler、自動 merge、自動 retry loop、Codex session resume は提供しません。
 
 runtime contract の詳細は [`docs/behavior.md`](docs/behavior.md)、現在構成の non-normative diagrams は [`docs/architecture.md`](docs/architecture.md) を参照してください。
+
+古い binary の確認や Run failure 後の保存・破棄・再実行は、[operator cookbook](docs/cookbook.md) を参照してください。
