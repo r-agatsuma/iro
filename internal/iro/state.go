@@ -89,17 +89,13 @@ func (s *Service) writeOwnership(path string, mapping ownershipMapping) error {
 	return nil
 }
 
-func (s *Service) writeRunLog(identity RepositoryIdentity, issueNumber int, started, finished time.Time, branch, worktree string, codexResult CommandResult, commentError error) (string, error) {
+func (s *Service) writeRunLog(identity RepositoryIdentity, issueNumber int, started, finished time.Time, branch, worktree string, codexResult CommandResult, commentStatus string) (string, error) {
 	logDir := filepath.Join(s.Dirs.StateRoot, "runs", identity.Key())
 	if err := s.FileSystem.MkdirAll(logDir, 0755); err != nil {
 		return "", fmt.Errorf("create run log directory: %w", err)
 	}
 	logName := fmt.Sprintf("issue-%d-%d.log", issueNumber, started.UnixNano())
 	logPath := filepath.Join(logDir, logName)
-	commentStatus := "success"
-	if commentError != nil {
-		commentStatus = "failure: " + commentError.Error()
-	}
 	content := fmt.Sprintf("repository: %s\nissue_number: %d\nbranch: %s\nworktree: %s\nstarted: %s\nfinished: %s\ncodex_exit_status: %d\ncodex_error: %v\nissue_comment: %s\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n",
 		identity.String(), issueNumber, branch, worktree, started.UTC().Format(time.RFC3339Nano), finished.UTC().Format(time.RFC3339Nano), codexResult.ExitCode, codexResult.Err, commentStatus, codexResult.Stdout, codexResult.Stderr)
 	if err := s.FileSystem.WriteFile(logPath, []byte(content), 0600); err != nil {

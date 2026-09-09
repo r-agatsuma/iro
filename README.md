@@ -47,7 +47,7 @@ iro cleanup <issue-number>
 
 `iro run <issue-number>` は configured repository の default branch を canonical delivery base とします。開始時の checkout は clean かつその default branch の named checkout でなければならず、non-default branch や detached HEAD からは開始しません。その検証済み local HEAD から `iro/issue-N` branch と canonical Issue worktree を作り、fresh Author worker を実行します。
 
-worker 成功後は iro が変更を commit / push し、`iro/issue-N` を head、default branch を base、Issue `#N` を GitHub native closing relation とする通常の open PR を作成します。iro 自身は Draft PR を作りません。PR に投稿する `iro land` の delivery hint は Human 向け UX にすぎず、remote state、ownership、creator provenance、後続 operation の eligibility の正本ではありません。
+worker 成功後は iro が変更を commit / push し、`iro/issue-N` を head、default branch を base、Issue `#N` を GitHub native closing relation とする通常の open PR を作成します。iro 自身は Draft PR を作りません。Author report は先に local log へ保存し、成功時は `iro land` の案内と同じ delivery PR comment に集約します。Issue へ成功 report は投稿しません。PR comment 投稿失敗は warning に留め、Run の成功を覆しません。Author failure または stage / commit / push / PR create 等の delivery failure 時は、origin Issue へ Author report と診断の投稿を試みます。その投稿失敗は元の operation failure を隠さず、追加 diagnostic として表示します。自動 retry / rollback / repair は行いません。delivery comment は Human 向け UX にすぎず、remote state、ownership、creator provenance、後続 operation の eligibility の正本ではありません。
 
 ### Review and Revise
 
