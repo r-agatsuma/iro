@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Verify whitespace
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CURRENT_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -eu
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git diff --check "$PR_BASE_SHA...HEAD"
+          elif [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            git diff --check --root "$CURRENT_SHA"
+          else
+            git diff --check "$BEFORE_SHA" "$CURRENT_SHA"
+          fi
+
+      - name: Verify gofmt
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          formatted_files=$(gofmt -l .)
+          if [ -n "$formatted_files" ]; then
+            echo "The following Go files need formatting:"
+            printf '%s\n' "$formatted_files"
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test ./...
