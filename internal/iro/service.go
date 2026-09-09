@@ -80,6 +80,10 @@ func (s *Service) Init(out io.Writer) error {
 }
 
 func (s *Service) Doctor(out io.Writer) error {
+	writeSelfDiagnostics(out)
+	for _, name := range []string{"git", "gh", "codex"} {
+		s.toolDiagnostics(out, name)
+	}
 	failures := 0
 	check := func(label string, checkFunc func() error) {
 		if err := checkFunc(); err != nil {
@@ -111,6 +115,15 @@ func (s *Service) Doctor(out io.Writer) error {
 		fmt.Fprintln(out, "FAIL: Git repository: Git executable is unavailable")
 	}
 
+	fmt.Fprintf(out, "project repository root: %s\n", knownValue(root))
+	for _, name := range []string{"iro.toml", "WORKFLOW.md"} {
+		path := ""
+		if root != "" {
+			path = filepath.Join(root, name)
+		}
+		fmt.Fprintf(out, "project %s: %s\n", name, knownValue(path))
+	}
+	remote, host, repository := "", "", ""
 	var config Config
 	configValid := false
 	if root != "" {
@@ -141,8 +154,12 @@ func (s *Service) Doctor(out io.Writer) error {
 		})
 
 		if configValid {
+			remote = config.TrackerRemote
 			check("configured GitHub remote", func() error {
-				_, err := s.repositoryIdentity(root, config)
+				identity, err := s.repositoryIdentity(root, config)
+				if err == nil {
+					host, repository = "github.com", identity.String()
+				}
 				return err
 			})
 		} else {
@@ -150,6 +167,8 @@ func (s *Service) Doctor(out io.Writer) error {
 			fmt.Fprintln(out, "FAIL: configured GitHub remote: iro.toml is invalid")
 		}
 	}
+
+	fmt.Fprintf(out, "repository configured remote: %s\nrepository GitHub host: %s\nrepository owner/repository: %s\n", knownValue(remote), knownValue(host), knownValue(repository))
 
 	ghAvailable := false
 	check("gh executable", func() error {
