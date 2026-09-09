@@ -46,9 +46,13 @@ iro cleanup <issue-number>
 
 `iro init` は repository root に `iro.toml` と `WORKFLOW.md` を新規生成する local scaffold operation です。既存 file を上書きせず、commit や push も行いません。生成した file を Git へ記録するかどうかは Human が判断します。
 
-`iro doctor` は環境・認証・設定を read-only で診断し、iro / git / gh / codex の executable path と version、project / repository の識別情報も表示します。`iro status` は ownership mapping に対応する local Issue workspace の機械状態だけを read-only で表示し、Issue や PR の進捗を推測しません。
+`iro doctor` は環境・認証・設定を read-only で診断し、iro / git / gh / codex の executable path と version、project / repository の識別情報も表示します。`GitHub CLI context` check では configured repository と `GH_HOST` / `GH_REPO` の不整合を検出し、configured value、observed value、修正方法を表示します。不整合時は GitHub 認証確認を実行せず、他の診断を続けて non-zero で終了します。`iro status` は ownership mapping に対応する local Issue workspace の機械状態だけを read-only で表示し、Issue や PR の進捗を推測しません。
 
 ## Remote delivery
+
+`run` / `review` / `revise` / `land` は `tracker.remote` から解決した repository と GitHub CLI environment の整合性を、Git / worktree 変更や worker 起動、GitHub access より前に検証します。`GH_HOST` は unset / empty または `github.com`、`GH_REPO` は unset / empty または一致する `OWNER/REPO` / `github.com/OWNER/REPO` を許可します。owner/repository は configured remote と同じ規則で比較し、大文字・小文字を区別せず、末尾の `.git` を除去します。不一致や malformed な値は修正方法を stderr に表示して拒否します。Human が `unset GH_HOST` / `unset GH_REPO` または configured value への設定を行ってください。iro 自身は environment を変更しません。
+
+実際の `gh` operation も、認証確認・API の `--hostname github.com`、host を含む repository selector、configured owner/repository の API path / GraphQL variables で接続先を明示します。
 
 ### Run
 

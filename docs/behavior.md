@@ -71,7 +71,7 @@ GitHub tracker I/O は `iro` が所有する。
 
 Codex は `gh` を実行してはならず、GitHub Issue を直接 fetch / create / modify / close / comment してはならない。
 
-`iro` が `gh` で Issue を read/comment するときは、RUN-003 で解決した repository identity を明示的に指定しなければならない。`gh` の current-repository 推測に依存してはならない。
+`iro` が `gh` を使うときは、INV-010 に従って configured identity を明示しなければならない。`gh` の current-repository 推測に依存してはならない。
 
 ### INV-005: Git authority
 
@@ -135,6 +135,30 @@ Codex は remote service を意図的に変更してはならない。特に tra
 MVP の `workspace-write` sandbox と network access 設定は、arbitrary remote service に対する技術的な read-only 境界を提供しない。上記の remote non-mutation は RUN-012 の developer instructions による behavioral policy であり、sandbox がすべての outbound mutation を防止するという保証ではない。
 
 MVP は Human が明示的に Issue を dispatch する trusted development VM を trust boundary とする。credential isolation、egress filtering、domain allowlist、proxy 等による remote mutation の強制的な hardening は deferred とし、bootstrap MVP に追加してはならない。
+
+### INV-010: GitHub CLI context consistency and target binding
+
+`run` / `review` / `revise` / `land` は、configured `tracker.remote` だけから解決した GitHub identity（host、owner、repository）と、継承した `GH_HOST` / `GH_REPO` の整合性を共通 precondition として検証しなければならない。現在 support する host は `github.com` のみとする。
+
+| Environment | Allowed condition |
+|---|---|
+| `GH_HOST` unset / empty | allowed |
+| `GH_HOST` non-empty | configured host と一致 |
+| `GH_REPO` unset / empty | allowed |
+| `GH_REPO=OWNER/REPO` | configured host 上の configured owner/repository と一致 |
+| `GH_REPO=HOST/OWNER/REPO` | host と owner/repository が configured identity と一致 |
+
+host は configured remote と同じく大文字・小文字を区別しない。owner/repository は configured remote と共通の path normalization（末尾の `.git` 除去）と canonical comparison（小文字化）を用いる。`GH_REPO` は上記 selector 形式だけを受け付け、URL、空 component、余分な slash、whitespace、query / fragment 等の malformed / ambiguous な値を拒否する。whitespace を trim して受理してはならない。
+
+検証は GitHub authentication / API access、Git / worktree mutation、worker 起動より前に行う。不一致または malformed な値は failure とし、configured value、observed `GH_HOST` / `GH_REPO`、`unset` または configured value への設定という remediation を stderr に表示する。iro 自身が environment を変更して続行したり、alternate host / repository を推測したりしてはならない。
+
+検証の成功だけに依存せず、実際の `gh` operation も configured identity へ明示的に bind しなければならない。
+
+- `gh auth status` とすべての `gh api` は `--hostname github.com` を明示する。pagination の各 page にも適用する。
+- Issue / PR の selector option は `--repo github.com/OWNER/REPO`、`gh repo clone` の repository argument は `github.com/OWNER/REPO` を指定する。
+- REST API path は `repos/OWNER/REPO/...`、GraphQL は configured owner / repository variables を指定する。
+
+local directory、GitHub CLI の default host、`GH_HOST` / `GH_REPO` による implicit target inference を正本にしてはならない。`doctor` は同じ検証を read-only diagnostic として行う（DOC-002 / DOC-005）。GitHub operation を行わない `init` / `status` / `cleanup` は、この environment precondition を要求しない。
 
 ## 3. Output contract
 
@@ -286,10 +310,13 @@ MVP では automatic repair と `--force` を実装しない。
 - `iro.toml` validity
 - configured `tracker.remote` existence
 - configured remote から GitHub repository identity を一意に解決可能か
+- configured identity と `GH_HOST` / `GH_REPO` の整合性（INV-010）
 - `gh` executable
 - GitHub authentication
 - Codex executable
 - Codex authentication via `codex login status`
+
+configured identity の解決または context validation が失敗した場合、GitHub authentication check を実行せず、その理由を failure として表示する。他の独立した診断は継続する。認証確認を実行するときは configured host を明示する。
 
 ### DOC-003: read-only
 
@@ -309,7 +336,9 @@ DOC-002 の診断対象がすべて healthy なら 0、そうでなければ non
 - repository root、`iro.toml`、`WORKFLOW.md` の path
 - configured remote 名、解決した GitHub host、owner/repository
 
-付加情報が取得不能なら `unknown` 等で明示し、それだけを理由に health check を failure にしてはならない。認証状態の検査方法と既存 executable / configuration health contract は変更しない。remote URL の credential を表示してはならない。
+付加情報が取得不能なら `unknown` 等で明示し、それだけを理由に health check を failure にしてはならない。remote URL の credential を表示してはならない。
+
+context 検証結果を診断一覧の stdout に `OK: GitHub CLI context` または `FAIL: GitHub CLI context: ...` と表示する。不整合時は configured value、observed value、remediation を含める。これは付加 metadata ではなく health check であり、failure は non-zero とする。例えば configured repository が `github.com/acme/iro`、`GH_HOST=github.example.com` なら、configured host と observed `GH_HOST` に加えて `unset GH_HOST or set GH_HOST=github.com` を案内する。
 
 ## 6a. `iro version`
 
@@ -510,6 +539,8 @@ configured repository の default branch `D` を remote API で解決する。cu
 
 configured remote が存在しない、GitHub repository として解決できない、または曖昧な場合は failure とする。
 別 remote へ fallback してはならない。
+
+INV-010 の GitHub CLI context precondition と明示的な target binding を適用する。
 
 run は effective push URL が一つで configured repository と一致すること、および Git remote への read access を確認する。write permission の最終判定は push 時に行う。
 
@@ -802,6 +833,7 @@ invoking checkout の branch、detached HEAD、dirty state は eligibility に�
 Reviewer 起動と disposable workspace 作成より前に、次を検証する。
 
 - `gh` executable と authentication
+- INV-010 の GitHub CLI context consistency
 - target PR が configured repository に存在し readable
 - target PR が `OPEN`（Draft を許可する）
 - configured repository の default branch が一意に取得でき、target PR の base と一致
@@ -924,6 +956,7 @@ local resource の作成と Author 起動より前に、少なくとも以下を
 - Git executable と invocation directory から解決した local Git repository
 - invoking repository root の readable regular `WORKFLOW.md` と valid supported `iro.toml`
 - configured `tracker.remote` だけから一意に解決した GitHub repository identity
+- INV-010 の GitHub CLI context consistency
 - `gh` executable / authentication と Codex executable / authentication
 - target PR が configured repository に存在し、readable で `OPEN`（Draft を許可する）
 - configured repository の default branch `D` が一意に取得でき、PR base が `D`
@@ -1038,7 +1071,7 @@ AI Review の実行、PASS、AI comment、GitHub Human approval、review comment
 
 Git executable、invocation directory から解決した local Git repository、repository root の readable regular `WORKFLOW.md` と valid supported `iro.toml`、configured `tracker.remote` だけから一意に解決できる GitHub repository identity、`gh` executable / authentication を要求する。
 
-現在 support する configured remote host は `github.com` のみとする。Land の `gh auth status`、target PR / repository policy の GraphQL、全 page の active delivery PR GraphQL、merge REST API はすべて `--hostname github.com` を明示する。`GH_HOST` / `GH_REPO` 等の実行環境で configured repository 以外へ接続先を変更しない。
+INV-010 の GitHub CLI context consistency を適用し、不整合な `GH_HOST` / `GH_REPO` は認証確認・API access 前に拒否する。現在 support する configured remote host は `github.com` のみとする。Land の `gh auth status`、target PR / repository policy の GraphQL、全 page の active delivery PR GraphQL、merge REST API はすべて `--hostname github.com` を明示する。
 
 main など任意の checkout から実行できる。current branch / HEAD / cleanliness、target Issue の local branch / worktree / ownership mapping、fetched branch / commit を検査・要求しない。local execution state が absent、partial、dirty でも Land eligibility に影響しない。Codex、Issue body / comments、PR diff / review feedback の取得も要求しない。
 
@@ -1139,7 +1172,7 @@ Codex thread/session ID は保存対象に含めない。
 | valid delivery relation / merge policy | validated HEAD を normal merge commit で merge |
 | Human-created PR / no delivery hint / no AI Review / AI FINDING | allowed; provenance / verdict を判定しない |
 | no GitHub approval | repository policy が許す限り allowed |
-| `GH_HOST` / `GH_REPO` が別 host を指定 | 認証確認・全 API を configured host の `github.com` に固定 |
+| `GH_HOST` / `GH_REPO` が configured identity と不一致、または malformed | 認証確認・API access 前に error; remediation を表示し environment は変更しない |
 | BEHIND | validated HEAD で normal merge を試行し、up-to-date requirement 等による endpoint の拒否は failure |
 | main / non-target checkout、target local state absent / partial / dirty | allowed; local execution state を検査しない |
 | Draft / relation mismatch / wrong base / multiple active delivery PRs | merge 前に error; no repair |

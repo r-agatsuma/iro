@@ -46,7 +46,7 @@ func (s *Service) checkAuth(name string, args []string, dir string) error {
 func (s *Service) fetchIssue(root string, identity RepositoryIdentity, number int) (issue, error) {
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
-		Args: []string{"issue", "view", strconv.Itoa(number), "--repo", identity.String(), "--json", "number,title,body,url,comments"},
+		Args: []string{"issue", "view", strconv.Itoa(number), "--repo", identity.Selector(), "--json", "number,title,body,url,comments"},
 		Dir:  root,
 	})
 	if !commandSucceeded(result) {
@@ -103,7 +103,7 @@ func sortIssueComments(comments []issueComment) error {
 func (s *Service) postResult(root string, identity RepositoryIdentity, number int, body string) error {
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
-		Args: []string{"issue", "comment", strconv.Itoa(number), "--repo", identity.String(), "--body", body},
+		Args: []string{"issue", "comment", strconv.Itoa(number), "--repo", identity.Selector(), "--body", body},
 		Dir:  root,
 	})
 	if !commandSucceeded(result) {

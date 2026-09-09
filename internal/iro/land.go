@@ -40,11 +40,13 @@ func (s *Service) Land(prNumber int, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := checkGitHubContext(identity); err != nil {
+		return err
+	}
 	if err := s.requireExecutable("gh"); err != nil {
 		return err
 	}
-	// Repository identity resolution currently accepts only github.com remotes.
-	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", "github.com"}, root); err != nil {
+	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
 		return err
 	}
 	target, err := s.inspectLandTarget(root, identity, prNumber)
@@ -57,7 +59,7 @@ func (s *Service) Land(prNumber int, out io.Writer) error {
 func (s *Service) inspectLandTarget(root string, identity RepositoryIdentity, number int) (landTarget, error) {
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
-		Args: []string{"api", "graphql", "--hostname", "github.com", "-f", "query=" + landPreflightQuery, "-f", "owner=" + identity.Owner, "-f", "name=" + identity.Name, "-F", "number=" + strconv.Itoa(number)},
+		Args: []string{"api", "graphql", "--hostname", identity.Host(), "-f", "query=" + landPreflightQuery, "-f", "owner=" + identity.Owner, "-f", "name=" + identity.Name, "-F", "number=" + strconv.Itoa(number)},
 		Dir:  root,
 	})
 	var response struct {
@@ -165,7 +167,7 @@ func (s *Service) mergeLandTarget(root string, identity RepositoryIdentity, targ
 	payload, _ := json.Marshal(map[string]string{"sha": target.HeadOID, "merge_method": "merge"})
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
-		Args: []string{"api", "repos/" + identity.String() + "/pulls/" + strconv.Itoa(target.Number) + "/merge", "--hostname", "github.com", "--method", "PUT", "--input", "-"},
+		Args: []string{"api", "repos/" + identity.String() + "/pulls/" + strconv.Itoa(target.Number) + "/merge", "--hostname", identity.Host(), "--method", "PUT", "--input", "-"},
 		Dir:  root, Stdin: payload,
 	})
 	var response struct {

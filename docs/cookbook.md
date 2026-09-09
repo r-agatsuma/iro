@@ -138,3 +138,5 @@ iro version
 `GOBIN` が空なら通常の install 先は `$(go env GOPATH)/bin` です。その directory を PATH から参照できるよう Human が設定します。別 directory の古い binary が先に選ばれていないかも確認します。shell が executable location を記憶している場合は、shell の command cache を更新するか新しい shell で確認します。iro が shell dotfile を編集することはありません。
 
 initialized project では `iro doctor` が実行中の iro と PATH 上の git / gh / codex の path・version、既存の認証・project precondition をまとめて表示します。補足 metadata が `unknown` でも、それだけでは health failure になりません。
+
+`FAIL: GitHub CLI context` は configured repository と `GH_HOST` / `GH_REPO` の不整合を示します。表示された configured value、observed value、remediation を確認し、Human が該当する変数を unset するか configured value に設定してから再実行します。例えば configured host が `github.com` なら `unset GH_HOST` または `export GH_HOST=github.com` で修正できます。context が不明・不整合な間は GitHub 認証確認を実行せず、他の診断を続けます。doctor 自身は環境や認証を変更しません。

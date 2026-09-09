@@ -67,7 +67,7 @@ func TestRunDeliveryStages(t *testing.T) {
 					}
 					if spec.Name == "gh" && spec.Args[0] == "pr" {
 						stage = "hint"
-						if !containsArgs(spec.Args, "--repo", "acme/iro") || !strings.Contains(spec.Args[len(spec.Args)-1], "iro land 456") || !strings.Contains(spec.Args[len(spec.Args)-1], "Author report:\n\n"+standardFakeResult(CommandSpec{Name: "codex", Args: []string{"--cd"}}, root, "", false, false).Stdout) {
+						if !containsArgs(spec.Args, "--repo", "github.com/acme/iro") || !strings.Contains(spec.Args[len(spec.Args)-1], "iro land 456") || !strings.Contains(spec.Args[len(spec.Args)-1], "Author report:\n\n"+standardFakeResult(CommandSpec{Name: "codex", Args: []string{"--cd"}}, root, "", false, false).Stdout) {
 							t.Fatal(spec.Args)
 						}
 					}

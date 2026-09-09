@@ -131,7 +131,7 @@ flowchart LR
     HUMAN["Human<br/>explicit iro land PR"] --> VALIDATE["validate selected PR"]
     REL["open non-Draft PR<br/>iro/issue-N to default branch D<br/>closing Issues exactly N<br/>creator ignored"] --> VALIDATE
     POLICY["repository merge policy<br/>BEHIND alone is allowed"] --> VALIDATE
-    HOST["configured remote host<br/>github.com only<br/>ignore GH_HOST / GH_REPO rerouting"] --> VALIDATE
+    HOST["configured remote host<br/>github.com only<br/>reject GH_HOST / GH_REPO mismatch"] --> VALIDATE
     VALIDATE -->|"validated PR HEAD OID H"| API["github.com merge API<br/>normal merge, sha = H"]
     API --> GITHUB{"GitHub final policy enforcement"}
     GITHUB -->|"accepted"| MERGED["merge / native Issue close"]

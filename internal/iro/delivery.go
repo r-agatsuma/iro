@@ -25,8 +25,8 @@ func (s *Service) inspectDeliveryPRs(root string, identity RepositoryIdentity, n
 		query = strings.Replace(query, "states:[OPEN,CLOSED,MERGED]", "states:[OPEN]", 1)
 	}
 	for {
-		// Match the supported configured remote host on every page, ignoring GH_HOST.
-		args := []string{"api", "graphql", "--hostname", "github.com", "-f", "query=" + query, "-f", "owner=" + identity.Owner, "-f", "name=" + identity.Name}
+		// Bind every page to the configured host independently of the environment.
+		args := []string{"api", "graphql", "--hostname", identity.Host(), "-f", "query=" + query, "-f", "owner=" + identity.Owner, "-f", "name=" + identity.Name}
 		if cursor != "" {
 			args = append(args, "-f", "cursor="+cursor)
 		}
@@ -165,7 +165,7 @@ func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, n
 	}
 	// Use a fixed body, so worker text cannot introduce additional closing relations.
 	payload, _ := json.Marshal(map[string]any{"title": fmt.Sprintf("Implement issue #%d", number), "body": fmt.Sprintf("Issue #%d の実装です。\n\nCloses #%d\n", number, number), "head": branch, "base": base, "draft": false})
-	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"api", "repos/" + identity.String() + "/pulls", "--method", "POST", "--input", "-"}, Dir: root, Stdin: payload})
+	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"api", "repos/" + identity.String() + "/pulls", "--hostname", identity.Host(), "--method", "POST", "--input", "-"}, Dir: root, Stdin: payload})
 	var pr struct {
 		Number int `json:"number"`
 	}
@@ -174,7 +174,7 @@ func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, n
 	}
 	fmt.Fprintf(out, "Created PR #%d\nLand: iro land %d\n", pr.Number, pr.Number)
 	report := fmt.Sprintf("## iro delivery\n\nAuthor report:\n\n%s\n\nLand:\n\n`iro land %d`\n", authorReport, pr.Number)
-	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"pr", "comment", strconv.Itoa(pr.Number), "--repo", identity.String(), "--body", report}, Dir: root})
+	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"pr", "comment", strconv.Itoa(pr.Number), "--repo", identity.Selector(), "--body", report}, Dir: root})
 	if !commandSucceeded(result) {
 		fmt.Fprintf(errOut, "warning: PR #%d was created, but delivery report comment failed; Land: iro land %d\n", pr.Number, pr.Number)
 	}
