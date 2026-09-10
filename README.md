@@ -36,13 +36,15 @@ repository の source root で install します。install 先は設定済みの
 iro version
 iro init
 iro doctor
-iro run <issue-number>
-iro review <pr-number>
-iro revise <pr-number>
+iro run <issue-number> [--model <model> | -m <model>]
+iro review <pr-number> [--model <model> | -m <model>]
+iro revise <pr-number> [--model <model> | -m <model>]
 iro land <pr-number>
 iro status
 iro cleanup <issue-number>
 ```
+
+`iro run`、`iro review`、`iro revise` は、番号 operand の後ろに `--model <model>` または `-m <model>` を付けて、その operation の Codex model を override できます。model を指定しない場合は Codex の configuration / default selection に委譲します。iro 自身は model default や catalog を `iro.toml` に保持せず、model の実在確認や別 model への fallback も行いません。`iro review` で指定した requested model は、runtime が実際に解決した model identity とは別概念であり、resolved identity を取得できない現在の Review provenance は従来どおり unknown のままです。
 
 `iro init` は repository root に `iro.toml` と `WORKFLOW.md` を新規生成する local scaffold operation です。既存 file を上書きせず、commit や push も行いません。生成した file を Git へ記録するかどうかは Human が判断します。
 
@@ -52,13 +54,13 @@ iro cleanup <issue-number>
 
 ### Run
 
-`iro run <issue-number>` は configured repository の default branch を canonical delivery base とします。開始時の checkout は clean かつその default branch の named checkout でなければならず、non-default branch や detached HEAD からは開始しません。その検証済み local HEAD から `iro/issue-N` branch と canonical Issue worktree を作り、fresh Author worker を実行します。
+`iro run <issue-number>` は configured repository の default branch を canonical delivery base とします。開始時の checkout は clean かつその default branch の named checkout でなければならず、non-default branch や detached HEAD からは開始しません。その検証済み local HEAD から `iro/issue-N` branch と canonical Issue worktree を作り、fresh Author worker を実行します。必要な場合は `iro run <issue-number> --model <model>` または `-m <model>` で operation 単位の override を指定できます。
 
 worker 成功後は iro が変更を commit / push し、`iro/issue-N` を head、default branch を base、Issue `#N` を GitHub native closing relation とする通常の open PR を作成します。iro 自身は Draft PR を作りません。Author report は先に local log へ保存し、成功時は `iro land` の案内と同じ delivery PR comment に集約します。Issue へ成功 report は投稿しません。PR comment 投稿失敗は warning に留め、Run の成功を覆しません。Author failure または stage / commit / push / PR create 等の delivery failure 時は、origin Issue へ Author report と診断の投稿を試みます。その投稿失敗は元の operation failure を隠さず、追加 diagnostic として表示します。自動 retry / rollback / repair は行いません。delivery comment は Human 向け UX にすぎず、remote state、ownership、creator provenance、後続 operation の eligibility の正本ではありません。
 
 ### Review and Revise
 
-`iro review <pr-number>` は optional / advisory です。configured repository の default branch を base とし、exactly 1 件の同 repository内 origin Issue への GitHub native closing relation を持つ open PR を、fresh で独立した Reviewer が disposable workspace で評価します。target の local branch、Issue worktree、ownership mapping は不要で、Draft や Human / fork 由来の PR も relation を満たせば review できます。
+`iro review <pr-number>` は optional / advisory です。configured repository の default branch を base とし、exactly 1 件の同 repository内 origin Issue への GitHub native closing relation を持つ open PR を、fresh で独立した Reviewer が disposable workspace で評価します。target の local branch、Issue worktree、ownership mapping は不要で、Draft や Human / fork 由来の PR も relation を満たせば review できます。`iro review <pr-number> --model <model>` または `-m <model>` を指定した場合だけ、その Reviewer invocation に requested model を渡します。
 
 Review report では、開始時に観測した base branch / base OID と、disposable workspace の HEAD と一致を検証した Reviewed HEAD OID を識別できる trusted provenance を Reviewer へ渡します。resolved model identity を runtime interface から確実に取得できない場合は推測せず、取得不能であることを明示します。これは Human が review 対象 snapshot を後から識別するための情報であり、review freshness gate や Land authorization ではありません。
 

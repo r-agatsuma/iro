@@ -3,12 +3,13 @@ package iro
 import (
 	"fmt"
 	"io"
+	"strings"
 )
 
 // Execute dispatches the bootstrap MVP CLI commands and returns an exit status.
 func Execute(args []string, out, errOut io.Writer, service *Service) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number>, review <pr-number>, revise <pr-number>, land <pr-number>, or cleanup <issue-number>)")
+		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--model <model> | -m <model>], review <pr-number> [--model <model> | -m <model>], revise <pr-number> [--model <model> | -m <model>], land <pr-number>, or cleanup <issue-number>)")
 		return 2
 	}
 
@@ -39,8 +40,9 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 		}
 		err = service.Status(out)
 	case "run":
-		if len(args) != 2 {
-			fmt.Fprintln(errOut, "error: usage: iro run <issue-number>")
+		model, parseErr := parseModelOverride(args, "run", "issue-number")
+		if parseErr != nil {
+			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
 		number, parseErr := parseIssueNumber(args[1])
@@ -48,10 +50,11 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
-		err = service.run(number, out, errOut)
+		err = service.runWithModel(number, model, out, errOut)
 	case "review":
-		if len(args) != 2 {
-			fmt.Fprintln(errOut, "error: usage: iro review <pr-number>")
+		model, parseErr := parseModelOverride(args, "review", "pr-number")
+		if parseErr != nil {
+			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
 		number, parseErr := parsePullRequestNumber(args[1])
@@ -59,10 +62,11 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
-		err = service.Review(number, out)
+		err = service.reviewWithModel(number, model, out)
 	case "revise":
-		if len(args) != 2 {
-			fmt.Fprintln(errOut, "error: usage: iro revise <pr-number>")
+		model, parseErr := parseModelOverride(args, "revise", "pr-number")
+		if parseErr != nil {
+			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
 		number, parseErr := parsePullRequestNumber(args[1])
@@ -70,7 +74,7 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
-		err = service.Revise(number, out)
+		err = service.reviseWithModel(number, model, out)
 	case "land":
 		if len(args) != 2 {
 			fmt.Fprintln(errOut, "error: usage: iro land <pr-number>")
@@ -102,4 +106,18 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 		return 1
 	}
 	return 0
+}
+
+func parseModelOverride(args []string, command, operand string) (string, error) {
+	usage := fmt.Sprintf("usage: iro %s <%s> [--model <model> | -m <model>]", command, operand)
+	if len(args) == 2 {
+		return "", nil
+	}
+	if len(args) != 4 || args[2] != "--model" && args[2] != "-m" {
+		return "", fmt.Errorf("%s", usage)
+	}
+	if args[3] == "" || strings.TrimSpace(args[3]) == "" || strings.HasPrefix(args[3], "-") {
+		return "", fmt.Errorf("model must be a non-empty value")
+	}
+	return args[3], nil
 }

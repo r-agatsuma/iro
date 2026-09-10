@@ -4,6 +4,18 @@
 
 この文書は non-normative な Human 向けの手順集です。runtime requirement の正本は [behavior.md](behavior.md) です。以下の Git 操作は Human が対象と保存範囲を確認して選択するもので、worker の Git mutation 権限を拡張しません。iro は automatic repair、reset / stash / clean、自動 retry を行いません。
 
+## operation ごとに Codex model を指定する
+
+`run`、`review`、`revise` では番号の後ろに `--model <model>` または `-m <model>` を指定できます。省略時は Codex の configuration / default selection に委譲され、iro.toml に model default はありません。
+
+```bash
+iro run 123 --model <model>
+iro review 456 -m <model>
+iro revise 456 --model <model>
+```
+
+指定した requested model は Review report の resolved model identity を表しません。現在の runtime が resolved identity を trusted metadata として公開しないため、Review provenance の Model は unknown のままです。
+
 ## Run failure で dirty worktree が残った
 
 まず initialized repository から確認します。

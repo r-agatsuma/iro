@@ -22,6 +22,10 @@ Leave changes uncommitted on the supplied canonical Issue worktree. Report chang
 
 // Revise updates one explicitly selected delivery PR using a fresh Author worker.
 func (s *Service) Revise(prNumber int, out io.Writer) error {
+	return s.reviseWithModel(prNumber, "", out)
+}
+
+func (s *Service) reviseWithModel(prNumber int, model string, out io.Writer) error {
 	if prNumber <= 0 {
 		return fmt.Errorf("pull request number must be a positive decimal integer")
 	}
@@ -100,7 +104,7 @@ func (s *Service) Revise(prNumber int, out io.Writer) error {
 	}
 
 	started := s.Now().UTC()
-	result := s.runRevisionAuthor(workspace, identity, target, origin, configData, workflowData, context)
+	result := s.runRevisionAuthor(workspace, identity, target, origin, configData, workflowData, context, model)
 	logPath, err := s.writeReviseLog(identity, target, workspace, started, result)
 	if err != nil {
 		return fmt.Errorf("Author finished with status %d, but its report could not be saved; changes kept at %s: %w", result.ExitCode, workspace, err)
@@ -316,15 +320,15 @@ func (s *Service) materializeReviseWorktree(root string, identity RepositoryIden
 	return nil
 }
 
-func (s *Service) runRevisionAuthor(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext) CommandResult {
+func (s *Service) runRevisionAuthor(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, model string) CommandResult {
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",
-		Args: []string{
+		Args: withCodexModel([]string{
 			"--cd", workspace, "--sandbox", "workspace-write", "--ask-for-approval", "never",
 			"-c", "sandbox_workspace_write.network_access=true",
 			"-c", "developer_instructions=" + strconv.Quote(reviseDeveloperInstructions),
 			"exec", "--ephemeral", "Revise the existing GitHub pull request using the Issue specification and PR feedback supplied on stdin.",
-		},
+		}, model),
 		Dir:   workspace,
 		Stdin: []byte(buildReviewPayload(identity, target, origin, configData, workflowData, context)),
 	})
