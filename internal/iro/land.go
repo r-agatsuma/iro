@@ -15,6 +15,8 @@ type landTarget struct {
 	Number      int
 	OriginIssue int
 	HeadOID     string
+	Remote      string
+	Base        string
 }
 
 // Land treats explicit invocation as Human authorization for one remote merge.
@@ -49,14 +51,14 @@ func (s *Service) Land(prNumber int, out io.Writer) error {
 	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
 		return err
 	}
-	target, err := s.inspectLandTarget(root, identity, prNumber)
+	target, err := s.inspectLandTarget(root, identity, config.TrackerRemote, prNumber)
 	if err != nil {
 		return err
 	}
 	return s.mergeLandTarget(root, identity, target, out)
 }
 
-func (s *Service) inspectLandTarget(root string, identity RepositoryIdentity, number int) (landTarget, error) {
+func (s *Service) inspectLandTarget(root string, identity RepositoryIdentity, remote string, number int) (landTarget, error) {
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
 		Args: []string{"api", "graphql", "--hostname", identity.Host(), "-f", "query=" + landPreflightQuery, "-f", "owner=" + identity.Owner, "-f", "name=" + identity.Name, "-F", "number=" + strconv.Itoa(number)},
@@ -158,7 +160,7 @@ func (s *Service) inspectLandTarget(root string, identity RepositoryIdentity, nu
 	if base != pr.BaseRefName {
 		return landTarget{}, fmt.Errorf("repository default branch changed during inspection; inspect remote state and retry")
 	}
-	return landTarget{Number: number, OriginIssue: origin.Number, HeadOID: pr.HeadRefOID}, nil
+	return landTarget{Number: number, OriginIssue: origin.Number, HeadOID: pr.HeadRefOID, Remote: remote, Base: base}, nil
 }
 
 func (s *Service) mergeLandTarget(root string, identity RepositoryIdentity, target landTarget, out io.Writer) error {
@@ -178,5 +180,6 @@ func (s *Service) mergeLandTarget(root string, identity RepositoryIdentity, targ
 		return fmt.Errorf("merge of PR #%d at validated HEAD %s failed or could not be confirmed; inspect the remote PR, current HEAD, and repository rules before explicitly retrying `iro land %d`; no automatic retry was attempted", target.Number, target.HeadOID, target.Number)
 	}
 	fmt.Fprintf(out, "Landed PR #%d for Issue #%d with merge commit %s\n", target.Number, target.OriginIssue, response.SHA)
+	fmt.Fprintf(out, "\nBefore the next iro run, update your local checkout of %s.\nFrom that checkout:\n  git pull --ff-only %s %s\n", target.Base, target.Remote, target.Base)
 	return nil
 }
