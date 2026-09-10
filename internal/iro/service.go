@@ -124,6 +124,7 @@ func (s *Service) Doctor(out io.Writer) error {
 		fmt.Fprintf(out, "project %s: %s\n", name, knownValue(path))
 	}
 	remote, host, repository := "", "", ""
+	var identity RepositoryIdentity
 	var config Config
 	configValid := false
 	if root != "" {
@@ -156,9 +157,10 @@ func (s *Service) Doctor(out io.Writer) error {
 		if configValid {
 			remote = config.TrackerRemote
 			check("configured GitHub remote", func() error {
-				identity, err := s.repositoryIdentity(root, config)
+				var err error
+				identity, err = s.repositoryIdentity(root, config)
 				if err == nil {
-					host, repository = "github.com", identity.String()
+					host, repository = identity.Host(), identity.String()
 				}
 				return err
 			})
@@ -170,6 +172,18 @@ func (s *Service) Doctor(out io.Writer) error {
 
 	fmt.Fprintf(out, "repository configured remote: %s\nrepository GitHub host: %s\nrepository owner/repository: %s\n", knownValue(remote), knownValue(host), knownValue(repository))
 
+	contextValid := false
+	check("GitHub CLI context", func() error {
+		if repository == "" {
+			return fmt.Errorf("configured repository identity is unavailable; fix the configured GitHub remote and retry")
+		}
+		if err := checkGitHubContext(identity); err != nil {
+			return err
+		}
+		contextValid = true
+		return nil
+	})
+
 	ghAvailable := false
 	check("gh executable", func() error {
 		if err := s.requireExecutable("gh"); err != nil {
@@ -178,14 +192,15 @@ func (s *Service) Doctor(out io.Writer) error {
 		ghAvailable = true
 		return nil
 	})
-	if ghAvailable {
-		check("GitHub authentication", func() error {
-			return s.checkAuth("gh", []string{"auth", "status"}, root)
-		})
-	} else {
-		failures++
-		fmt.Fprintln(out, "FAIL: GitHub authentication: gh executable is unavailable")
-	}
+	check("GitHub authentication", func() error {
+		if !ghAvailable {
+			return fmt.Errorf("gh executable is unavailable")
+		}
+		if !contextValid {
+			return fmt.Errorf("GitHub CLI context is invalid; resolve the context diagnostic and retry")
+		}
+		return s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root)
+	})
 
 	codexAvailable := false
 	check("codex executable", func() error {
@@ -225,9 +240,6 @@ func (s *Service) run(issueNumber int, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := s.checkoutClean(root); err != nil {
-		return err
-	}
 	for _, name := range []string{"iro.toml", "WORKFLOW.md"} {
 		present, regular, err := s.fileState(filepath.Join(root, name))
 		if err != nil || !present || !regular {
@@ -245,10 +257,16 @@ func (s *Service) run(issueNumber int, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := checkGitHubContext(identity); err != nil {
+		return err
+	}
+	if err := s.checkoutClean(root); err != nil {
+		return err
+	}
 	if err := s.requireExecutable("gh"); err != nil {
 		return err
 	}
-	if err := s.checkAuth("gh", []string{"auth", "status"}, root); err != nil {
+	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
 		return err
 	}
 	branch := fmt.Sprintf("iro/issue-%d", issueNumber)

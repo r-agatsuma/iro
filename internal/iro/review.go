@@ -113,10 +113,13 @@ func (s *Service) Review(prNumber int, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := checkGitHubContext(identity); err != nil {
+		return err
+	}
 	if err := s.requireExecutable("gh"); err != nil {
 		return err
 	}
-	if err := s.checkAuth("gh", []string{"auth", "status"}, root); err != nil {
+	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
 		return err
 	}
 
@@ -175,7 +178,7 @@ func (s *Service) inspectPRTarget(root string, identity RepositoryIdentity, numb
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
 		Args: []string{
-			"api", "graphql",
+			"api", "graphql", "--hostname", identity.Host(),
 			"-f", "query=" + reviewPreflightQuery,
 			"-f", "owner=" + identity.Owner,
 			"-f", "name=" + identity.Name,
@@ -288,7 +291,7 @@ func (s *Service) fetchReviewContext(root string, identity RepositoryIdentity, n
 		return result.Stdout, nil
 	}
 	runPaginated := func(label, endpoint string) (string, error) {
-		stdout, err := run(label, []string{"api", "--paginate", endpoint}, false)
+		stdout, err := run(label, []string{"api", "--paginate", endpoint, "--hostname", identity.Host()}, false)
 		if err != nil {
 			return "", err
 		}
@@ -299,11 +302,11 @@ func (s *Service) fetchReviewContext(root string, identity RepositoryIdentity, n
 		return normalized, nil
 	}
 
-	changedFiles, err := run("changed files", []string{"pr", "diff", strconv.Itoa(number), "--repo", identity.String(), "--name-only"}, false)
+	changedFiles, err := run("changed files", []string{"pr", "diff", strconv.Itoa(number), "--repo", identity.Selector(), "--name-only"}, false)
 	if err != nil {
 		return reviewContext{}, err
 	}
-	diff, err := run("diff", []string{"pr", "diff", strconv.Itoa(number), "--repo", identity.String()}, false)
+	diff, err := run("diff", []string{"pr", "diff", strconv.Itoa(number), "--repo", identity.Selector()}, false)
 	if err != nil {
 		return reviewContext{}, err
 	}
@@ -319,7 +322,7 @@ func (s *Service) fetchReviewContext(root string, identity RepositoryIdentity, n
 	if err != nil {
 		return reviewContext{}, err
 	}
-	checks, err := run("checks", []string{"pr", "view", strconv.Itoa(number), "--repo", identity.String(), "--json", "statusCheckRollup"}, true)
+	checks, err := run("checks", []string{"pr", "view", strconv.Itoa(number), "--repo", identity.Selector(), "--json", "statusCheckRollup"}, true)
 	if err != nil {
 		return reviewContext{}, err
 	}
@@ -370,7 +373,7 @@ func (s *Service) materializeReviewWorkspace(root string, identity RepositoryIde
 
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
-		Args: []string{"repo", "clone", identity.String(), workspace, "--", "--no-checkout"},
+		Args: []string{"repo", "clone", identity.Selector(), workspace, "--", "--no-checkout"},
 		Dir:  root,
 	})
 	if !commandSucceeded(result) {
@@ -378,7 +381,7 @@ func (s *Service) materializeReviewWorkspace(root string, identity RepositoryIde
 	}
 	result = s.Runner.Run(CommandSpec{
 		Name: "gh",
-		Args: []string{"pr", "checkout", strconv.Itoa(target.Number), "--repo", identity.String(), "--detach"},
+		Args: []string{"pr", "checkout", strconv.Itoa(target.Number), "--repo", identity.Selector(), "--detach"},
 		Dir:  workspace,
 	})
 	if !commandSucceeded(result) {
@@ -437,7 +440,7 @@ func buildReviewPayload(identity RepositoryIdentity, target reviewPullRequest, o
 func (s *Service) postReview(root string, identity RepositoryIdentity, number int, body string) error {
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
-		Args: []string{"pr", "comment", strconv.Itoa(number), "--repo", identity.String(), "--body", body},
+		Args: []string{"pr", "comment", strconv.Itoa(number), "--repo", identity.Selector(), "--body", body},
 		Dir:  root,
 	})
 	if !commandSucceeded(result) {

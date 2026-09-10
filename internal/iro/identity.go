@@ -9,10 +9,20 @@ import (
 	"strings"
 )
 
-// RepositoryIdentity is the canonical GitHub owner/repository pair.
+const supportedGitHubHost = "github.com"
+
+// RepositoryIdentity identifies a repository on the only supported host, github.com.
 type RepositoryIdentity struct {
 	Owner string
 	Name  string
+}
+
+func (r RepositoryIdentity) Host() string {
+	return supportedGitHubHost
+}
+
+func (r RepositoryIdentity) Selector() string {
+	return r.Host() + "/" + r.String()
 }
 
 func (r RepositoryIdentity) String() string {
@@ -57,16 +67,28 @@ func parseGitHubRemote(raw string) (RepositoryIdentity, error) {
 		return RepositoryIdentity{}, fmt.Errorf("remote URL is not a supported GitHub URL")
 	}
 
-	if !strings.EqualFold(host, "github.com") {
+	if !strings.EqualFold(host, supportedGitHubHost) {
 		return RepositoryIdentity{}, fmt.Errorf("remote host %q is not github.com", host)
 	}
-	path = strings.Trim(path, "/")
-	if strings.HasSuffix(path, ".git") {
-		path = strings.TrimSuffix(path, ".git")
-	}
+	return parseGitHubRepositoryPath(strings.Trim(path, "/"))
+}
+
+// Use the same repository path normalization for remotes and CLI selectors.
+func parseGitHubRepositoryPath(path string) (RepositoryIdentity, error) {
+	path = strings.TrimSuffix(path, ".git")
 	parts := strings.Split(path, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return RepositoryIdentity{}, fmt.Errorf("remote URL does not identify exactly one GitHub repository")
+	if len(parts) != 2 {
+		return RepositoryIdentity{}, fmt.Errorf("expected exactly one GitHub OWNER/REPO")
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return RepositoryIdentity{}, fmt.Errorf("invalid GitHub owner or repository name")
+		}
+		for _, r := range part {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.') {
+				return RepositoryIdentity{}, fmt.Errorf("invalid character in GitHub owner or repository name")
+			}
+		}
 	}
 	return RepositoryIdentity{Owner: parts[0], Name: parts[1]}, nil
 }

@@ -48,10 +48,13 @@ func (s *Service) Revise(prNumber int, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := checkGitHubContext(identity); err != nil {
+		return err
+	}
 	if err := s.requireExecutable("gh"); err != nil {
 		return err
 	}
-	if err := s.checkAuth("gh", []string{"auth", "status"}, root); err != nil {
+	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
 		return err
 	}
 	target, err := s.inspectReviseTarget(root, identity, prNumber)

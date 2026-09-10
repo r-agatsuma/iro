@@ -78,7 +78,7 @@ func TestDoctorDiagnosticsPreserveHealthAndReadOnlyCommands(t *testing.T) {
 					return CommandResult{Stdout: root}
 				case spec.Name == "git" && reflect.DeepEqual(spec.Args, []string{"config", "--get-all", "remote.origin.url"}):
 					return CommandResult{Stdout: "git@github.com:acme/iro.git"}
-				case spec.Name == "gh" && reflect.DeepEqual(spec.Args, []string{"auth", "status"}):
+				case spec.Name == "gh" && reflect.DeepEqual(spec.Args, []string{"auth", "status", "--hostname", "github.com"}):
 					return CommandResult{}
 				case spec.Name == "codex" && reflect.DeepEqual(spec.Args, []string{"login", "status"}):
 					return CommandResult{}

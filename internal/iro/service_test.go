@@ -35,6 +35,8 @@ func (f *fakeCommandRunner) Run(spec CommandSpec) CommandResult {
 
 func newTestService(t *testing.T, runner *fakeCommandRunner, root string) *Service {
 	t.Helper()
+	t.Setenv("GH_HOST", "")
+	t.Setenv("GH_REPO", "")
 	stateRoot := filepath.Join(t.TempDir(), "state")
 	dataRoot := filepath.Join(t.TempDir(), "data")
 	return &Service{
@@ -266,7 +268,7 @@ func TestRunUsesConfiguredIdentityAndNormativeCodexInvocation(t *testing.T) {
 	if codexCall == nil || issueFetchCall == nil || commentCall == nil {
 		t.Fatalf("missing expected calls: %+v", runner.calls)
 	}
-	if !containsArgs(issueFetchCall.Args, "--repo", "acme/iro") {
+	if !containsArgs(issueFetchCall.Args, "--repo", "github.com/acme/iro") {
 		t.Fatalf("Issue fetch did not use configured repository: %v", issueFetchCall.Args)
 	}
 	if !containsArgs(issueFetchCall.Args, "--json", "number,title,body,url,comments") {
@@ -485,6 +487,7 @@ func TestRunFailureKeepsWorktreeAndPostsFailureResult(t *testing.T) {
 		writeProjectFiles(t, root)
 		runner := &fakeCommandRunner{}
 		runner.fn = func(spec CommandSpec) CommandResult {
+			assertExplicitGitHubTarget(t, spec)
 			if commentFailure && spec.Name == "gh" && containsArgs(spec.Args, "issue", "comment") {
 				return CommandResult{ExitCode: 1}
 			}

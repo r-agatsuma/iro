@@ -168,24 +168,15 @@ func TestLandUsesOnlyRemoteDeliveryStateAndExplicitHumanAuthorization(t *testing
 	}
 }
 
-func TestLandBindsConfiguredHostDespiteEnvironment(t *testing.T) {
-	t.Setenv("GH_HOST", "github.enterprise.example")
-	t.Setenv("GH_REPO", "github.enterprise.example/acme/iro")
+func TestLandBindsConfiguredHostOnEveryPageAndMerge(t *testing.T) {
 	f := newLandFixture(t)
 	f.pages = []string{landDeliveryPage(landActivePRForTest, true, "next"), landDeliveryPage("", false, "")}
 	requests := 0
 	f.runner.fn = func(spec CommandSpec) CommandResult {
 		if spec.Name == "gh" {
 			requests++
-			// Model host selection at the command boundary without contacting GitHub.
-			host := os.Getenv("GH_HOST")
-			for i := 0; i+1 < len(spec.Args); i++ {
-				if spec.Args[i] == "--hostname" {
-					host = spec.Args[i+1]
-				}
-			}
-			if host != "github.com" {
-				t.Fatalf("command reached an unconfigured host %q: %+v", host, spec)
+			if !containsArgs(spec.Args, "--hostname", "github.com") {
+				t.Fatalf("command did not bind the configured host: %+v", spec)
 			}
 		}
 		return f.respond(spec)

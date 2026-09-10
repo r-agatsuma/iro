@@ -64,7 +64,7 @@ func reviewFakeResult(spec CommandSpec, root, reviewerOutput string) CommandResu
 			return CommandResult{Stdout: reviewResponseForTest}
 		case len(spec.Args) >= 2 && spec.Args[0] == "issue" && spec.Args[1] == "view":
 			return CommandResult{Stdout: `{"number":123,"title":"Required behavior","body":"Issue specification body","url":"https://github.com/acme/iro/issues/123","comments":[{"id":"IC_1","author":{"login":"human"},"createdAt":"2025-01-02T03:04:05Z","body":"Issue decision"}]}`}
-		case len(spec.Args) >= 2 && spec.Args[0] == "pr" && spec.Args[1] == "diff" && containsArgs(spec.Args, "--repo", "acme/iro"):
+		case len(spec.Args) >= 2 && spec.Args[0] == "pr" && spec.Args[1] == "diff" && containsArgs(spec.Args, "--repo", "github.com/acme/iro"):
 			if containsString(spec.Args, "--name-only") {
 				return CommandResult{Stdout: "internal/iro/review.go\ninternal/iro/review_test.go\n"}
 			}
@@ -135,7 +135,7 @@ func assertNormalizedFeedbackInput(t *testing.T, calls []CommandSpec, pageCount 
 	for _, feedback := range reviewFeedbackPagesForTest {
 		fetched := 0
 		for _, call := range calls {
-			if call.Name == "gh" && reflect.DeepEqual(call.Args, []string{"api", "--paginate", feedback.endpoint}) {
+			if call.Name == "gh" && reflect.DeepEqual(call.Args, []string{"api", "--paginate", feedback.endpoint, "--hostname", "github.com"}) {
 				fetched++
 			}
 		}
@@ -229,10 +229,10 @@ func TestReviewUsesRemotePRInDisposableWorkspaceAndForwardsOpaqueOutput(t *testi
 	if !containsArgs(reviewerCall.Args, "--sandbox", "workspace-write") || !containsString(reviewerCall.Args, "sandbox_workspace_write.network_access=true") {
 		t.Fatalf("Reviewer did not use the expected sandbox and network settings: %v", reviewerCall.Args)
 	}
-	if !containsString(checkoutCall.Args, "--detach") || !containsArgs(checkoutCall.Args, "--repo", "acme/iro") {
+	if !containsString(checkoutCall.Args, "--detach") || !containsArgs(checkoutCall.Args, "--repo", "github.com/acme/iro") {
 		t.Fatalf("PR checkout was not detached and repository-scoped: %v", checkoutCall.Args)
 	}
-	if !containsArgs(commentCall.Args, "--repo", "acme/iro") || commentCall.Args[len(commentCall.Args)-1] != reviewerOutput {
+	if !containsArgs(commentCall.Args, "--repo", "github.com/acme/iro") || commentCall.Args[len(commentCall.Args)-1] != reviewerOutput {
 		t.Fatalf("Reviewer output was not forwarded unchanged: %q", commentCall.Args[len(commentCall.Args)-1])
 	}
 	for _, want := range []string{
