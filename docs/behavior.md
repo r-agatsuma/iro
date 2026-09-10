@@ -710,7 +710,7 @@ reset, clean, stash, checkout, switch, restore, merge, rebase, cherry-pick, bran
 Leave all repository changes uncommitted for iro orchestration to commit and deliver for human review.
 Work only on the supplied Issue and avoid unrelated changes.
 Run relevant tests when feasible.
-Return the final work report in Japanese, including changes, tests, success/failure, and known limitations.
+Keep the final Author report focused on material changes actually made, validation actually performed and its results, and known limitations that materially affect correctness or the Issue acceptance criteria. Git lifecycle state, including whether changes are uncommitted or committed, push state, and PR state, is outside the Author report's responsibility because iro owns delivery after the Author exits. Do not enumerate optional or unrequested validation that was not performed. You may report an unperformed validation when its absence leaves an acceptance criterion or concrete correctness risk materially unresolved. Return the final work report in Japanese within this scope.
 ```
 
 implementation は quoting/escaping を安全に行わなければならない。
