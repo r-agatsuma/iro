@@ -78,6 +78,10 @@ type reviewContext struct {
 
 // Review runs a fresh independent Reviewer and forwards its opaque response to the PR.
 func (s *Service) Review(prNumber int, out io.Writer) error {
+	return s.reviewWithModel(prNumber, "", out)
+}
+
+func (s *Service) reviewWithModel(prNumber int, model string, out io.Writer) error {
 	if prNumber <= 0 {
 		return fmt.Errorf("pull request number must be a positive decimal integer")
 	}
@@ -156,7 +160,7 @@ func (s *Service) Review(prNumber int, out io.Writer) error {
 		}
 	}()
 
-	result := s.runReviewer(workspace, identity, target, origin, configData, workflowData, context)
+	result := s.runReviewer(workspace, identity, target, origin, configData, workflowData, context, model)
 	if cleanupErr := s.FileSystem.RemoveAll(workspace); cleanupErr != nil {
 		return fmt.Errorf("could not remove disposable review workspace: %w", cleanupErr)
 	}
@@ -395,12 +399,12 @@ func (s *Service) materializeReviewWorkspace(root string, identity RepositoryIde
 	return workspace, nil
 }
 
-func (s *Service) runReviewer(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext) CommandResult {
+func (s *Service) runReviewer(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, model string) CommandResult {
 	payload := buildReviewPayload(identity, target, origin, configData, workflowData, context)
 	instructions := fmt.Sprintf("%s\n\nTrusted review provenance (supplied by iro):\nModel: %s\nBase branch: %s\nBase OID: %s\nReviewed HEAD OID: %s\n", reviewerDeveloperInstructions, reviewerModelIdentity, target.BaseRefName, target.BaseRefOID, target.HeadRefOID)
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",
-		Args: []string{
+		Args: withCodexModel([]string{
 			"--cd", workspace,
 			"--sandbox", "workspace-write",
 			"--ask-for-approval", "never",
@@ -409,7 +413,7 @@ func (s *Service) runReviewer(workspace string, identity RepositoryIdentity, tar
 			"exec",
 			"--ephemeral",
 			"Independently review the GitHub pull request supplied on stdin.",
-		},
+		}, model),
 		Dir:   workspace,
 		Stdin: []byte(payload),
 	})

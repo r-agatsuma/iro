@@ -226,10 +226,14 @@ func (s *Service) Doctor(out io.Writer) error {
 }
 
 func (s *Service) Run(issueNumber int, out io.Writer) error {
-	return s.run(issueNumber, out, os.Stderr)
+	return s.runWithModel(issueNumber, "", out, os.Stderr)
 }
 
 func (s *Service) run(issueNumber int, out, errOut io.Writer) error {
+	return s.runWithModel(issueNumber, "", out, errOut)
+}
+
+func (s *Service) runWithModel(issueNumber int, model string, out, errOut io.Writer) error {
 	if issueNumber <= 0 {
 		return fmt.Errorf("issue number must be a positive decimal integer")
 	}
@@ -305,7 +309,7 @@ func (s *Service) run(issueNumber int, out, errOut io.Writer) error {
 	}
 
 	started := s.Now().UTC()
-	codexResult := s.runCodex(workspace, identity, target)
+	codexResult := s.runCodex(workspace, identity, target, model)
 	finished := s.Now().UTC()
 	if !commandSucceeded(codexResult) {
 		operationErr := fmt.Errorf("Codex exited with status %d (%v); worktree was kept for human inspection", codexResult.ExitCode, codexResult.Err)
@@ -480,11 +484,11 @@ Work only on the supplied Issue and avoid unrelated changes.
 Run relevant tests when feasible.
 Return the final work report in Japanese, including changes, tests, success/failure, and known limitations.`
 
-func (s *Service) runCodex(workspace string, identity RepositoryIdentity, target issue) CommandResult {
+func (s *Service) runCodex(workspace string, identity RepositoryIdentity, target issue, model string) CommandResult {
 	payload := buildIssuePayload(identity, target)
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",
-		Args: []string{
+		Args: withCodexModel([]string{
 			"--cd", workspace,
 			"--sandbox", "workspace-write",
 			"--ask-for-approval", "never",
@@ -493,10 +497,24 @@ func (s *Service) runCodex(workspace string, identity RepositoryIdentity, target
 			"exec",
 			"--ephemeral",
 			"Implement the GitHub Issue supplied on stdin.",
-		},
+		}, model),
 		Dir:   workspace,
 		Stdin: []byte(payload),
 	})
+}
+
+func withCodexModel(args []string, model string) []string {
+	if model == "" {
+		return args
+	}
+	result := make([]string, 0, len(args)+2)
+	for _, arg := range args {
+		if arg == "exec" {
+			result = append(result, "--model", model)
+		}
+		result = append(result, arg)
+	}
+	return result
 }
 
 func buildIssuePayload(identity RepositoryIdentity, target issue) string {
