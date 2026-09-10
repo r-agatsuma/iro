@@ -280,12 +280,25 @@ func TestRunUsesConfiguredIdentityAndNormativeCodexInvocation(t *testing.T) {
 			t.Errorf("Codex invocation does not contain %q: %s", want, joined)
 		}
 	}
+	for _, want := range []string{
+		"material changes actually made",
+		"validation actually performed and its results",
+		"known limitations that materially affect correctness",
+		"Git lifecycle state",
+		"outside the Author report's responsibility",
+		"Do not enumerate optional or unrequested validation that was not performed",
+		"an acceptance criterion or concrete correctness risk materially unresolved",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("Author instruction does not contain %q: %s", want, joined)
+		}
+	}
 	for _, want := range []string{"Repository: acme/iro", "Issue number: 123", "Implement the task", "https://github.com/acme/iro/issues/123"} {
 		if !strings.Contains(string(codexCall.Stdin), want) {
 			t.Errorf("Codex payload does not contain %q: %s", want, codexCall.Stdin)
 		}
 	}
-	if !strings.Contains(commentCall.Args[len(commentCall.Args)-1], "Author report:") {
+	if !strings.Contains(commentCall.Args[len(commentCall.Args)-1], "Author report (pre-delivery):\n\n変更しました。テスト成功。") {
 		t.Fatalf("delivery comment is missing the Author report: %v", commentCall.Args)
 	}
 }

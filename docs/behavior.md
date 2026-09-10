@@ -764,6 +764,8 @@ MVP は Codex JSONL event stream、thread ID、resume metadata を解析・保�
 
 Codex の final stdout は local log に保持し、成功時は delivery PR comment、失敗時は Issue failure comment の作業報告として利用する。
 
+Author の final report responsibility は、実際に行った material な変更、実際に実行した validation とその結果、および correctness または Issue の acceptance criteria に material な影響を与える既知の制約に限る。commit / push / PR などの Git lifecycle state は Author report の責務外であり、Author 終了後の delivery とともに iro が所有する。Author は実行しなかった optional / unrequested validation を網羅的に列挙しない。ただし、その未実施によって acceptance criteria または具体的な correctness risk が material に unresolved となる場合は報告してよい。
+
 ### RUN-016: Codex success
 
 Codex exit status が 0 の場合、stdout の validation / 作業報告を回収し、delivery 前に local log に保存する。Issue へ成功 report は投稿しない。log 保存失敗時は delivery を開始せず Issue へ診断と Author report の投稿を試みる。worker が行った validation の内容はその報告に依存し、iro 自身が test の成功を解析・保証するものではない。
@@ -776,7 +778,7 @@ Codex exit status が 0 の場合、stdout の validation / 作業報告を回�
 4. configured remote へ canonical `refs/heads/iro/issue-N` を明示的な refspec で push する。force push は禁止する。
 5. 通常の open PR を作成する。head は `iro/issue-N`、base は `D`、body は `Closes #N` を含む固定文面とする。worker output を body に展開して追加の closing relation を導入してはならない。
 6. create response の PR number `M` を取得し、stdout に PR number と `iro land M` を表示する。
-7. PR に `## iro delivery` header、`Author report:`、Author final stdout、`Land:`、コード表記の `iro land M` を順に含む単一 comment を best-effort で投稿する。Author report の意味を解釈・再生成せず、固定 header / footer の間に配置する。
+7. PR に `## iro delivery` header、`Author report (pre-delivery):`、Author final stdout、`Land:`、コード表記の `iro land M` を順に含む単一 comment を best-effort で投稿する。これは delivery 前に capture した report であることを label で示す。Author final stdout は opaque に保持し、意味を解釈・parse・filter・rewrite・再生成せず、固定 header / footer の間にそのまま配置する。
 
 PR create 成功と number の取得を required remote delivery の完了境界とする。delivery comment 失敗は warning を stderr に出すが exit success を維持する。PR body の post-create update、Issue closing relation の作成直後の再取得は要求しない。`run` は Draft PR / Draft option、merge、Issue close API を提供しない。merge は Human が明示する `iro land`（LAND-001 以降）で行う。
 

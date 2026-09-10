@@ -173,7 +173,7 @@ func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, n
 		return fmt.Errorf("PR creation failed or response was invalid; remote branch %s was pushed and local commit remains at %s; a PR may exist, inspect remote state before retrying", branch, workspace)
 	}
 	fmt.Fprintf(out, "Created PR #%d\nLand: iro land %d\n", pr.Number, pr.Number)
-	report := fmt.Sprintf("## iro delivery\n\nAuthor report:\n\n%s\n\nLand:\n\n`iro land %d`\n", authorReport, pr.Number)
+	report := fmt.Sprintf("## iro delivery\n\nAuthor report (pre-delivery):\n\n%s\n\nLand:\n\n`iro land %d`\n", authorReport, pr.Number)
 	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"pr", "comment", strconv.Itoa(pr.Number), "--repo", identity.Selector(), "--body", report}, Dir: root})
 	if !commandSucceeded(result) {
 		fmt.Fprintf(errOut, "warning: PR #%d was created, but delivery report comment failed; Land: iro land %d\n", pr.Number, pr.Number)
