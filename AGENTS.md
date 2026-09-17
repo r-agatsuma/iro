@@ -29,6 +29,41 @@ Issue の明示的な scope が runtime behavior の変更を要求している�
 
 文書間または task と policy の間に実質的な矛盾があり、task scope 内で正当に解消できない場合は、推測で解消せず人間へ日本語で報告する。
 
+## Issue classification
+
+GitHub Issue は作業の性質を次の3種類で分類する。この classification は Human と coding agent が Issue の目的と着手条件を共有するための development policy であり、iro runtime の control signal として parse して behavior を変えてはならない。
+
+### Executable Issue
+
+title prefix は原則として付けない。
+
+Human による新しい product / architecture 判断を途中で要求せず、Issue 本文だけを根拠に次の reviewable checkpoint まで実装を進められる work item とする。
+
+基本構成は次とする。
+
+```text
+Current state
+Target state
+Non-goals
+Acceptance Criteria
+```
+
+実装中に scope 外の新しい仕様判断が必要になった場合は推測で補わず、Human へ判断を返す。
+
+### `[Research]`
+
+調査、evidence 収集、比較、設計判断の整理そのものが成果物となる task とする。
+
+典型的には、evidence を集め、supported / unsupported / uncertain 等を分類し、recommendation または decision を durable に残す。runtime change が必要になった場合は、Research Issue 内で暗黙に実装へ移行せず、別の Executable Issue として切り出す。
+
+Research Issue 自体が code change を生むとは限らない。
+
+### `[Future]`
+
+将来候補を残す parking lot とする。方向性や問題意識を保存することを目的とし、現在は implementation も research も開始しない。
+
+詳細が不足していてよい。着手するときに内容を refine し、必要に応じて `[Research]` または Executable Issue へ再分類する。
+
 ## 言語ポリシー
 
 ### 人間向けの情報
