@@ -126,6 +126,19 @@ iro revise 456
 
 一部だけ欠けた partial state、dirty state、remote HEAD と異なる divergent state は自動修復しません。全欠落に見せるために mapping だけを削除せず、保存と所有関係を確認して診断を解消してください。
 
+## Land 後に default branch を同期する
+
+`iro land <pr-number>` が成功すると、次の `iro run` 前に local default branch を remote と同期するための informational hint が表示されます。Land は remote merge だけを行い、local checkout を変更しません。
+
+同期方法の例は次のとおりです。対象の local default branch checkout と実行 location は Human が選びます。
+
+```text
+Sync your local default branch with the remote before the next iro run.
+For example: git pull
+```
+
+iro 自身は同期 command を実行せず、local branch が同期済みかも検証しません。merge が失敗した場合、この success-only hint は表示されません。
+
 ## 古い iro binary を実行している疑い
 
 source を更新しても installed binary は自動更新されません。

@@ -84,7 +84,14 @@ Land は configured repository の default branch を base、同 repository の 
 
 validation で取得した PR HEAD OID を実際の normal merge operation に bind するため、検証後の HEAD drift は merge failure になります。`mergeStateStatus == BEHIND` であることだけでは拒否せず、validated HEAD を指定して merge を試み、up-to-date requirement などの最終判断を GitHub の repository policy に委ねます。policy rejection や HEAD drift 時に admin bypass、branch auto-update、自動 retry、別 merge method への fallback は行いません。
 
-Land の authentication、GraphQL、merge API は configured host の `github.com` へ明示的に bind され、`GH_HOST` / `GH_REPO` などで別 host や repository へ reroute されません。Land は remote delivery の完了だけを担い、local cleanup や remote branch の明示的削除は行いません。merge 後の Issue close は GitHub native closing relation に委ねます。
+Land の authentication、GraphQL、merge API は configured host の `github.com` へ明示的に bind され、`GH_HOST` / `GH_REPO` などで別 host や repository へ reroute されません。Land は remote delivery の完了だけを担い、local cleanup や remote branch の明示的削除は行いません。merge 後の Issue close は GitHub native closing relation に委ねます。merge 成功後は、次の `iro run` 前に local default branch を remote と同期するよう案内する informational hint を stdout に表示します。
+
+```text
+Sync your local default branch with the remote before the next iro run.
+For example: git pull
+```
+
+iro はこの同期 command を実行せず、local checkout や branch の状態も変更・検証しません。merge failure 時にはこの success-only hint を表示しません。
 
 ### Cleanup
 

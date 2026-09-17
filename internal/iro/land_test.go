@@ -161,10 +161,22 @@ func TestLandUsesOnlyRemoteDeliveryStateAndExplicitHumanAuthorization(t *testing
 			if code := Execute([]string{"land", "42"}, &out, &errOut, f.service); code != 0 {
 				t.Fatalf("exit %d: %s", code, errOut.String())
 			}
-			if f.mergeCalls != 1 || !f.merged || !strings.Contains(out.String(), "Landed PR #42 for Issue #123") || !strings.Contains(out.String(), landMergeForTest) || errOut.Len() != 0 {
+			if f.mergeCalls != 1 || !f.merged || !strings.Contains(out.String(), "Landed PR #42 for Issue #123") || !strings.Contains(out.String(), landMergeForTest) || !strings.Contains(out.String(), "Sync your local default branch with the remote before the next iro run.\nFor example: git pull") || errOut.Len() != 0 {
 				t.Fatalf("unexpected merge/output: calls=%d, stdout=%q, stderr=%q", f.mergeCalls, out.String(), errOut.String())
 			}
 		})
+	}
+}
+
+func TestLandPrintsGenericLocalSyncHint(t *testing.T) {
+	f := newLandFixture(t)
+	var out, errOut strings.Builder
+	if code := Execute([]string{"land", "42"}, &out, &errOut, f.service); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	want := "Sync your local default branch with the remote before the next iro run.\nFor example: git pull"
+	if !strings.Contains(out.String(), want) || errOut.Len() != 0 {
+		t.Fatalf("stdout=%q, stderr=%q", out.String(), errOut.String())
 	}
 }
 

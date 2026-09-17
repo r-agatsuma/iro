@@ -178,5 +178,7 @@ func (s *Service) mergeLandTarget(root string, identity RepositoryIdentity, targ
 		return fmt.Errorf("merge of PR #%d at validated HEAD %s failed or could not be confirmed; inspect the remote PR, current HEAD, and repository rules before explicitly retrying `iro land %d`; no automatic retry was attempted", target.Number, target.HeadOID, target.Number)
 	}
 	fmt.Fprintf(out, "Landed PR #%d for Issue #%d with merge commit %s\n", target.Number, target.OriginIssue, response.SHA)
+	fmt.Fprintln(out, "\nSync your local default branch with the remote before the next iro run.")
+	fmt.Fprintln(out, "For example: git pull")
 	return nil
 }

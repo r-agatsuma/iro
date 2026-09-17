@@ -1137,7 +1137,16 @@ validation で取得した `H` を実際の merge operation に bind しなけ�
 
 この同期 [GitHub REST merge API](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request) の `sha` guard は `--match-head-commit H` 相当の contract とする。validation 後に HEAD が変更された場合、新しい HEAD を暗黙に再承認せず failure とする。Human が current state を確認し、改めて `iro land <pr-number>` を実行する。
 
-normal merge commit だけを使用し、squash / rebase / force merge、別 method への fallback、automatic retry を行わない。command 成功と response の `merged: true` および有効な merge commit OID を確認した場合だけ success とし、stdout に PR number、origin Issue number、merge commit OID を表示する。
+normal merge commit だけを使用し、squash / rebase / force merge、別 method への fallback、automatic retry を行わない。command 成功と response の `merged: true` および有効な merge commit OID を確認した場合だけ success とし、stdout に PR number、origin Issue number、merge commit OID を表示する。さらに、Land は local checkout を変更しないため、成功後の stdout に次の local default branch 同期 hint を表示する。
+
+```text
+Landed PR #M for Issue #N with merge commit <merge-commit-oid>
+
+Sync your local default branch with the remote before the next iro run.
+For example: git pull
+```
+
+これは informational hint であり、iro は同期 command を実行せず、local checkout や branch の状態も変更・検証しない。同期対象の local default branch checkout と実行 location は Human が選択する。
 
 merge 成功により `Closes #N` 等の native relation に従って GitHub が origin Issue を close する。iro は Issue を別 API で直接 close しない。
 
@@ -1146,6 +1155,8 @@ merge 成功により `Closes #N` 等の native relation に従って GitHub が
 precondition failure では merge を試行しない。merge command failure / invalid response / merge 未確認は non-zero とし、remote PR、current HEAD、repository policy を Human が確認してから明示的に再実行するよう案内する。通信失敗等で merge 済みか不明な場合に成功を推測したり自動再試行したりしない。
 
 Land は remote delivery completion、Cleanup は verified local resource teardown として分離する。成功・失敗にかかわらず、local Issue worktree / branch / ownership mapping を作成・変更・削除せず、local log や provenance state も作成しない。remote branch の明示的削除や repository の branch deletion 設定変更を行わない。GitHub 自身の repository 設定による動作は変更しない。
+
+successful merge の local sync hint は informational であり、merge success の追加条件ではない。merge failure や merge 結果を確認できない場合は、この success-only hint を表示しない。
 
 HEAD の一致は merge API の atomic guard で保証する。preflight の全 relation / policy read と merge は単一 transaction ではなく、検証後の base / closing relation 等の concurrent change まで lock するものではない。排他制御、独自 merge queue、automatic repair は導入しない。
 
@@ -1191,7 +1202,7 @@ Codex thread/session ID は保存対象に含めない。
 | required checks / reviews 未充足、merge conflict、policy unknown、merge queue required | merge 前に error; no bypass / scheduling |
 | HEAD changed after validation | merge API が拒否; error; no retry |
 | merge rejected / result unconfirmed | error; Human に remote state 確認を案内 |
-| successful merge | native Issue close に委ね、local cleanup / remote branch deletion を実行しない |
+| successful merge | native Issue close に委ね、local cleanup / remote branch deletion を実行しない。stdout に local default branch 同期の informational hint を表示 |
 
 | State | `iro init` | `iro doctor` | `iro status` | `iro run <issue-number>` | `iro review <pr-number>` | `iro cleanup <issue-number>` |
 |---|---|---|---|---|---|---|
