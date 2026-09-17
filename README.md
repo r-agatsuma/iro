@@ -28,6 +28,33 @@ iro version
 
 repository の source root で install します。install 先は設定済みの `GOBIN`、未設定なら通常 `$(go env GOPATH)/bin` です。その directory が `PATH` に含まれている必要があります。`command -v iro` で選ばれる binary と `iro version` の build 情報を確認してください。PATH の設定は Human が利用環境に合わせて行います。
 
+## Quick Start: Typical lifecycle
+
+1件の Executable Issue を delivery するまでの典型的な流れです。iro が全 lifecycle を自動実行するのではなく、Human が各 operation を確認し、明示的に次の command を実行します。
+
+1. `iro` を install し、対象の Git repository へ移動して `iro init` を実行します。
+
+   ```bash
+   cd /path/to/target-repository
+   iro init
+   ```
+
+2. 生成された `iro.toml` と `WORKFLOW.md` を Human が確認します。必要な内容を調整したうえで Git に記録するかどうかも Human が判断します。`iro init` は commit や push を行いません。
+3. Executable Issue を作成します。GitHub UI や ChatGPT などで Issue の作成を支援できますが、特定のサービスは必須ではありません。
+4. Issue 番号を指定して実行します。
+
+   ```bash
+   iro run <issue-number>
+   ```
+
+   成功すると PR が作成されるので、Human が PR を確認します。
+5. 必要な場合だけ `iro review <pr-number>` で advisory review を実行します。finding があれば、`iro revise <pr-number>` で修正してから review を繰り返せます。Review / Revise は optional です。
+6. Human が PR の内容と merge を判断し、その明示的な authorization として `iro land <pr-number>` を実行します。
+7. 次の `iro run` の前に必要なら local default branch を remote と同期します（例: `git pull`）。この同期は `iro` が自動実行しません。
+8. 不要になった Issue worktree と local branch は、必要な場合だけ `iro cleanup <issue-number>` で削除します。
+
+失敗時の保存・破棄・再実行などの recovery recipe は [operator cookbook](docs/cookbook.md) を参照してください。現在の runtime contract は [`docs/behavior.md`](docs/behavior.md) に定義されています。
+
 ## Commands
 
 `iro version` は project 外でも実行できます。その他は既存の Git repository の root またはその配下で実行します。
