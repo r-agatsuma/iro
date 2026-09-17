@@ -128,15 +128,16 @@ iro revise 456
 
 ## Land 後に default branch を同期する
 
-`iro land <pr-number>` が成功すると、次の `iro run` 前に local default branch を同期するための hint が表示されます。Land は remote merge だけを行い、local checkout を変更しません。
+`iro land <pr-number>` が成功すると、次の `iro run` 前に local default branch を remote と同期するための informational hint が表示されます。Land は remote merge だけを行い、local checkout を変更しません。
 
-Human が default branch を checkout している location を選び、その checkout から次を実行します。
+同期方法の例は次のとおりです。対象の local default branch checkout と実行 location は Human が選びます。
 
-```bash
-git pull --ff-only origin main
+```text
+Sync your local default branch with the remote before the next iro run.
+For example: git pull
 ```
 
-`origin` と `main` は例です。実際の hint に表示された configured remote 名と resolved default branch 名を使ってください。iro 自身は `git pull`、`git fetch`、`git switch` / checkout を実行せず、local branch が同期済みかも検証しません。merge が失敗した場合、この success-only hint は表示されません。
+iro 自身は同期 command を実行せず、local branch が同期済みかも検証しません。merge が失敗した場合、この success-only hint は表示されません。
 
 ## 古い iro binary を実行している疑い
 

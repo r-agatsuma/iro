@@ -1142,12 +1142,11 @@ normal merge commit だけを使用し、squash / rebase / force merge、別 met
 ```text
 Landed PR #M for Issue #N with merge commit <merge-commit-oid>
 
-Before the next iro run, update your local checkout of D.
-From that checkout:
-  git pull --ff-only R D
+Sync your local default branch with the remote before the next iro run.
+For example: git pull
 ```
 
-`R` は configured `tracker.remote` の remote 名、`D` は preflight で解決した PR base / repository default branch 名である。`git pull` は `D` を checkout している location を Human が選んだ上で、その checkout から実行する。iro はこの command を実行せず、local branch の状態も検証しない。
+これは informational hint であり、iro は同期 command を実行せず、local checkout や branch の状態も変更・検証しない。同期対象の local default branch checkout と実行 location は Human が選択する。
 
 merge 成功により `Closes #N` 等の native relation に従って GitHub が origin Issue を close する。iro は Issue を別 API で直接 close しない。
 
@@ -1203,7 +1202,7 @@ Codex thread/session ID は保存対象に含めない。
 | required checks / reviews 未充足、merge conflict、policy unknown、merge queue required | merge 前に error; no bypass / scheduling |
 | HEAD changed after validation | merge API が拒否; error; no retry |
 | merge rejected / result unconfirmed | error; Human に remote state 確認を案内 |
-| successful merge | native Issue close に委ね、local cleanup / remote branch deletion を実行しない。stdout に `git pull --ff-only R D` の local sync hint を表示 |
+| successful merge | native Issue close に委ね、local cleanup / remote branch deletion を実行しない。stdout に local default branch 同期の informational hint を表示 |
 
 | State | `iro init` | `iro doctor` | `iro status` | `iro run <issue-number>` | `iro review <pr-number>` | `iro cleanup <issue-number>` |
 |---|---|---|---|---|---|---|

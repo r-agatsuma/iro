@@ -51,7 +51,6 @@ type landFixture struct {
 	root        string
 	service     *Service
 	runner      *fakeCommandRunner
-	remote      string
 	target      string
 	pages       []string
 	page        int
@@ -68,7 +67,7 @@ func landDeliveryPage(nodes string, more bool, cursor string) string {
 func newLandFixture(t *testing.T) *landFixture {
 	t.Helper()
 	f := &landFixture{
-		t: t, root: t.TempDir(), remote: "origin", target: landResponseForTest,
+		t: t, root: t.TempDir(), target: landResponseForTest,
 		pages:       []string{landDeliveryPage(landActivePRForTest, false, "")},
 		liveHead:    landHeadForTest,
 		mergeResult: CommandResult{Stdout: `{"merged":true,"sha":"` + landMergeForTest + `"}`},
@@ -87,7 +86,7 @@ func (f *landFixture) respond(spec CommandSpec) CommandResult {
 		switch strings.Join(spec.Args, " ") {
 		case "rev-parse --show-toplevel":
 			return CommandResult{Stdout: f.root}
-		case "config --get-all remote." + f.remote + ".url":
+		case "config --get-all remote.origin.url":
 			return CommandResult{Stdout: "git@github.com:acme/iro.git\n"}
 		}
 	}
@@ -162,36 +161,20 @@ func TestLandUsesOnlyRemoteDeliveryStateAndExplicitHumanAuthorization(t *testing
 			if code := Execute([]string{"land", "42"}, &out, &errOut, f.service); code != 0 {
 				t.Fatalf("exit %d: %s", code, errOut.String())
 			}
-			if f.mergeCalls != 1 || !f.merged || !strings.Contains(out.String(), "Landed PR #42 for Issue #123") || !strings.Contains(out.String(), landMergeForTest) || !strings.Contains(out.String(), "Before the next iro run, update your local checkout of main.\nFrom that checkout:\n  git pull --ff-only origin main") || errOut.Len() != 0 {
+			if f.mergeCalls != 1 || !f.merged || !strings.Contains(out.String(), "Landed PR #42 for Issue #123") || !strings.Contains(out.String(), landMergeForTest) || !strings.Contains(out.String(), "Sync your local default branch with the remote before the next iro run.\nFor example: git pull") || errOut.Len() != 0 {
 				t.Fatalf("unexpected merge/output: calls=%d, stdout=%q, stderr=%q", f.mergeCalls, out.String(), errOut.String())
 			}
 		})
 	}
 }
 
-func TestLandPrintsLocalSyncHintUsingConfiguredRemoteAndBase(t *testing.T) {
+func TestLandPrintsGenericLocalSyncHint(t *testing.T) {
 	f := newLandFixture(t)
-	f.remote = "upstream"
-	configPath := filepath.Join(f.root, "iro.toml")
-	config, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config = []byte(strings.Replace(string(config), `remote = "origin"`, `remote = "upstream"`, 1))
-	if err := os.WriteFile(configPath, config, 0644); err != nil {
-		t.Fatal(err)
-	}
-	f.target = strings.NewReplacer(
-		`"defaultBranchRef":{"name":"main"}`, `"defaultBranchRef":{"name":"develop"}`,
-		`"baseRefName":"main"`, `"baseRefName":"develop"`,
-	).Replace(f.target)
-	f.pages = []string{strings.Replace(landDeliveryPage(landActivePRForTest, false, ""), `"name":"main"`, `"name":"develop"`, 1)}
-
 	var out, errOut strings.Builder
 	if code := Execute([]string{"land", "42"}, &out, &errOut, f.service); code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
-	want := "Before the next iro run, update your local checkout of develop.\nFrom that checkout:\n  git pull --ff-only upstream develop"
+	want := "Sync your local default branch with the remote before the next iro run.\nFor example: git pull"
 	if !strings.Contains(out.String(), want) || errOut.Len() != 0 {
 		t.Fatalf("stdout=%q, stderr=%q", out.String(), errOut.String())
 	}
