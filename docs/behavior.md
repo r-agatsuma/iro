@@ -216,7 +216,7 @@ unsupported value を silently fallback してはならない。
 `tracker.remote` は GitHub repository identity を解決する唯一の remote である。
 `iro` は別 remote を推測してはならない。
 
-`iro.toml` は Codex model default または model catalog を保持しない。通常の model default は Codex 自身の configuration に委ねる。
+`iro.toml` は Codex model / reasoning effort default または catalog を保持しない。通常の model と reasoning effort の default は Codex 自身の configuration に委ねる。
 
 ### CFG-002: `WORKFLOW.md`
 
@@ -518,12 +518,14 @@ remote branch、remote ref、Issue、PR、repository configuration、invoking ch
 ### RUN-001: argument grammar
 
 ```text
-command      := "iro run " issue-number [model-option]
-issue-number := positive-decimal-integer
-model-option := ("--model" | "-m") non-empty-string
+command                 := "iro run " issue-number [worker-option...]
+issue-number            := positive-decimal-integer
+worker-option           := model-option | reasoning-effort-option
+model-option            := ("--model" | "-m") non-empty-string
+reasoning-effort-option := "--reasoning-effort" non-empty-string
 ```
 
-model-option は番号 operand の直後にだけ指定できる。省略時は Codex configuration / default selection に委譲し、指定時は値を独自に prevalidate せず requested model としてそのまま Codex に渡す。空値、重複指定、unsupported extra arguments は usage error とし、main side effect 前に reject する。MVP では Issue URL、owner/repo#number、複数 Issue を受け付けない。
+worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。省略した項目は Codex configuration / default selection に委譲する。model と reasoning effort は synthetic model name に結合せず、reasoning effort は modelごとの catalog なしに指定値を requested configuration としてそのまま Codex に渡す。空値、重複指定、unsupported extra arguments は usage error とし、main side effect 前に reject する。unsupported model / effort の fallback は行わず、Codex 側の reject は通常の worker failure とする。MVP では Issue URL、owner/repo#number、複数 Issue を受け付けない。
 
 ### RUN-002: source repository
 
@@ -651,7 +653,7 @@ main side effect 前に、少なくとも以下を検証する。
 
 ```text
 argument
-model option grammar and value
+worker option grammar and values
 Git executable / repository
 source checkout cleanliness
 project files / config
@@ -744,7 +746,7 @@ codex \
   "Implement the GitHub Issue supplied on stdin."
 ```
 
-model-option が指定された場合は `exec` の前に `--model <model>` を追加する。指定されない場合は Codex invocation に model option を追加してはならない。iro は unknown model を別 model へ fallback してはならず、Codex 側の reject は通常の worker failure とする。
+model-option が指定された場合は `exec` の前に `--model <model>` を追加する。reasoning-effort-option が指定された場合は `exec` の前に `-c 'model_reasoning_effort="<effort>"'` と概念的に等価な configuration override を追加する。両方を指定した場合も独立した引数として渡し、model 名と effort を結合した synthetic model name を生成してはならない。各 option が指定されない場合、その項目の override を Codex invocation に追加してはならない。iro は unknown model / unsupported effort を別の値へ fallback してはならず、Codex 側の reject は通常の worker failure とする。
 
 Issue payload は stdin で追加 context として渡してよい。payload encoding は deterministic で、Issue body と各 comment body を lossless に保持しなければならない。Issue body を先に、その後に `createdAt` 昇順（同一時刻は immutable identifier 昇順）の comments を配置しなければならない。
 
@@ -824,12 +826,14 @@ Issue comment の結果を local run log へ反映する際は、一時ファイ
 `iro review` は completed implementation を fresh Reviewer worker で独立評価し、Human の判断材料を target PR comment として残す advisory operation である。merge authorization、Human approval、GitHub native `APPROVE` / `REQUEST_CHANGES` の代替ではない。
 
 ```text
-command   := "iro review " pr-number [model-option]
-pr-number := positive-decimal-integer
-model-option := ("--model" | "-m") non-empty-string
+command                 := "iro review " pr-number [worker-option...]
+pr-number               := positive-decimal-integer
+worker-option           := model-option | reasoning-effort-option
+model-option            := ("--model" | "-m") non-empty-string
+reasoning-effort-option := "--reasoning-effort" non-empty-string
 ```
 
-model-option は番号 operand の直後にだけ指定できる。空値、重複指定、unsupported extra arguments は usage error とし、Reviewer 起動前に reject する。PR URL、owner/repo#number、複数 PR を受け付けない。
+worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。空値、重複指定、unsupported extra arguments は usage error とし、Reviewer 起動前に reject する。省略した項目は Codex configuration / default selection に委譲し、unsupported effort の fallback は行わない。PR URL、owner/repo#number、複数 PR を受け付けない。
 
 ### REVIEW-002: local repository context
 
@@ -873,7 +877,7 @@ Reviewer へ少なくとも次を渡す。
 
 base branch と base OID は同じ preflight の remote PR metadata `baseRefName` / `baseRefOid` から取得し、invoking checkout の HEAD から推測しない。base branch は configured repository の default branch と一致検証する。report の `Base: <branch> @ <base OID>` と `Reviewed HEAD: <head OID>` は観測した endpoint を表し、`A..B` 等の厳密な Git diff range や merge-base を表さない。
 
-現在の adapter は、model-option がなければ model 選択を Codex runtime に委ね、指定時だけ requested model を Codex invocation に渡す。requested model と resolved model identity は別概念である。resolved model identity を runtime interface から確実に取得できない場合、trusted Model 値は `(unknown; not exposed by runtime)` として取得不能を明示しなければならない。設定ファイルや環境変数から model を推測せず、stdout / stderr の header scraping、model 取得用の Reviewer 二重起動、新しい remote side effect を導入しない。requested model を Review provenance の resolved identity として置換してはならない。
+現在の adapter は、model-option がなければ model 選択を、reasoning-effort-option がなければ reasoning effort 選択を、それぞれ Codex runtime に委ねる。指定時だけ各 requested configuration を Codex invocation に渡す。requested model / reasoning effort と resolved runtime configuration は別概念である。resolved model identity を runtime interface から確実に取得できない場合、trusted Model 値は `(unknown; not exposed by runtime)` として取得不能を明示しなければならない。requested reasoning effort も runtime が trusted metadata として公開しない限り Review provenance に resolved fact として記録してはならない。設定ファイルや環境変数から configuration を推測せず、stdout / stderr の header scraping、model / effort 取得用の Reviewer 二重起動、新しい remote side effect を導入しない。requested model / reasoning effort を Review provenance の resolved identity / configuration として置換してはならない。
 
 Issue comments は RUN-004 と同じ検証と決定的な順序を使用する。GitHub が required context に invalid data を返した場合、Reviewer を起動しない。
 
@@ -891,7 +895,7 @@ workspace は Review 専用の disposable resource であり、canonical Issue b
 
 Reviewer は Author session を resume せず、fresh ephemeral `codex exec` とする。working directory は REVIEW-005 の disposable workspace、sandbox は `workspace-write`、approval policy は `never`、command network は enabled とする。Reviewer が test 等で disposable な build artifact を生成しても workspace cleanup で破棄し、persistent implementation state として扱わない。
 
-model-option が指定された場合は Reviewer の Codex invocation の `exec` 前に `--model <model>` を渡す。指定されない場合は model option を追加しない。Codex が requested model を reject した場合は Reviewer failure とする。
+model-option が指定された場合は Reviewer の Codex invocation の `exec` 前に `--model <model>` を渡す。reasoning-effort-option が指定された場合は同じ invocation の `exec` 前に `-c 'model_reasoning_effort="<effort>"'` と等価な configuration override を渡す。指定されない項目の override は追加しない。Codex が requested model / effort を reject した場合は Reviewer failure とする。requested effort は Review provenance の resolved metadata ではない。
 
 injected developer instructions は少なくとも次を要求する。
 
@@ -954,12 +958,14 @@ Review は target source branch、persistent Issue worktree、local ownership ma
 `iro revise` は Human が明示した remote delivery PR に fresh Author worker で参加し、現在の Issue specification と PR feedback に基づいて同じ canonical branch / PR を更新する operation である。
 
 ```text
-command   := "iro revise " pr-number [model-option]
-pr-number := positive-decimal-integer
-model-option := ("--model" | "-m") non-empty-string
+command                 := "iro revise " pr-number [worker-option...]
+pr-number               := positive-decimal-integer
+worker-option           := model-option | reasoning-effort-option
+model-option            := ("--model" | "-m") non-empty-string
+reasoning-effort-option := "--reasoning-effort" non-empty-string
 ```
 
-model-option は番号 operand の直後にだけ指定できる。空値、重複指定、unsupported extra arguments は usage error とし、Author 起動前に reject する。PR URL、owner/repo#number、複数 PR を受け付けない。PR creator identity、iro-created marker、delivery hint、hidden metadata、provenance record は eligibility に使用しない。Human-created PR も同じ条件で扱い、adoption state は導入しない。
+worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。空値、重複指定、unsupported extra arguments は usage error とし、Author 起動前に reject する。省略した項目は Codex configuration / default selection に委譲し、unsupported effort の fallback は行わない。PR URL、owner/repo#number、複数 PR を受け付けない。PR creator identity、iro-created marker、delivery hint、hidden metadata、provenance record は eligibility に使用しない。Human-created PR も同じ条件で扱い、adoption state は導入しない。
 
 ### REVISE-002: preconditions and delivery relation
 
@@ -1019,7 +1025,7 @@ materialize 後も remote relation と local ownership / branch / HEAD / cleanli
 
 ### REVISE-005: fresh Author input and authority
 
-Author は fresh ephemeral `codex exec` とし、session を resume しない。working directory は canonical Issue worktree、sandbox は `workspace-write`、approval policy は `never`、command network は enabled とする。model-option が指定された場合は Author の Codex invocation の `exec` 前に `--model <model>` を渡し、指定されない場合は model option を追加しない。Codex が requested model を reject した場合は Author failure とする。
+Author は fresh ephemeral `codex exec` とし、session を resume しない。working directory は canonical Issue worktree、sandbox は `workspace-write`、approval policy は `never`、command network は enabled とする。model-option が指定された場合は Author の Codex invocation の `exec` 前に `--model <model>` を渡し、reasoning-effort-option が指定された場合は `-c 'model_reasoning_effort="<effort>"'` と等価な configuration override を渡す。指定されない項目の override は追加しない。model 名と effort を結合した synthetic model name は生成せず、Codex が requested model / effort を reject した場合は Author failure とする。
 
 Author に以下を渡す。
 

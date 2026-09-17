@@ -9,7 +9,7 @@ import (
 // Execute dispatches the bootstrap MVP CLI commands and returns an exit status.
 func Execute(args []string, out, errOut io.Writer, service *Service) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--model <model> | -m <model>], review <pr-number> [--model <model> | -m <model>], revise <pr-number> [--model <model> | -m <model>], land <pr-number>, or cleanup <issue-number>)")
+		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--model <model> | -m <model>] [--reasoning-effort <effort>], review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>], revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>], land <pr-number>, or cleanup <issue-number>)")
 		return 2
 	}
 
@@ -40,7 +40,7 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 		}
 		err = service.Status(out)
 	case "run":
-		model, parseErr := parseModelOverride(args, "run", "issue-number")
+		options, parseErr := parseWorkerOptions(args, "run", "issue-number")
 		if parseErr != nil {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
@@ -50,9 +50,9 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
-		err = service.runWithModel(number, model, out, errOut)
+		err = service.runWithOptions(number, options, out, errOut)
 	case "review":
-		model, parseErr := parseModelOverride(args, "review", "pr-number")
+		options, parseErr := parseWorkerOptions(args, "review", "pr-number")
 		if parseErr != nil {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
@@ -62,9 +62,9 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
-		err = service.reviewWithModel(number, model, out)
+		err = service.reviewWithOptions(number, options, out)
 	case "revise":
-		model, parseErr := parseModelOverride(args, "revise", "pr-number")
+		options, parseErr := parseWorkerOptions(args, "revise", "pr-number")
 		if parseErr != nil {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
@@ -74,7 +74,7 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
-		err = service.reviseWithModel(number, model, out)
+		err = service.reviseWithOptions(number, options, out)
 	case "land":
 		if len(args) != 2 {
 			fmt.Fprintln(errOut, "error: usage: iro land <pr-number>")
@@ -109,15 +109,49 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 }
 
 func parseModelOverride(args []string, command, operand string) (string, error) {
-	usage := fmt.Sprintf("usage: iro %s <%s> [--model <model> | -m <model>]", command, operand)
-	if len(args) == 2 {
-		return "", nil
+	options, err := parseWorkerOptions(args, command, operand)
+	return options.Model, err
+}
+
+type workerOptions struct {
+	Model           string
+	ReasoningEffort string
+}
+
+func parseWorkerOptions(args []string, command, operand string) (workerOptions, error) {
+	usage := fmt.Sprintf("usage: iro %s <%s> [--model <model> | -m <model>] [--reasoning-effort <effort>]", command, operand)
+	if len(args) < 2 {
+		return workerOptions{}, fmt.Errorf("%s", usage)
 	}
-	if len(args) != 4 || args[2] != "--model" && args[2] != "-m" {
-		return "", fmt.Errorf("%s", usage)
+
+	var options workerOptions
+	modelSet := false
+	reasoningEffortSet := false
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--model", "-m":
+			if modelSet {
+				return workerOptions{}, fmt.Errorf("model option may be specified only once")
+			}
+			if i+1 >= len(args) || args[i+1] == "" || strings.TrimSpace(args[i+1]) == "" || strings.HasPrefix(args[i+1], "-") {
+				return workerOptions{}, fmt.Errorf("model must be a non-empty value")
+			}
+			options.Model = args[i+1]
+			modelSet = true
+			i++
+		case "--reasoning-effort":
+			if reasoningEffortSet {
+				return workerOptions{}, fmt.Errorf("reasoning effort option may be specified only once")
+			}
+			if i+1 >= len(args) || args[i+1] == "" || strings.TrimSpace(args[i+1]) == "" || strings.HasPrefix(args[i+1], "-") {
+				return workerOptions{}, fmt.Errorf("reasoning effort must be a non-empty value")
+			}
+			options.ReasoningEffort = args[i+1]
+			reasoningEffortSet = true
+			i++
+		default:
+			return workerOptions{}, fmt.Errorf("%s", usage)
+		}
 	}
-	if args[3] == "" || strings.TrimSpace(args[3]) == "" || strings.HasPrefix(args[3], "-") {
-		return "", fmt.Errorf("model must be a non-empty value")
-	}
-	return args[3], nil
+	return options, nil
 }
