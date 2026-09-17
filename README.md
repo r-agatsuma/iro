@@ -36,15 +36,15 @@ repository の source root で install します。install 先は設定済みの
 iro version
 iro init
 iro doctor
-iro run <issue-number> [--model <model> | -m <model>]
-iro review <pr-number> [--model <model> | -m <model>]
-iro revise <pr-number> [--model <model> | -m <model>]
+iro run <issue-number> [--model <model> | -m <model>] [--reasoning-effort <effort>]
+iro review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>]
+iro revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>]
 iro land <pr-number>
 iro status
 iro cleanup <issue-number>
 ```
 
-`iro run`、`iro review`、`iro revise` は、番号 operand の後ろに `--model <model>` または `-m <model>` を付けて、その operation の Codex model を override できます。model を指定しない場合は Codex の configuration / default selection に委譲します。iro 自身は model default や catalog を `iro.toml` に保持せず、model の実在確認や別 model への fallback も行いません。`iro review` で指定した requested model は、runtime が実際に解決した model identity とは別概念であり、resolved identity を取得できない現在の Review provenance は従来どおり unknown のままです。
+`iro run`、`iro review`、`iro revise` は、番号 operand の後ろに worker configuration flag を指定できます。`--model <model>` または `-m <model>` は model だけを、`--reasoning-effort <effort>` は reasoning effort だけを operation 単位で override します。両方を指定する場合、flag の順序は問いません。各項目を指定しない場合は、その項目の選択をCodexの configuration / default に委譲します。reasoning effort は non-empty string として Codex へ渡し、iro 自身は model / effort catalog、compatibility lookup、fallback を行いません。iro は model と reasoning effort を結合した synthetic model name（例: `gpt-5.6-luna-xhigh`）を生成しません。`iro.toml` に worker configuration default を保持しません。`iro review` で指定した requested model / reasoning effort は runtime が実際に解決した configuration とは別概念であり、resolved identity を取得できない現在の Review provenance は従来どおり unknown のままです。
 
 `iro init` は repository root に `iro.toml` と `WORKFLOW.md` を新規生成する local scaffold operation です。既存 file を上書きせず、commit や push も行いません。生成した file を Git へ記録するかどうかは Human が判断します。
 
@@ -58,13 +58,13 @@ iro cleanup <issue-number>
 
 ### Run
 
-`iro run <issue-number>` は configured repository の default branch を canonical delivery base とします。開始時の checkout は clean かつその default branch の named checkout でなければならず、non-default branch や detached HEAD からは開始しません。その検証済み local HEAD から `iro/issue-N` branch と canonical Issue worktree を作り、fresh Author worker を実行します。必要な場合は `iro run <issue-number> --model <model>` または `-m <model>` で operation 単位の override を指定できます。
+`iro run <issue-number>` は configured repository の default branch を canonical delivery base とします。開始時の checkout は clean かつその default branch の named checkout でなければならず、non-default branch や detached HEAD からは開始しません。その検証済み local HEAD から `iro/issue-N` branch と canonical Issue worktree を作り、fresh Author worker を実行します。必要な場合は `--model <model>` / `-m <model>` と `--reasoning-effort <effort>` を独立して operation 単位の override として指定できます。
 
 worker 成功後は iro が変更を commit / push し、`iro/issue-N` を head、default branch を base、Issue `#N` を GitHub native closing relation とする通常の open PR を作成します。iro 自身は Draft PR を作りません。Author report は先に local log へ保存し、成功時は `iro land` の案内と同じ delivery PR comment に集約します。Issue へ成功 report は投稿しません。PR comment 投稿失敗は warning に留め、Run の成功を覆しません。Author failure または stage / commit / push / PR create 等の delivery failure 時は、origin Issue へ Author report と診断の投稿を試みます。その投稿失敗は元の operation failure を隠さず、追加 diagnostic として表示します。自動 retry / rollback / repair は行いません。delivery comment は Human 向け UX にすぎず、remote state、ownership、creator provenance、後続 operation の eligibility の正本ではありません。
 
 ### Review and Revise
 
-`iro review <pr-number>` は optional / advisory です。configured repository の default branch を base とし、exactly 1 件の同 repository内 origin Issue への GitHub native closing relation を持つ open PR を、fresh で独立した Reviewer が disposable workspace で評価します。target の local branch、Issue worktree、ownership mapping は不要で、Draft や Human / fork 由来の PR も relation を満たせば review できます。`iro review <pr-number> --model <model>` または `-m <model>` を指定した場合だけ、その Reviewer invocation に requested model を渡します。
+`iro review <pr-number>` は optional / advisory です。configured repository の default branch を base とし、exactly 1 件の同 repository内 origin Issue への GitHub native closing relation を持つ open PR を、fresh で独立した Reviewer が disposable workspace で評価します。target の local branch、Issue worktree、ownership mapping は不要で、Draft や Human / fork 由来の PR も relation を満たせば review できます。`--model <model>` / `-m <model>` または `--reasoning-effort <effort>` を指定した場合だけ、それぞれ対応する requested configuration を Reviewer invocation に渡します。
 
 Review report では、開始時に観測した base branch / base OID と、disposable workspace の HEAD と一致を検証した Reviewed HEAD OID を識別できる trusted provenance を Reviewer へ渡します。resolved model identity を runtime interface から確実に取得できない場合は推測せず、取得不能であることを明示します。これは Human が review 対象 snapshot を後から識別するための情報であり、review freshness gate や Land authorization ではありません。
 
@@ -72,7 +72,7 @@ Reviewer の final response は opaque text です。iro は provenance、`PASS`
 
 Review は prompt-isolation の security boundary ではありません。Reviewer は PR HEAD 上で動くため、PR が `AGENTS.md` などの agent instruction file を変更する場合は、その影響も考慮して Human または独立 session で追加確認してください。
 
-`iro revise <pr-number>` は fresh Author で既存の delivery PR を更新します。PR は configured repository の `iro/issue-N` を head、default branch を base とし、GitHub native closing Issues が exactly `{N}`、その Issue / canonical branch の active delivery PR が target だけでなければなりません。PR creator identity や iro-created marker は要求せず、Human が canonical relation で作成した PR も対象です。
+`iro revise <pr-number>` は fresh Author で既存の delivery PR を更新します。PR は configured repository の `iro/issue-N` を head、default branch を base とし、GitHub native closing Issues が exactly `{N}`、その Issue / canonical branch の active delivery PR が target だけでなければなりません。PR creator identity や iro-created marker は要求せず、Human が canonical relation で作成した PR も対象です。`--model <model>` / `-m <model>` と `--reasoning-effort <effort>` は、それぞれ model と reasoning effort だけを独立して Author invocationへoverrideします。
 
 canonical local mapping / branch / worktree がすべて欠落していれば、validated remote PR HEAD から materialize できます。一貫して clean で local HEAD が remote PR HEAD と一致する state は再利用しますが、partial、dirty、divergent な state は自動修復しません。成功後は iro が新しい commit を同じ branch へ通常 push し、同じ PR を更新します。
 

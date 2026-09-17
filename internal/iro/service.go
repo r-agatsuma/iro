@@ -226,14 +226,18 @@ func (s *Service) Doctor(out io.Writer) error {
 }
 
 func (s *Service) Run(issueNumber int, out io.Writer) error {
-	return s.runWithModel(issueNumber, "", out, os.Stderr)
+	return s.runWithOptions(issueNumber, workerOptions{}, out, os.Stderr)
 }
 
 func (s *Service) run(issueNumber int, out, errOut io.Writer) error {
-	return s.runWithModel(issueNumber, "", out, errOut)
+	return s.runWithOptions(issueNumber, workerOptions{}, out, errOut)
 }
 
 func (s *Service) runWithModel(issueNumber int, model string, out, errOut io.Writer) error {
+	return s.runWithOptions(issueNumber, workerOptions{Model: model}, out, errOut)
+}
+
+func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, errOut io.Writer) error {
 	if issueNumber <= 0 {
 		return fmt.Errorf("issue number must be a positive decimal integer")
 	}
@@ -309,7 +313,7 @@ func (s *Service) runWithModel(issueNumber int, model string, out, errOut io.Wri
 	}
 
 	started := s.Now().UTC()
-	codexResult := s.runCodex(workspace, identity, target, model)
+	codexResult := s.runCodex(workspace, identity, target, options)
 	finished := s.Now().UTC()
 	if !commandSucceeded(codexResult) {
 		operationErr := fmt.Errorf("Codex exited with status %d (%v); worktree was kept for human inspection", codexResult.ExitCode, codexResult.Err)
@@ -484,11 +488,11 @@ Work only on the supplied Issue and avoid unrelated changes.
 Run relevant tests when feasible.
 Keep the final Author report focused on material changes actually made, validation actually performed and its results, and known limitations that materially affect correctness or the Issue acceptance criteria. Git lifecycle state, including whether changes are uncommitted or committed, push state, and PR state, is outside the Author report's responsibility because iro owns delivery after the Author exits. Do not enumerate optional or unrequested validation that was not performed. You may report an unperformed validation when its absence leaves an acceptance criterion or concrete correctness risk materially unresolved. Return the final work report in Japanese within this scope.`
 
-func (s *Service) runCodex(workspace string, identity RepositoryIdentity, target issue, model string) CommandResult {
+func (s *Service) runCodex(workspace string, identity RepositoryIdentity, target issue, options workerOptions) CommandResult {
 	payload := buildIssuePayload(identity, target)
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",
-		Args: withCodexModel([]string{
+		Args: withCodexOptions([]string{
 			"--cd", workspace,
 			"--sandbox", "workspace-write",
 			"--ask-for-approval", "never",
@@ -497,20 +501,29 @@ func (s *Service) runCodex(workspace string, identity RepositoryIdentity, target
 			"exec",
 			"--ephemeral",
 			"Implement the GitHub Issue supplied on stdin.",
-		}, model),
+		}, options),
 		Dir:   workspace,
 		Stdin: []byte(payload),
 	})
 }
 
 func withCodexModel(args []string, model string) []string {
-	if model == "" {
+	return withCodexOptions(args, workerOptions{Model: model})
+}
+
+func withCodexOptions(args []string, options workerOptions) []string {
+	if options.Model == "" && options.ReasoningEffort == "" {
 		return args
 	}
-	result := make([]string, 0, len(args)+2)
+	result := make([]string, 0, len(args)+4)
 	for _, arg := range args {
 		if arg == "exec" {
-			result = append(result, "--model", model)
+			if options.Model != "" {
+				result = append(result, "--model", options.Model)
+			}
+			if options.ReasoningEffort != "" {
+				result = append(result, "-c", "model_reasoning_effort="+strconv.Quote(options.ReasoningEffort))
+			}
 		}
 		result = append(result, arg)
 	}
