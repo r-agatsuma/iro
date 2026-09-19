@@ -330,12 +330,10 @@ func (s *Service) materializeReviseWorktree(root string, identity RepositoryIden
 func (s *Service) runRevisionAuthor(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, options workerOptions) CommandResult {
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",
-		Args: withCodexOptions([]string{
-			"--cd", workspace, "--sandbox", "workspace-write", "--ask-for-approval", "never",
-			"-c", "sandbox_workspace_write.network_access=true",
+		Args: withCodexOptions(append(codexWorkerArgs(workspace, options), []string{
 			"-c", "developer_instructions=" + strconv.Quote(reviseDeveloperInstructions),
 			"exec", "--ephemeral", "Revise the existing GitHub pull request using the Issue specification and PR feedback supplied on stdin.",
-		}, options),
+		}...), options),
 		Dir:   workspace,
 		Stdin: []byte(buildReviewPayload(identity, target, origin, configData, workflowData, context)),
 	})

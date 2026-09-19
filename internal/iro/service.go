@@ -492,19 +492,27 @@ func (s *Service) runCodex(workspace string, identity RepositoryIdentity, target
 	payload := buildIssuePayload(identity, target)
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",
-		Args: withCodexOptions([]string{
-			"--cd", workspace,
-			"--sandbox", "workspace-write",
-			"--ask-for-approval", "never",
-			"-c", "sandbox_workspace_write.network_access=true",
+		Args: withCodexOptions(append(codexWorkerArgs(workspace, options), []string{
 			"-c", "developer_instructions=" + strconv.Quote(developerInstructions),
 			"exec",
 			"--ephemeral",
 			"Implement the GitHub Issue supplied on stdin.",
-		}, options),
+		}...), options),
 		Dir:   workspace,
 		Stdin: []byte(payload),
 	})
+}
+
+func codexWorkerArgs(workspace string, options workerOptions) []string {
+	sandbox := "workspace-write"
+	if options.NoSandbox {
+		sandbox = "danger-full-access"
+	}
+	args := []string{"--cd", workspace, "--sandbox", sandbox, "--ask-for-approval", "never"}
+	if !options.NoSandbox {
+		args = append(args, "-c", "sandbox_workspace_write.network_access=true")
+	}
+	return args
 }
 
 func withCodexModel(args []string, model string) []string {

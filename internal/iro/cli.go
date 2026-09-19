@@ -9,7 +9,7 @@ import (
 // Execute dispatches the bootstrap MVP CLI commands and returns an exit status.
 func Execute(args []string, out, errOut io.Writer, service *Service) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--model <model> | -m <model>] [--reasoning-effort <effort>], review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>], revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>], land <pr-number>, or cleanup <issue-number>)")
+		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], land <pr-number>, or cleanup <issue-number>)")
 		return 2
 	}
 
@@ -114,12 +114,13 @@ func parseModelOverride(args []string, command, operand string) (string, error) 
 }
 
 type workerOptions struct {
+	NoSandbox       bool
 	Model           string
 	ReasoningEffort string
 }
 
 func parseWorkerOptions(args []string, command, operand string) (workerOptions, error) {
-	usage := fmt.Sprintf("usage: iro %s <%s> [--model <model> | -m <model>] [--reasoning-effort <effort>]", command, operand)
+	usage := fmt.Sprintf("usage: iro %s <%s> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]", command, operand)
 	if len(args) < 2 {
 		return workerOptions{}, fmt.Errorf("%s", usage)
 	}
@@ -129,6 +130,11 @@ func parseWorkerOptions(args []string, command, operand string) (workerOptions, 
 	reasoningEffortSet := false
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
+		case "--no-sandbox":
+			if options.NoSandbox {
+				return workerOptions{}, fmt.Errorf("no-sandbox option may be specified only once")
+			}
+			options.NoSandbox = true
 		case "--model", "-m":
 			if modelSet {
 				return workerOptions{}, fmt.Errorf("model option may be specified only once")
