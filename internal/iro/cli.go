@@ -9,7 +9,7 @@ import (
 // Execute dispatches the bootstrap MVP CLI commands and returns an exit status.
 func Execute(args []string, out, errOut io.Writer, service *Service) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], land <pr-number>, or cleanup <issue-number>)")
+		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], land <pr-number>, or cleanup [<issue-number>])")
 		return 2
 	}
 
@@ -87,8 +87,12 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 		}
 		err = service.Land(number, out)
 	case "cleanup":
+		if len(args) == 1 {
+			err = service.CleanupAll(out)
+			break
+		}
 		if len(args) != 2 {
-			fmt.Fprintln(errOut, "error: usage: iro cleanup <issue-number>")
+			fmt.Fprintln(errOut, "error: usage: iro cleanup [<issue-number>]")
 			return 2
 		}
 		number, parseErr := parseIssueNumber(args[1])

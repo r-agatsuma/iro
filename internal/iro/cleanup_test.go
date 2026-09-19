@@ -265,12 +265,16 @@ func TestCleanupKeepsMappingWhenBranchDeletionFails(t *testing.T) {
 }
 
 func TestExecuteCleanupRejectsInvalidUsage(t *testing.T) {
-	service := NewService(&fakeCommandRunner{}, NewOSFileSystem())
-	for _, args := range [][]string{{"cleanup"}, {"cleanup", "0"}, {"cleanup", "12x"}} {
+	runner := &fakeCommandRunner{}
+	service := NewService(runner, NewOSFileSystem())
+	for _, args := range [][]string{{"cleanup", "1", "2"}, {"cleanup", "--all"}, {"cleanup", "0"}, {"cleanup", "12x"}} {
 		var stderr strings.Builder
 		if status := Execute(args, io.Discard, &stderr, service); status != 2 {
 			t.Fatalf("Execute(%v) = %d, want usage status 2; stderr=%s", args, status, stderr.String())
 		}
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("invalid usage invoked commands: %v", runner.calls)
 	}
 }
 
@@ -319,4 +323,180 @@ func containsArg(args []string, want string) bool {
 func pathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func TestBulkCleanupMixedResourcesAndPartialFailure(t *testing.T) {
+	base := newCleanupFixture(t)
+	base.runner.lookups = map[string]error{"gh": errors.New("not installed")}
+	fixtures := map[int]*cleanupFixture{123: base}
+	for _, number := range []int{2, 3, 4, 5, 6} {
+		f := &cleanupFixture{service: base.service, root: base.root, identity: base.identity,
+			branch:    fmt.Sprintf("iro/issue-%d", number),
+			workspace: worktreePath(base.service.Dirs, base.identity, number),
+			mapping:   ownershipPath(base.service.Dirs, base.identity, number)}
+		if err := os.MkdirAll(f.workspace, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := base.service.writeOwnership(f.mapping, ownershipMapping{Version: 1, Repository: base.identity.Canonical(), IssueNumber: number, Branch: f.branch, Worktree: f.workspace}); err != nil {
+			t.Fatal(err)
+		}
+		fixtures[number] = f
+	}
+	if err := os.WriteFile(fixtures[4].mapping, []byte("invalid json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	other := RepositoryIdentity{Owner: "other", Name: "repo"}
+	otherMapping := ownershipPath(base.service.Dirs, other, 1)
+	if err := base.service.writeOwnership(otherMapping, ownershipMapping{Version: 99}); err != nil {
+		t.Fatal(err)
+	}
+	unowned := worktreePath(base.service.Dirs, base.identity, 7)
+	if err := os.MkdirAll(unowned, 0755); err != nil {
+		t.Fatal(err)
+	}
+	base.runner.fn = func(spec CommandSpec) CommandResult {
+		if strings.Join(spec.Args, " ") == "worktree list --porcelain" {
+			output := "worktree " + base.root + "\nbranch refs/heads/main\n\n"
+			for _, number := range []int{2, 3, 4, 5, 6, 123} {
+				f := fixtures[number]
+				if !f.worktreeGone {
+					output += "worktree " + f.workspace + "\nbranch refs/heads/" + f.branch + "\n\n"
+				}
+			}
+			return CommandResult{Stdout: output}
+		}
+		for number, f := range fixtures {
+			if spec.Dir == f.workspace && containsArg(spec.Args, "status") {
+				if number == 3 {
+					return CommandResult{Stdout: "?? human.txt\n"}
+				}
+				return CommandResult{}
+			}
+			if containsArg(spec.Args, f.workspace) || containsArg(spec.Args, f.branch) || containsArg(spec.Args, "refs/heads/"+f.branch) {
+				if number == 5 && containsArg(spec.Args, "-d") {
+					return CommandResult{ExitCode: 1}
+				}
+				if number == 6 && containsArg(spec.Args, "merge-base") {
+					return CommandResult{ExitCode: 1}
+				}
+				return f.run(spec)
+			}
+		}
+		return base.run(spec)
+	}
+	var output, stderr strings.Builder
+	if code := Execute([]string{"cleanup"}, &output, &stderr, base.service); code != 1 {
+		t.Fatalf("code=%d stderr=%s", code, &stderr)
+	}
+	previous := -1
+	for _, want := range []string{"Issue #2: cleaned", "Issue #3: skipped", "Issue #4: failed / attention required", "Issue #5: failed / attention required", "Issue #6: failed / attention required", "Issue #123: cleaned", "2 cleaned, 1 skipped, 3 failed"} {
+		index := strings.Index(output.String(), want)
+		if index <= previous {
+			t.Fatalf("missing or unordered %q in %s", want, &output)
+		}
+		previous = index
+	}
+	for _, number := range []int{2, 123} {
+		f := fixtures[number]
+		if f.mappingExists(t) || !f.worktreeGone || !f.branchGone {
+			t.Fatalf("Issue %d not cleaned", number)
+		}
+	}
+	for _, number := range []int{3, 4, 6} {
+		f := fixtures[number]
+		if !f.mappingExists(t) || f.worktreeGone || f.branchGone {
+			t.Fatalf("Issue %d changed", number)
+		}
+	}
+	if !fixtures[5].mappingExists(t) || !fixtures[5].worktreeGone || fixtures[5].branchGone {
+		t.Fatal("partial failure state not preserved")
+	}
+	if !pathExists(otherMapping) || !pathExists(unowned) {
+		t.Fatal("unrelated resources changed")
+	}
+	for _, call := range base.runner.calls {
+		if call.Name != "git" || containsArg(call.Args, "--force") || containsArg(call.Args, "-D") || containsArg(call.Args, "fetch") || containsArg(call.Args, "push") || containsArg(call.Args, "ls-remote") {
+			t.Fatalf("unexpected command: %+v", call)
+		}
+	}
+}
+
+func TestBulkCleanupSuccessExitStatus(t *testing.T) {
+	for _, state := range []string{"clean", "dirty", "empty"} {
+		t.Run(state, func(t *testing.T) {
+			f := newCleanupFixture(t)
+			if state == "empty" {
+				if err := os.Remove(f.mapping); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.runner.fn = func(spec CommandSpec) CommandResult {
+				if state == "dirty" && containsArg(spec.Args, "status") {
+					return CommandResult{Stdout: " M human.txt\n"}
+				}
+				return f.run(spec)
+			}
+			var output, stderr strings.Builder
+			if code := Execute([]string{"cleanup"}, &output, &stderr, f.service); code != 0 {
+				t.Fatalf("code=%d stderr=%s", code, &stderr)
+			}
+			if state != "clean" {
+				assertNoCleanupMutation(t, f.runner.calls)
+			}
+			if state == "dirty" && !f.mappingExists(t) {
+				t.Fatal("dirty mapping removed")
+			}
+			if state == "clean" && f.mappingExists(t) {
+				t.Fatal("clean mapping retained")
+			}
+		})
+	}
+}
+
+func TestBulkCleanupPreservesBrokenResources(t *testing.T) {
+	for _, state := range []string{"missing branch", "missing worktree", "invalid repository", "collision", "nonregular mapping"} {
+		t.Run(state, func(t *testing.T) {
+			f := newCleanupFixture(t)
+			switch state {
+			case "missing branch":
+				f.branchGone = true
+			case "missing worktree":
+				if err := os.RemoveAll(f.workspace); err != nil {
+					t.Fatal(err)
+				}
+			case "invalid repository":
+				mapping, _, err := f.service.readOwnership(f.mapping)
+				if err != nil {
+					t.Fatal(err)
+				}
+				mapping.Repository = "other/repo"
+				if err := os.Remove(f.mapping); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.service.writeOwnership(f.mapping, mapping); err != nil {
+					t.Fatal(err)
+				}
+			case "collision":
+				f.collision = filepath.Join(f.root, "collision")
+			case "nonregular mapping":
+				if err := os.Remove(f.mapping); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(f.mapping, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var output strings.Builder
+			if err := f.service.CleanupAll(&output); err == nil {
+				t.Fatal("broken resource reported success")
+			}
+			if !strings.Contains(output.String(), "Issue #123: failed / attention required") {
+				t.Fatalf("missing diagnostic: %s", &output)
+			}
+			assertNoCleanupMutation(t, f.runner.calls)
+			if !f.mappingExists(t) {
+				t.Fatal("broken mapping removed")
+			}
+		})
+	}
 }
