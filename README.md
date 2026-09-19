@@ -39,7 +39,7 @@ repository の source root で install します。install 先は設定済みの
    iro init
    ```
 
-2. 生成された `iro.toml` と `WORKFLOW.md` を Human が確認します。必要な内容を調整したうえで Git に記録するかどうかも Human が判断します。`iro init` は commit や push を行いません。
+2. 生成された `iro.toml` と `WORKFLOW.md` を Human が確認します。WORKFLOW は通常の SWE task にそのまま使える default です。必要な内容を調整したうえで Git に記録するかどうかも Human が判断します。`iro init` は commit や push を行いません。
 3. Executable Issue を作成します。GitHub UI や ChatGPT などで Issue の作成を支援できますが、特定のサービスは必須ではありません。
 4. Issue 番号を指定して実行します。
 
@@ -130,7 +130,7 @@ iro はこの同期 command を実行せず、local checkout や branch の状�
 
 Human は repository を直接操作する authority、仕様判断、command の target selection、最終 merge judgment を所有します。Human は canonical branch への commit / push や delivery PR 作成を直接行えます。
 
-iro が注入する core policy は operation / delivery lifecycle の integrity を担います。`AGENTS.md` は Codex 標準機構による project policy、`WORKFLOW.md` は repository / workload 固有の操作許可・禁止、接続方法、検証、報告要件の置き場所、Issue / PR は task data です。`iro init` の WORKFLOW scaffold を対象 workload に合わせて具体化してください。WORKFLOW は schema として parse されません。credential は環境変数や SSH agent 等の参照方法だけを記し、secret value を保存しないでください。
+iro が注入する core policy は operation / delivery lifecycle の integrity を担います。`AGENTS.md` は Codex 標準機構による project policy、`WORKFLOW.md` は repository / workload 固有の操作許可・禁止、接続方法、検証、報告要件の置き場所、Issue / PR は task data です。`iro init` の WORKFLOW は、Issue scope 内の編集、local build / test / static analysis と必要な通信を許可し、external workload mutation を許可しない SWE 向け default です。WORKFLOW は schema として parse されません。
 
 Run / Revise の Author は Issue scope 内の working tree file を編集できます。external workload operation は、Issue scope と WORKFLOW の明示的な許可の両方がある場合に実行できます。Issue の記載だけでは許可になりません。iro core は外部サービスの変更を一律禁止しませんが、Reviewer は WORKFLOW の許可にかかわらず read-only inspection / validation に限定され、implementation fix や external workload mutation を行いません。disposable build / test artifact は許容します。
 
@@ -141,3 +141,44 @@ worker は disposable で、この repository の Git metadata / index / refs / 
 runtime contract の詳細は [`docs/behavior.md`](docs/behavior.md)、現在構成の non-normative diagrams は [`docs/architecture.md`](docs/architecture.md) を参照してください。
 
 古い binary の確認や Run failure 後の保存・破棄・再実行は、[operator cookbook](docs/cookbook.md) を参照してください。
+
+## WORKFLOW customization
+
+infrastructure / operations workload では、Human が operation 開始前に WORKFLOW を対象環境に合わせて変更します。対象、許可する操作と範囲、禁止事項、接続先・tool、credential の参照方法、検証方法、報告要件を具体化してください。default の external workload mutation 禁止も、意図した対象と操作だけを許可する policy に置き換えます。Author が外部操作を実行するには、WORKFLOW の許可と Issue の要求の両方が必要です。
+
+例えば、OpenWrt router の network configuration を扱う repository では、次のように記述できます。`<user>`、接続先、検証対象は利用環境に合わせて Human が確定してください。
+
+```markdown
+## Workload / target
+
+管理対象の OpenWrt router（SSH host: openwrt）の network configuration。
+
+## Allowed operations
+
+- Author は対象 router の configuration を調査し、Issue が指定した network configuration を変更してよい。
+- 変更に必要な関連 service の restart と connectivity の検証を行ってよい。
+
+## Prohibited operations
+
+- 他の機器や Issue scope 外の設定を変更しない。
+- secret value を repository、report、log に保存・出力しない。
+
+## Access / tool usage
+
+- 接続には ssh <user>@openwrt を使用する。
+
+## Credential references
+
+- password は実行環境の $PW_OPENWRT を参照する。
+
+## Validation
+
+- 変更前後の対象設定を比較し、Issue の要求と一致することを確認する。
+- 変更後に管理接続と Issue で指定した通信経路の connectivity を確認する。
+
+## Reporting requirements
+
+- 変更内容、検証結果、未解決の問題を日本語で報告する。
+```
+
+credential は `$PW_OPENWRT`、既存の SSH agent、実行環境の認証設定などの参照方法だけを記し、secret value 自体を保存しないでください。iro は credential provisioning や environment injection を行いません。WORKFLOW を変更しても、Git / GitHub lifecycle は iro が所有し、Reviewer は read-only のままです。同じ operation 内で変更した policy を追加 authority に使うことはできません。

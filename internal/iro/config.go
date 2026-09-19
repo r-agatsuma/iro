@@ -9,41 +9,29 @@ import (
 
 const workflowTemplate = `# WORKFLOW.md
 
-この file は repository / workload 固有の operation policy を記述する場所です。
-Human が対象と許可範囲を具体化してください。見出しは記述例であり、iro が parse する必須 schema ではありません。
-
 ## Workload / target
 
-- 作業対象、目的、対象環境を記述してください。
+この repository の software development を対象とし、Issue の目的と acceptance criteria に沿って実装・検証する。
 
 ## Allowed operations
 
-- Author は Issue scope 内の working tree file を編集できます。
-- external workload operation を許可する場合は、対象と操作の種類・範囲を明示してください。
-- external workload operation は Issue scope とこの policy の明示的な許可の両方を必要とします。Issue だけでは許可になりません。
+- Author は Issue scope 内の source、test、configuration、documentation を編集してよい。
+- local toolchain と shell を使用した build、test、static analysis、および read-only Git inspection を行ってよい。
+- dependency resolution、local test に必要な通信、read-only な情報取得を行ってよい。認証が必要な場合は実行環境の既存設定を使用する。
 
 ## Prohibited operations
 
-- Issue scope 外の操作を行わないでください。
-- iro が所有する Git / GitHub delivery lifecycle を worker に許可することはできません。
-- Reviewer は read-only inspection / validation に限り、implementation fix や external workload mutation を行いません。
-
-## Access / tool usage
-
-- 利用可能な tool、接続方法、接続先、利用上の制約を記述してください。
-
-## Credential references
-
-- 既存の環境変数、SSH agent、実行環境の認証など、credential の参照方法だけを記述してください。
-- secret value 自体をこの file や repository に保存しないでください。
+- unrelated change や Issue scope 外の操作を行わない。
+- external service の設定変更、deployment 等の external workload mutation は許可しない。
+- secret value を repository、report、log に保存・出力しない。
 
 ## Validation
 
-- workload に適した検証方法、実行条件、成功基準を記述してください。
+repository の既存手順に従い、変更に関係する build、test、static analysis を実行して結果を確認する。
 
 ## Reporting requirements
 
-- 報告言語、必要な結果・検証 evidence・制約の記載方法を指定してください。
+実施した変更、実行した検証と成功 / 失敗、残っている制約を簡潔に報告する。
 `
 
 const configTemplate = `version = 1
