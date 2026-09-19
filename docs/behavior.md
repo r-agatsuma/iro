@@ -410,17 +410,17 @@ mapping が 0 件である場合、および `CLEAN` / `DIRTY` のみの場合�
 `iro status` は repository files、Git index、refs、branches、worktrees、ownership mappings、runtime logs、GitHub Issues、Codex state を変更してはならない。
 GitHub にアクセスしてはならず、Codex を起動してはならない。
 
-## 8. `iro cleanup <issue-number>`
+## 8. `iro cleanup [<issue-number>]`
 
 ### CLEANUP-001: explicit destructive intent
 
-`iro cleanup` は Human が Issue number を明示して呼び出した場合だけ実行する。
+`iro cleanup` は Human の明示的な呼び出しで実行する。Issue number 指定時の既存の single-Issue behavior は変更しない。operand 省略時は current repository の bulk cleanup とする。複数 operand は main side effect 前に usage error とする。`--all`、`--force`、interactive confirmation は追加しない。
 Issue close、PR merge、branch name、directory name、Issue / PR の semantic state を理由に cleanup を開始してはならない。
 `iro cleanup` は Issue の完了状態を判断する command ではない。
 
 ### CLEANUP-002: local-only ownership scope
 
-MVP の cleanup 対象は、指定 Issue の canonical ownership mapping によって ownership を検証できる次の local resource だけである。
+各 Issue の cleanup 対象は、その Issue の canonical ownership mapping によって ownership を検証できる次の local resource だけである。
 
 ```text
 verified iro-owned worktree
@@ -495,7 +495,7 @@ automatic repair、rollback、partial cleanup の success 扱いは実装しな�
 
 ### CLEANUP-006: success and failure state
 
-cleanup success は次の一状態だけである。
+各 Issue の cleanup success は次の一状態だけである。
 
 ```text
 worktree removed
@@ -512,6 +512,16 @@ mutation 後の failure では Human が resource state を理解できる diagn
 `iro cleanup` は local lifecycle operation であり、GitHub Issue / PR の lookup や semantic state inspection を行わない。
 `gh`、GitHub authentication、network access、Codex executable、Codex authentication、Codex invocation を要求・実行してはならない。
 remote branch、remote ref、Issue、PR、repository configuration、invoking checkout、other worktree、other branch、other ownership mapping、runtime logs を変更してはならない。
+
+### CLEANUP-008: bulk cleanup
+
+operand を省略した `iro cleanup` は invocation repository と `iro.toml` から current repository identity を解決し、その repository の canonical ownership mappings だけを Issue number の昇順で列挙・処理する。他 repository や unowned resource を対象にしない。
+
+各 mapping に CLEANUP-002〜007 の ownership / worktree / cleanliness / branch safety を適用する。CLEAN candidate も invoking HEAD の ancestor 検証などを省略しない。DIRTY は resource を変更せず skip する。BROKEN / invalid ownership は変更・repair せず attention required とする。
+
+Issue ごとに独立して処理し、failure 後も可能な範囲で残りを続行する。成功済みの cleanup を rollback しない。automatic repair / retry / force deletion を行わない。remote branch / Issue / PR の確認・変更は行わず、GitHub CLI / authentication を要求しない。
+
+output は各 Issue number と理由、および cleaned / skipped / failed・attention required の summary を示す。BROKEN / invalid ownership または CLEAN candidate の cleanup failure が1件でもあれば最終 exit status は non-zero とする。すべて成功、DIRTY skip のみ、対象 mapping が0件の場合は zero とする。
 
 ## 9. `iro run <issue-number>`
 

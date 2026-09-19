@@ -1,6 +1,7 @@
 package iro
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -34,6 +35,10 @@ func (s *Service) Cleanup(issueNumber int, out io.Writer) error {
 		return cleanupPreconditionError(issueNumber, err)
 	}
 
+	return s.cleanupIssue(root, identity, issueNumber, out)
+}
+
+func (s *Service) cleanupIssue(root string, identity RepositoryIdentity, issueNumber int, out io.Writer) error {
 	target, err := s.validateCleanupTarget(root, identity, issueNumber)
 	if err != nil {
 		return cleanupPreconditionError(issueNumber, err)
@@ -158,7 +163,7 @@ func (s *Service) validateCleanupTarget(root string, identity RepositoryIdentity
 		return cleanupTarget{}, fmt.Errorf("could not inspect cleanup target worktree status for %s", target.worktree)
 	}
 	if strings.TrimSpace(result.Stdout) != "" {
-		return cleanupTarget{}, fmt.Errorf("cleanup target worktree %s is dirty; tracked or non-ignored untracked files are present", target.worktree)
+		return cleanupTarget{}, &dirtyCleanupTarget{worktree: target.worktree}
 	}
 
 	result = s.Runner.Run(CommandSpec{
@@ -240,9 +245,67 @@ func cleanupPreconditionError(issueNumber int, cause error) error {
 	case strings.Contains(causeText, "ownership mapping"):
 		remediation = fmt.Sprintf("inspect or restore the canonical ownership mapping without guessing ownership, then retry `iro cleanup %d`", issueNumber)
 	}
-	return fmt.Errorf("cleanup of Issue #%d rejected: %s\nNo resources were changed.\nRemediation: %s", issueNumber, cause, remediation)
+	return fmt.Errorf("cleanup of Issue #%d rejected: %w\nNo resources were changed.\nRemediation: %s", issueNumber, cause, remediation)
 }
 
 func cleanupMutationError(issueNumber int, cause error) error {
 	return fmt.Errorf("cleanup of Issue #%d failed after local mutation: %s\nOwnership mapping was retained. Inspect the current worktree, branch, and mapping state before taking any manual action", issueNumber, cause)
+}
+
+// dirtyCleanupTarget distinguishes a safe bulk skip from failures requiring attention.
+type dirtyCleanupTarget struct{ worktree string }
+
+func (e *dirtyCleanupTarget) Error() string {
+	return fmt.Sprintf("cleanup target worktree %s is dirty; tracked or non-ignored untracked files are present", e.worktree)
+}
+
+// CleanupAll cleans safely removable owned resources in the configured repository.
+func (s *Service) CleanupAll(out io.Writer) error {
+	if err := s.requireGit(); err != nil {
+		return err
+	}
+	root, err := s.gitRoot()
+	if err != nil {
+		return err
+	}
+	config, err := s.loadInitializedConfig(root)
+	if err != nil {
+		return err
+	}
+	identity, err := s.repositoryIdentity(root, config)
+	if err != nil {
+		return err
+	}
+	candidates, err := s.ownershipCandidates(identity)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Repository: %s\n\n", identity.String())
+	cleaned, skipped, failed := 0, 0, 0
+	for _, candidate := range candidates {
+		err := candidate.readErr
+		if err == nil {
+			err = validateOwnershipMapping(candidate.mapping, candidate.issueHint, identity, s.Dirs)
+		}
+		if err == nil {
+			err = s.cleanupIssue(root, identity, candidate.issueHint, out)
+		}
+		var dirty *dirtyCleanupTarget
+		switch {
+		case err == nil:
+			cleaned++
+			fmt.Fprintf(out, "Issue #%d: cleaned\n", candidate.issueHint)
+		case errors.As(err, &dirty):
+			skipped++
+			fmt.Fprintf(out, "Issue #%d: skipped: %s\n", candidate.issueHint, dirty)
+		default:
+			failed++
+			fmt.Fprintf(out, "Issue #%d: failed / attention required: %s\n", candidate.issueHint, err)
+		}
+	}
+	fmt.Fprintf(out, "Cleanup summary: %d cleaned, %d skipped, %d failed / attention required.\n", cleaned, skipped, failed)
+	if failed > 0 {
+		return fmt.Errorf("cleanup requires attention for %d Issue resource(s)", failed)
+	}
+	return nil
 }

@@ -51,7 +51,7 @@ repository の source root で install します。install 先は設定済みの
 5. 必要な場合だけ `iro review <pr-number>` で advisory review を実行します。finding があれば、`iro revise <pr-number>` で修正してから review を繰り返せます。Review / Revise は optional です。
 6. Human が PR の内容と merge を判断し、その明示的な authorization として `iro land <pr-number>` を実行します。
 7. 次の `iro run` の前に必要なら local default branch を remote と同期します（例: `git pull`）。この同期は `iro` が自動実行しません。
-8. 不要になった Issue worktree と local branch は、必要な場合だけ `iro cleanup <issue-number>` で削除します。
+8. 不要になった Issue worktree と local branch は、必要な場合だけ `iro cleanup <issue-number>` で個別に削除するか、`iro cleanup` で現在の repository の安全に削除できる resource をまとめて削除します。
 
 失敗時の保存・破棄・再実行などの recovery recipe は [operator cookbook](docs/cookbook.md) を参照してください。現在の runtime contract は [`docs/behavior.md`](docs/behavior.md) に定義されています。
 
@@ -68,7 +68,7 @@ iro review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effor
 iro revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
 iro land <pr-number>
 iro status
-iro cleanup <issue-number>
+iro cleanup [<issue-number>]
 ```
 
 `iro run`、`iro review`、`iro revise` は、番号 operand の後ろに worker configuration flag を指定できます。`--model <model>` または `-m <model>` は model だけを、`--reasoning-effort <effort>` は reasoning effort だけを operation 単位で override します。両方を指定する場合、flag の順序は問いません。各項目を指定しない場合は、その項目の選択をCodexの configuration / default に委譲します。reasoning effort は non-empty string として Codex へ渡し、iro 自身は model / effort catalog、compatibility lookup、fallback を行いません。iro は model と reasoning effort を結合した synthetic model name（例: `gpt-5.6-luna-xhigh`）を生成しません。`iro.toml` に worker configuration default を保持しません。`iro review` で指定した requested model / reasoning effort は runtime が実際に解決した configuration とは別概念であり、resolved identity を取得できない現在の Review provenance は従来どおり unknown のままです。
@@ -124,7 +124,7 @@ iro はこの同期 command を実行せず、local checkout や branch の状�
 
 ### Cleanup
 
-`iro cleanup <issue-number>` は Land とは独立した local resource operation です。Human が明示した Issue について、ownership mapping で所有を検証できる clean な canonical worktree と local branch だけを安全に削除し、最後に mapping を削除します。GitHub Issue / PR や remote branch は確認・変更しません。
+`iro cleanup <issue-number>` は Land とは独立した local resource operation です。Human が明示した Issue について、ownership mapping で所有を検証できる clean な canonical worktree と local branch だけを安全に削除し、最後に mapping を削除します。GitHub Issue / PR や remote branch は確認・変更しません。operand を省略した `iro cleanup` は現在の repository の mapping を Issue 番号順に処理します。DIRTY は変更せず skip し、BROKEN や削除失敗があれば残りを処理した後に non-zero を返します。
 
 ## Responsibility boundary
 
