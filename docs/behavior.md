@@ -520,12 +520,13 @@ remote branch、remote ref、Issue、PR、repository configuration、invoking ch
 ```text
 command                 := "iro run " issue-number [worker-option...]
 issue-number            := positive-decimal-integer
-worker-option           := model-option | reasoning-effort-option
+worker-option           := model-option | reasoning-effort-option | no-sandbox-option
 model-option            := ("--model" | "-m") non-empty-string
 reasoning-effort-option := "--reasoning-effort" non-empty-string
+no-sandbox-option       := "--no-sandbox"
 ```
 
-worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。省略した項目は Codex configuration / default selection に委譲する。model と reasoning effort は synthetic model name に結合せず、reasoning effort は modelごとの catalog なしに指定値を requested configuration としてそのまま Codex に渡す。空値、重複指定、unsupported extra arguments は usage error とし、main side effect 前に reject する。unsupported model / effort の fallback は行わず、Codex 側の reject は通常の worker failure とする。MVP では Issue URL、owner/repo#number、複数 Issue を受け付けない。
+worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。省略した model / reasoning effort は Codex configuration / default selection に委譲する。model と reasoning effort は synthetic model name に結合せず、reasoning effort は modelごとの catalog なしに指定値を requested configuration としてそのまま Codex に渡す。空値、重複指定、unsupported extra arguments は usage error とし、main side effect 前に reject する。unsupported model / effort の fallback は行わず、Codex 側の reject は通常の worker failure とする。MVP では Issue URL、owner/repo#number、複数 Issue を受け付けない。
 
 ### RUN-002: source repository
 
@@ -721,7 +722,7 @@ implementation は quoting/escaping を安全に行わなければならない�
 
 Codex は non-interactive `codex exec` で起動しなければならない。
 
-MVP の normative settings は次とする。
+`--no-sandbox` 未指定時の normative settings は従来どおり次とする。
 
 ```text
 working directory     = Issue worktree
@@ -750,11 +751,15 @@ model-option が指定された場合は `exec` の前に `--model <model>` を�
 
 Issue payload は stdin で追加 context として渡してよい。payload encoding は deterministic で、Issue body と各 comment body を lossless に保持しなければならない。Issue body を先に、その後に `createdAt` 昇順（同一時刻は immutable identifier 昇順）の comments を配置しなければならない。
 
-`danger-full-access`、`--yolo`、deprecated `--full-auto` を使用してはならない。
+`run` / `review` / `revise` の `--no-sandbox` は Human explicit な operation-local authorization とする。指定された invocation に限り `--sandbox danger-full-access` を使用し、`--ask-for-approval never` は維持し、`-c sandbox_workspace_write.network_access=true` は渡さない。model / reasoning effort override と併用でき、operand 後の flag 順序は意味を持たない。`iro.toml` に sandbox default を保持せず、`land` はこの flag を受け付けない。
+
+この override は Codex が追加する sandbox boundary を無効化する。OS user permission、container / VM、EDR、firewall 等の外側の security boundary は解除しない。また Codex のすべての内部 policy / safety mechanism を無効化する意味ではない。sandbox failure からの automatic fallback や環境に応じた自動選択は行わない。`--yolo`、deprecated `--full-auto` は使用してはならない。
 
 ### RUN-014: Codex Git protection
 
-MVP は `workspace-write` sandbox の protected `.git` behavior と RUN-012 の developer instruction を組み合わせ、Codex が Git metadata を変更しない設計とする。
+通常実行では `workspace-write` sandbox の protected `.git` behavior と RUN-012 の developer instruction を組み合わせ、Codex が Git metadata を変更しない設計とする。
+
+`--no-sandbox` 時は protected `.git` の技術的な保護を利用できないが、RUN-012 の Git / tracker / remote mutation に関する worker instructions は変わらない。
 
 Codex が Git state-changing command を試みて失敗しても、`iro` は sandbox を緩めて再実行してはならない。
 
@@ -828,12 +833,13 @@ Issue comment の結果を local run log へ反映する際は、一時ファイ
 ```text
 command                 := "iro review " pr-number [worker-option...]
 pr-number               := positive-decimal-integer
-worker-option           := model-option | reasoning-effort-option
+worker-option           := model-option | reasoning-effort-option | no-sandbox-option
 model-option            := ("--model" | "-m") non-empty-string
 reasoning-effort-option := "--reasoning-effort" non-empty-string
+no-sandbox-option       := "--no-sandbox"
 ```
 
-worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。空値、重複指定、unsupported extra arguments は usage error とし、Reviewer 起動前に reject する。省略した項目は Codex configuration / default selection に委譲し、unsupported effort の fallback は行わない。PR URL、owner/repo#number、複数 PR を受け付けない。
+worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。空値、重複指定、unsupported extra arguments は usage error とし、Reviewer 起動前に reject する。省略した model / reasoning effort は Codex configuration / default selection に委譲し、unsupported effort の fallback は行わない。PR URL、owner/repo#number、複数 PR を受け付けない。
 
 ### REVIEW-002: local repository context
 
@@ -893,7 +899,7 @@ workspace は Review 専用の disposable resource であり、canonical Issue b
 
 ### REVIEW-006: Reviewer worker
 
-Reviewer は Author session を resume せず、fresh ephemeral `codex exec` とする。working directory は REVIEW-005 の disposable workspace、sandbox は `workspace-write`、approval policy は `never`、command network は enabled とする。Reviewer が test 等で disposable な build artifact を生成しても workspace cleanup で破棄し、persistent implementation state として扱わない。
+Reviewer は Author session を resume せず、fresh ephemeral `codex exec` とする。working directory は REVIEW-005 の disposable workspace、sandbox は既定で `workspace-write`、approval policy は `never`、command network は enabled とする。`--no-sandbox` 時は RUN-013 と同じ override を適用する。Reviewer が test 等で disposable な build artifact を生成しても workspace cleanup で破棄し、persistent implementation state として扱わない。
 
 model-option が指定された場合は Reviewer の Codex invocation の `exec` 前に `--model <model>` を渡す。reasoning-effort-option が指定された場合は同じ invocation の `exec` 前に `-c 'model_reasoning_effort="<effort>"'` と等価な configuration override を渡す。指定されない項目の override は追加しない。Codex が requested model / effort を reject した場合は Reviewer failure とする。requested effort は Review provenance の resolved metadata ではない。
 
@@ -960,12 +966,13 @@ Review は target source branch、persistent Issue worktree、local ownership ma
 ```text
 command                 := "iro revise " pr-number [worker-option...]
 pr-number               := positive-decimal-integer
-worker-option           := model-option | reasoning-effort-option
+worker-option           := model-option | reasoning-effort-option | no-sandbox-option
 model-option            := ("--model" | "-m") non-empty-string
 reasoning-effort-option := "--reasoning-effort" non-empty-string
+no-sandbox-option       := "--no-sandbox"
 ```
 
-worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。空値、重複指定、unsupported extra arguments は usage error とし、Author 起動前に reject する。省略した項目は Codex configuration / default selection に委譲し、unsupported effort の fallback は行わない。PR URL、owner/repo#number、複数 PR を受け付けない。PR creator identity、iro-created marker、delivery hint、hidden metadata、provenance record は eligibility に使用しない。Human-created PR も同じ条件で扱い、adoption state は導入しない。
+worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。空値、重複指定、unsupported extra arguments は usage error とし、Author 起動前に reject する。省略した model / reasoning effort は Codex configuration / default selection に委譲し、unsupported effort の fallback は行わない。PR URL、owner/repo#number、複数 PR を受け付けない。PR creator identity、iro-created marker、delivery hint、hidden metadata、provenance record は eligibility に使用しない。Human-created PR も同じ条件で扱い、adoption state は導入しない。
 
 ### REVISE-002: preconditions and delivery relation
 
@@ -1025,7 +1032,7 @@ materialize 後も remote relation と local ownership / branch / HEAD / cleanli
 
 ### REVISE-005: fresh Author input and authority
 
-Author は fresh ephemeral `codex exec` とし、session を resume しない。working directory は canonical Issue worktree、sandbox は `workspace-write`、approval policy は `never`、command network は enabled とする。model-option が指定された場合は Author の Codex invocation の `exec` 前に `--model <model>` を渡し、reasoning-effort-option が指定された場合は `-c 'model_reasoning_effort="<effort>"'` と等価な configuration override を渡す。指定されない項目の override は追加しない。model 名と effort を結合した synthetic model name は生成せず、Codex が requested model / effort を reject した場合は Author failure とする。
+Author は fresh ephemeral `codex exec` とし、session を resume しない。working directory は canonical Issue worktree、sandbox は既定で `workspace-write`、approval policy は `never`、command network は enabled とする。`--no-sandbox` 時は RUN-013 と同じ override を適用する。model-option が指定された場合は Author の Codex invocation の `exec` 前に `--model <model>` を渡し、reasoning-effort-option が指定された場合は `-c 'model_reasoning_effort="<effort>"'` と等価な configuration override を渡す。指定されない項目の override は追加しない。model 名と effort を結合した synthetic model name は生成せず、Codex が requested model / effort を reject した場合は Author failure とする。
 
 Author に以下を渡す。
 

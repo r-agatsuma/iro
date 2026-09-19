@@ -63,15 +63,17 @@ repository の source root で install します。install 先は設定済みの
 iro version
 iro init
 iro doctor
-iro run <issue-number> [--model <model> | -m <model>] [--reasoning-effort <effort>]
-iro review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>]
-iro revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>]
+iro run <issue-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
+iro review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
+iro revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
 iro land <pr-number>
 iro status
 iro cleanup <issue-number>
 ```
 
 `iro run`、`iro review`、`iro revise` は、番号 operand の後ろに worker configuration flag を指定できます。`--model <model>` または `-m <model>` は model だけを、`--reasoning-effort <effort>` は reasoning effort だけを operation 単位で override します。両方を指定する場合、flag の順序は問いません。各項目を指定しない場合は、その項目の選択をCodexの configuration / default に委譲します。reasoning effort は non-empty string として Codex へ渡し、iro 自身は model / effort catalog、compatibility lookup、fallback を行いません。iro は model と reasoning effort を結合した synthetic model name（例: `gpt-5.6-luna-xhigh`）を生成しません。`iro.toml` に worker configuration default を保持しません。`iro review` で指定した requested model / reasoning effort は runtime が実際に解決した configuration とは別概念であり、resolved identity を取得できない現在の Review provenance は従来どおり unknown のままです。
+
+通常、worker は sandbox を使用します。container / VM 等で外側の isolation を用意している場合や sandbox が実行環境と干渉する場合に限り、Human が `iro run 123 --no-sandbox` のように明示して、その実行だけ Codex の sandbox を無効化できます。workspace 外や保護された Git metadata への書き込み制限も外れるため、実行環境の隔離と権限を確認して使用してください。OS の権限、container / VM、EDR、firewall 等の外側の境界や、Codex のすべての内部 policy / safety mechanism を解除するものではありません。`--model` / `-m`、`--reasoning-effort` と順序に依存せず併用でき、永続的な設定や失敗時の自動切り替えは行いません。`land` は対象外です。
 
 `iro init` は repository root に `iro.toml` と `WORKFLOW.md` を新規生成する local scaffold operation です。既存 file を上書きせず、commit や push も行いません。生成した file を Git へ記録するかどうかは Human が判断します。
 

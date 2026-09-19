@@ -408,16 +408,12 @@ func (s *Service) runReviewer(workspace string, identity RepositoryIdentity, tar
 	instructions := fmt.Sprintf("%s\n\nTrusted review provenance (supplied by iro):\nModel: %s\nBase branch: %s\nBase OID: %s\nReviewed HEAD OID: %s\n", reviewerDeveloperInstructions, reviewerModelIdentity, target.BaseRefName, target.BaseRefOID, target.HeadRefOID)
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",
-		Args: withCodexOptions([]string{
-			"--cd", workspace,
-			"--sandbox", "workspace-write",
-			"--ask-for-approval", "never",
-			"-c", "sandbox_workspace_write.network_access=true",
+		Args: withCodexOptions(append(codexWorkerArgs(workspace, options), []string{
 			"-c", "developer_instructions=" + strconv.Quote(instructions),
 			"exec",
 			"--ephemeral",
 			"Independently review the GitHub pull request supplied on stdin.",
-		}, options),
+		}...), options),
 		Dir:   workspace,
 		Stdin: []byte(payload),
 	})
