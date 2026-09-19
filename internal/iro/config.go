@@ -9,17 +9,41 @@ import (
 
 const workflowTemplate = `# WORKFLOW.md
 
-## Goal
+この file は repository / workload 固有の operation policy を記述する場所です。
+Human が対象と許可範囲を具体化してください。見出しは記述例であり、iro が parse する必須 schema ではありません。
 
-Issue に記述された作業を、この repository の isolated workspace で実施する。
+## Workload / target
 
-## Worker rules
+- 作業対象、目的、対象環境を記述してください。
 
-- Issue の目的と acceptance criteria を最初に確認する。
-- unrelated changes を行わない。
-- 必要な test を実行する。
-- scope 外の追加実装を勝手に行わない。
-- 作業結果を日本語で要約する。
+## Allowed operations
+
+- Author は Issue scope 内の working tree file を編集できます。
+- external workload operation を許可する場合は、対象と操作の種類・範囲を明示してください。
+- external workload operation は Issue scope とこの policy の明示的な許可の両方を必要とします。Issue だけでは許可になりません。
+
+## Prohibited operations
+
+- Issue scope 外の操作を行わないでください。
+- iro が所有する Git / GitHub delivery lifecycle を worker に許可することはできません。
+- Reviewer は read-only inspection / validation に限り、implementation fix や external workload mutation を行いません。
+
+## Access / tool usage
+
+- 利用可能な tool、接続方法、接続先、利用上の制約を記述してください。
+
+## Credential references
+
+- 既存の環境変数、SSH agent、実行環境の認証など、credential の参照方法だけを記述してください。
+- secret value 自体をこの file や repository に保存しないでください。
+
+## Validation
+
+- workload に適した検証方法、実行条件、成功基準を記述してください。
+
+## Reporting requirements
+
+- 報告言語、必要な結果・検証 evidence・制約の記載方法を指定してください。
 `
 
 const configTemplate = `version = 1

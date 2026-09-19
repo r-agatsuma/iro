@@ -245,7 +245,7 @@ func TestReviewUsesRemotePRInDisposableWorkspaceAndForwardsOpaqueOutput(t *testi
 		"feedback",
 		"inline feedback",
 		"SUCCESS",
-		workflowTemplate,
+		configTemplate,
 	} {
 		if !strings.Contains(string(reviewerCall.Stdin), want) {
 			t.Errorf("Reviewer payload does not contain %q", want)

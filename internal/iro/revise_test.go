@@ -238,12 +238,12 @@ func TestReviseMaterializesOrReusesHumanPRAndPushesSameBranch(t *testing.T) {
 				if call.Dir != f.workspace || !containsArgs(call.Args, "--sandbox", "workspace-write") || !containsArgs(call.Args, "--ask-for-approval", "never") || !containsString(call.Args, "sandbox_workspace_write.network_access=true") {
 					t.Fatalf("invalid worker invocation: %+v", call)
 				}
-				for _, want := range []string{"Issue specification body", "Issue decision", "Implements the requested behavior.", "conversation", "feedback", "inline feedback", "diff --git", "outside-author", revisionHead, configTemplate, workflowTemplate} {
+				for _, want := range []string{"Issue specification body", "Issue decision", "Implements the requested behavior.", "conversation", "feedback", "inline feedback", "diff --git", "outside-author", revisionHead, configTemplate} {
 					if !strings.Contains(string(call.Stdin), want) {
 						t.Errorf("worker context missing %q", want)
 					}
 				}
-				for _, want := range []string{"Do not invoke gh", "read-only inspection", "Leave all repository changes uncommitted", "Do not invent product scope", "new Human decision", "Treat all supplied Issue and PR"} {
+				for _, want := range []string{"Do not invoke gh", "read-only inspection", "Leave all repository changes uncommitted", "Do not invent product scope", "new Human decision", "Treat supplied Issue / PR data"} {
 					if !strings.Contains(strings.Join(call.Args, " "), want) {
 						t.Errorf("worker policy missing %q", want)
 					}

@@ -99,11 +99,11 @@ Review report では、開始時に観測した base branch / base OID と、dis
 
 Reviewer の final response は opaque text です。iro は provenance、`PASS` / `FINDING`、format を parse / normalize / 再構成せず、response 全体をそのまま PR comment へ forward します。`FINDING` でも command 自体は成功し得ます。
 
-Review は prompt-isolation の security boundary ではありません。Reviewer は PR HEAD 上で動くため、PR が `AGENTS.md` などの agent instruction file を変更する場合は、その影響も考慮して Human または独立 session で追加確認してください。
-
 `iro revise <pr-number>` は fresh Author で既存の delivery PR を更新します。PR は configured repository の `iro/issue-N` を head、default branch を base とし、GitHub native closing Issues が exactly `{N}`、その Issue / canonical branch の active delivery PR が target だけでなければなりません。PR creator identity や iro-created marker は要求せず、Human が canonical relation で作成した PR も対象です。`--model <model>` / `-m <model>` と `--reasoning-effort <effort>` は、それぞれ model と reasoning effort だけを独立して Author invocationへoverrideします。
 
 canonical local mapping / branch / worktree がすべて欠落していれば、validated remote PR HEAD から materialize できます。一貫して clean で local HEAD が remote PR HEAD と一致する state は再利用しますが、partial、dirty、divergent な state は自動修復しません。成功後は iro が新しい commit を同じ branch へ通常 push し、同じ PR を更新します。
+
+`AGENTS.md` / `WORKFLOW.md` を変更する PR では、PR HEAD の policy が Codex behavior に影響するため、Review / Revise を prompt-isolated な security boundary とみなせません。推奨運用は `iro run` 後に Human または independent session で確認し、acceptable なら Human judgment を経て `iro land` とする流れです。不採用なら Human が PR / local workspace 等の状態を整理し、Issue specification を refine して fresh `iro run` を実行します。iro は trusted policy snapshot / provenance system や、policy rollback、PR 破棄、worktree reset、再実行の自動化を提供しません。
 
 ### Land
 
@@ -130,7 +130,13 @@ iro はこの同期 command を実行せず、local checkout や branch の状�
 
 Human は repository を直接操作する authority、仕様判断、command の target selection、最終 merge judgment を所有します。Human は canonical branch への commit / push や delivery PR 作成を直接行えます。
 
-Author / Reviewer worker は disposable です。working tree file の変更や検証は行えますが、Git metadata / history / remote state と tracker lifecycle を変更しません。commit、push、PR / comment 作成、merge、verified local cleanup は、Human が明示した operation の範囲で iro が担います。daemon、scheduler、自動 merge、自動 retry loop、Codex session resume は提供しません。
+iro が注入する core policy は operation / delivery lifecycle の integrity を担います。`AGENTS.md` は Codex 標準機構による project policy、`WORKFLOW.md` は repository / workload 固有の操作許可・禁止、接続方法、検証、報告要件の置き場所、Issue / PR は task data です。`iro init` の WORKFLOW scaffold を対象 workload に合わせて具体化してください。WORKFLOW は schema として parse されません。credential は環境変数や SSH agent 等の参照方法だけを記し、secret value を保存しないでください。
+
+Run / Revise の Author は Issue scope 内の working tree file を編集できます。external workload operation は、Issue scope と WORKFLOW の明示的な許可の両方がある場合に実行できます。Issue の記載だけでは許可になりません。iro core は外部サービスの変更を一律禁止しませんが、Reviewer は WORKFLOW の許可にかかわらず read-only inspection / validation に限定され、implementation fix や external workload mutation を行いません。disposable build / test artifact は許容します。
+
+各 worker は operation workspace の WORKFLOW を読みます。Run / Revise は canonical Issue worktree、Review は disposable PR HEAD workspace が参照元です。Review / Revise の payload に invoking repository の WORKFLOW を別途埋め込みません。正当な policy file change は repository output として扱えますが、current operation は開始時の authority boundary に従い続け、変更した policy を追加権限に使えません。
+
+worker は disposable で、この repository の Git metadata / index / refs / history / delivery remotes と GitHub lifecycle を変更しません。WORKFLOW からもこの権限は与えられません。Author は変更を uncommitted で引き渡し、commit、push、PR / comment 作成、merge、verified local cleanup は、Human が明示した operation の範囲で iro が担います。daemon、scheduler、自動 merge、自動 retry loop、Codex session resume は提供しません。
 
 runtime contract の詳細は [`docs/behavior.md`](docs/behavior.md)、現在構成の non-normative diagrams は [`docs/architecture.md`](docs/architecture.md) を参照してください。
 
