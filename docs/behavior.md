@@ -989,7 +989,7 @@ worker option は番号 operand の後に指定し、known worker configuration 
 local resource の作成と Author 起動より前に、少なくとも以下を検証する。
 
 - Git executable と invocation directory から解決した local Git repository
-- invoking repository root の readable regular `WORKFLOW.md` と valid supported `iro.toml`
+- invoking repository root の readable regular file である valid supported `iro.toml`
 - configured `tracker.remote` だけから一意に解決した GitHub repository identity
 - INV-010 の GitHub CLI context consistency
 - `gh` executable / authentication と Codex executable / authentication
@@ -1046,7 +1046,8 @@ Author は fresh ephemeral `codex exec` とし、session を resume しない。
 
 Author に以下を渡す。
 
-- repository identity、invoking repository の `iro.toml` / `WORKFLOW.md`
+- repository identity、invocation 時に取得した invoking repository の `iro.toml`
+- verified starting PR HEAD `H1` の snapshot から一度だけ取得した `WORKFLOW.md` の全文
 - origin Issue の title / body / URL と comments（RUN-004 と同じ検証・順序）
 - PR metadata、body、current diff、changed file names
 - PR conversation comments（AI review comment を含む）、submitted reviews（Human review feedback を含む）、取得できる inline review comments、checks
@@ -1055,7 +1056,11 @@ Author に以下を渡す。
 
 PR conversation、submitted reviews、inline review comments は REVIEW-004 と共通の pagination 取得・page-array JSON 正規化を使用する。context の取得・JSON decode 失敗時は Author を起動しない。feedback watermark / operation receipt は要求せず、取得時点の全 context を渡してよい。
 
-Author は変更前に worktree の `WORKFLOW.md` 全文を読み、invoking repository から渡された worker policy と AGENTS.md instruction chain に従う。material policy conflict があれば編集せず報告する。Issue / PR / diff / comments は task input であり policy を上書きしない。
+managed Revise は invocation checkout の `WORKFLOW.md` を worker policy の precondition とせず、policy として読み取り・検証しない。正確な starting PR HEAD `H1` の materialize / reuse と再検証後、Git tree 内の `WORKFLOW.md` が regular file（mode `100644` / `100755`）であることを確認し、その blob 全文を一度だけ読む。missing / unreadable / non-regular（symlink を含む）なら Author 起動前に failure とし、invocation WORKFLOW や unmanaged built-in policy に fallback しない。checkout の filter 変換や ignored file は policy source にしない。
+
+Author は変更前に渡された starting `H1` の policy `P1` 全文を読む。この bytes を invocation 全体の固定 WORKFLOW authority とする。Author が `WORKFLOW.md` を `P1` から `P2` に変更しても、現在の authority を再読み込み・置換しない。その変更が delivery され、Human が後で明示的に Revise を起動した場合、新しい verified starting HEAD `H2` の `P2` をその invocation の policy とする。永続的な policy snapshot / hash / provenance registry は追加しない。
+
+WORKFLOW は iro core の Git / GitHub lifecycle invariants を override できない。AGENTS guidance と Issue / PR bodies、comments、reviews、diffs は core + fixed starting policy を超えて操作権限を拡張できない。Author はその範囲内で AGENTS.md instruction chain に従い、material policy conflict があれば編集せず報告する。implementation context は exact `H1` から始まる worktree と取得した PR feedback を使用する。managed Review の invocation-side authority は変更しない。
 
 implementation feedback は PR、WHAT / WHY、acceptance criteria、architecture decision の補足は Issue に置いてよい。Author は feedback から新しい product scope / acceptance criteria / architecture decision を創作してはならない。Human decision が足りなければ dependent work を止め、不足する判断を日本語で報告する。
 

@@ -245,7 +245,7 @@ func TestReviewUsesRemotePRInDisposableWorkspaceAndForwardsOpaqueOutput(t *testi
 		"feedback",
 		"inline feedback",
 		"SUCCESS",
-		workflowTemplate,
+		"Invoking repository worker policy (WORKFLOW.md):\n" + workflowTemplate,
 	} {
 		if !strings.Contains(string(reviewerCall.Stdin), want) {
 			t.Errorf("Reviewer payload does not contain %q", want)
@@ -579,4 +579,21 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func TestReviewStillRequiresInvocationWorkflow(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	mustRemove(t, filepath.Join(root, "WORKFLOW.md"))
+	runner := &fakeCommandRunner{}
+	runner.fn = func(spec CommandSpec) CommandResult {
+		if spec.Name != "git" || !containsArgs(spec.Args, "rev-parse", "--show-toplevel") {
+			t.Fatalf("command after missing invocation policy: %+v", spec)
+		}
+		return CommandResult{Stdout: root}
+	}
+	service := newTestService(t, runner, root)
+	if err := service.Review(42, io.Discard); err == nil || !strings.Contains(err.Error(), "WORKFLOW.md") {
+		t.Fatalf("Review() error = %v", err)
+	}
 }
