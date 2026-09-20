@@ -583,6 +583,8 @@ run は effective push URL が一つで configured repository と一致するこ
 
 Issue comments は `createdAt` の時系列昇順で worker context に渡さなければならない。同一の時刻の comments は immutable な comment identifier の昇順を tie-breaker とし、決定的な順序にしなければならない。Issue または comments の取得・応答の decode・必要な comment 情報の検証に失敗した場合、worker を起動してはならない。ただし author が `null`、欠落、または有効な login を取得できない場合も comment は保持し、worker context の author を `(unknown)` として明示しなければならない。author が有効な login を持つ場合はその login を渡さなければならない。
 
+応答の `comments` は配列として明示されていなければならず、欠落・`null` を「コメントなし」とみなしてはならない。各 comment の `body` も文字列として必須であり、欠落・`null` は branch/worktree 作成前に reject する。明示された空配列 `[]` と空の body `""` は正常な値として受け付ける。
+
 MVP の Codex task payload は少なくとも次を含む。
 
 ```text
@@ -855,6 +857,8 @@ mode は CLI invocation にのみ適用し、project setting、ownership mapping
 ### UNMANAGED-RUN-002: origin identity and push destination
 
 repository identity は `origin` の configured fetch URL だけから決定する。configured fetch URL は厳密に一つでなければならず、欠落、空、複数、supported GitHub repository として解釈できない値を reject する。複数 URL が同じ repository に normalize されても reject する。
+
+unmanaged の fetch / push URL は `github.com` の HTTPS または SSH に限定する。URL 形式の scheme は `https` / `ssh` のみとし、port は省略または scheme の標準 port（HTTPS は `443`、SSH は `22`）を受け付ける。既存の SCP 形式の SSH URL も受け付ける。任意の scheme、非標準・空の port、query / fragment を含む URL は、host / repository path が一致しても reject する。この追加検証は unmanaged に適用し、managed の remote parser は変更しない。
 
 `GH_REPO` / `GH_HOST`、branch upstream、他の remote、project files は target の選択にも mismatch gate にも使用しない。GitHub authentication は `--hostname github.com`、Issue / PR command は `--repo github.com/OWNER/REPO`、REST API は origin-derived owner/repository path と `--hostname github.com` で bind する。
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,6 +22,33 @@ Preserve human-owned files and changes. Do not perform destructive cleanup or au
 
 ` + workerSafetyInstructions
 
+// Keep unmanaged transport validation separate from managed remote parsing.
+// A matching host and repository path alone do not establish a GitHub endpoint.
+func parseUnmanagedGitHubRemote(raw string) (RepositoryIdentity, error) {
+	if strings.Contains(raw, "://") {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			return RepositoryIdentity{}, fmt.Errorf("invalid origin URL; inspect remote configuration manually")
+		}
+		var defaultPort string
+		switch parsed.Scheme {
+		case "https":
+			defaultPort = "443"
+		case "ssh":
+			defaultPort = "22"
+		default:
+			return RepositoryIdentity{}, fmt.Errorf("origin URL must use HTTPS or SSH")
+		}
+		if parsed.Host != parsed.Hostname() && parsed.Host != parsed.Hostname()+":"+defaultPort {
+			return RepositoryIdentity{}, fmt.Errorf("origin URL must use the standard %s port (%s)", parsed.Scheme, defaultPort)
+		}
+		if strings.ContainsAny(raw, "?#") {
+			return RepositoryIdentity{}, fmt.Errorf("origin URL must not contain a query or fragment")
+		}
+	}
+	return parseGitHubRemote(raw)
+}
+
 // originIdentity deliberately does not consult project configuration or ambient
 // GitHub selectors. Count configured values before parsing, including empty ones.
 func (s *Service) originIdentity(root string) (RepositoryIdentity, error) {
@@ -29,7 +57,7 @@ func (s *Service) originIdentity(root string) (RepositoryIdentity, error) {
 	if err != nil {
 		return RepositoryIdentity{}, fmt.Errorf("origin requires exactly one configured fetch URL: %w", err)
 	}
-	identity, err := parseGitHubRemote(url)
+	identity, err := parseUnmanagedGitHubRemote(url)
 	if err != nil {
 		return RepositoryIdentity{}, fmt.Errorf("origin cannot identify a supported GitHub repository: %w", err)
 	}
@@ -51,7 +79,7 @@ func (s *Service) validateOriginPushDestination(root string, identity Repository
 	if err != nil {
 		return fmt.Errorf("origin requires exactly one effective push URL: %w", err)
 	}
-	destination, err := parseGitHubRemote(url)
+	destination, err := parseUnmanagedGitHubRemote(url)
 	if err != nil || destination.Canonical() != identity.Canonical() {
 		return fmt.Errorf("origin push destination must identify the origin GitHub repository; inspect remote configuration manually")
 	}

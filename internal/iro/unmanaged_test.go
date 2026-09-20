@@ -328,9 +328,63 @@ func TestUnmanagedPreconditions(t *testing.T) {
 	}
 }
 
+func TestUnmanagedOriginURLValidation(t *testing.T) {
+	for _, command := range []string{"config --get-all remote.origin.url", "remote get-url --push --all origin"} {
+		for _, tc := range []struct {
+			url   string
+			valid bool
+		}{
+			{"https://github.com/acme/iro.git", true},
+			{"https://github.com:443/acme/iro.git", true},
+			{"git@github.com:acme/iro.git", true},
+			{"ssh://git@github.com/acme/iro.git", true},
+			{"ssh://git@github.com:22/acme/iro.git", true},
+			{"file://github.com/acme/iro", false},
+			{"ftp://github.com/acme/iro", false},
+			{"git://github.com/acme/iro", false},
+			{"http://github.com/acme/iro", false},
+			{"https://github.com:8443/acme/iro", false},
+			{"https://github.com:22/acme/iro", false},
+			{"ssh://git@github.com:443/acme/iro", false},
+			{"ssh://git@github.com:2222/acme/iro", false},
+			{"https://github.com:/acme/iro", false},
+			{"https://github.com:invalid/acme/iro", false},
+			{"https://github.com/acme/iro?other", false},
+			{"https://github.com/acme/iro#other", false},
+			{"https://github.com/acme/iro?", false},
+			{"https://github.com/acme/iro#", false},
+		} {
+			t.Run(command+"/"+tc.url, func(t *testing.T) {
+				f := newUnmanagedFixture(t)
+				f.intercept = func(spec CommandSpec) (CommandResult, bool) {
+					return CommandResult{Stdout: tc.url + "\n"}, spec.Name == "git" && strings.Join(spec.Args, " ") == command
+				}
+				code, _, diagnostic := f.execute()
+				if tc.valid {
+					if code != 0 {
+						t.Fatal(diagnostic)
+					}
+					return
+				}
+				if code != 1 || !strings.Contains(diagnostic, "origin") {
+					t.Fatalf("invalid origin URL accepted: code=%d stderr=%s", code, diagnostic)
+				}
+				if len(f.stages) != 0 {
+					t.Fatalf("invalid URL used before rejection: %v", f.stages)
+				}
+				for _, call := range f.runner.calls {
+					if call.Name != "git" {
+						t.Fatalf("external operation before URL rejection: %+v", call)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestUnmanagedRevalidatesBeforeCommitAndPush(t *testing.T) {
 	for _, check := range []int{2, 3} {
-		for _, failure := range []string{"base drift", "task collision", "identity drift", "push destination drift"} {
+		for _, failure := range []string{"base drift", "task collision", "identity drift", "push destination drift", "fetch transport drift", "push transport drift"} {
 			t.Run(fmt.Sprintf("%d/%s", check, failure), func(t *testing.T) {
 				f := newUnmanagedFixture(t)
 				f.intercept = func(spec CommandSpec) (CommandResult, bool) {
@@ -340,6 +394,9 @@ func TestUnmanagedRevalidatesBeforeCommitAndPush(t *testing.T) {
 					if f.remoteChecks == check-1 {
 						if failure == "identity drift" && spec.Args[0] == "config" || failure == "push destination drift" && spec.Args[0] == "remote" {
 							return CommandResult{Stdout: "git@github.com:other/repo.git"}, true
+						}
+						if failure == "fetch transport drift" && spec.Args[0] == "config" || failure == "push transport drift" && spec.Args[0] == "remote" {
+							return CommandResult{Stdout: "https://github.com:8443/acme/iro.git\n"}, true
 						}
 					}
 					if spec.Args[0] == "ls-remote" && f.remoteChecks == check {
