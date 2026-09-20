@@ -38,13 +38,15 @@ ownership が不明な branch、worktree、file を iro-owned と推測しては
 
 GitHub tracker I/O は `iro` が所有する。
 
-`iro run` が行う GitHub operation は次とする。
+managed `iro run` が行う GitHub operation は次とする。
 
 - target Issue の read
 - target Issue への Author / delivery failure report comment の create
 - configured repository の default branch と既存 PR relation の read
 - canonical branch から default branch を base とする通常の open PR の create
 - 作成した PR への Author report と Land hint を含む delivery comment の best-effort create
+
+`iro run --unmanaged` は origin-derived repository の Issue / comments を read し、invocation branch を base とする PR を create する。Author / delivery failure 時の Issue comment と、成功時の Author report の PR comment も同じ repository に限定する。default branch / native closing relation の取得や Land hint は要求しない。詳細は UNMANAGED-RUN-001 以降に従う。
 
 `iro review` が行う GitHub operation は次とする。
 
@@ -71,7 +73,7 @@ GitHub tracker I/O は `iro` が所有する。
 
 Codex は `gh` を実行してはならず、GitHub Issue を直接 fetch / create / modify / close / comment してはならない。
 
-`iro` が `gh` を使うときは、INV-010 に従って configured identity を明示しなければならない。`gh` の current-repository 推測に依存してはならない。
+`iro` が `gh` を使うときは、INV-010 に従って選択した identity を明示しなければならない。`gh` の current-repository 推測に依存してはならない。
 
 ### INV-005: Git authority
 
@@ -138,7 +140,9 @@ MVP は Human が明示的に Issue を dispatch する trusted development VM �
 
 ### INV-010: GitHub CLI context consistency and target binding
 
-`run` / `review` / `revise` / `land` は、configured `tracker.remote` だけから解決した GitHub identity（host、owner、repository）と、継承した `GH_HOST` / `GH_REPO` の整合性を共通 precondition として検証しなければならない。現在 support する host は `github.com` のみとする。
+managed `run` / `review` / `revise` / `land` は、configured `tracker.remote` だけから解決した GitHub identity（host、owner、repository）と、継承した `GH_HOST` / `GH_REPO` の整合性を共通 precondition として検証しなければならない。現在 support する host は `github.com` のみとする。
+
+unmanaged Run は例外として `origin` だけから identity を解決し、`GH_HOST` / `GH_REPO` を selector や mismatch gate にしない。unset、malformed、不一致のいずれも独立した reject 理由にせず、environment を書き換えない。各 GitHub operation の明示的な host / repository binding は unmanaged でも必須とする（UNMANAGED-RUN-002）。
 
 | Environment | Allowed condition |
 |---|---|
@@ -525,11 +529,15 @@ output は各 Issue number と理由、および cleaned / skipped / failed・at
 
 ## 9. `iro run <issue-number>`
 
+`--unmanaged` を指定しない場合は、この節の managed Run contract を適用する。指定した場合は UNMANAGED-RUN-001 以降を適用し、managed project / source / ownership / delivery contract へ fallback しない。
+
 ### RUN-001: argument grammar
 
 ```text
-command                 := "iro run " issue-number [worker-option...]
+command                 := "iro run " issue-number [run-option...]
 issue-number            := positive-decimal-integer
+run-option              := worker-option | unmanaged-option
+unmanaged-option        := "--unmanaged"
 worker-option           := model-option | reasoning-effort-option | no-sandbox-option
 model-option            := ("--model" | "-m") non-empty-string
 reasoning-effort-option := "--reasoning-effort" non-empty-string
@@ -537,6 +545,8 @@ no-sandbox-option       := "--no-sandbox"
 ```
 
 worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。省略した model / reasoning effort は Codex configuration / default selection に委譲する。model と reasoning effort は synthetic model name に結合せず、reasoning effort は modelごとの catalog なしに指定値を requested configuration としてそのまま Codex に渡す。空値、重複指定、unsupported extra arguments は usage error とし、main side effect 前に reject する。unsupported model / effort の fallback は行わず、Codex 側の reject は通常の worker failure とする。MVP では Issue URL、owner/repo#number、複数 Issue を受け付けない。
+
+`--unmanaged` は値を取らず、Issue operand の後に一度だけ指定できる。他の worker option との順序は意味を持たない。`--issue`、operand より前の option、`--unmanaged=true`、重複、余分な引数は Git / worker / remote side effect より前に usage error（exit status 2）とする。`review` / `revise` / `land` では `--unmanaged` を受け付けない。
 
 ### RUN-002: source repository
 
@@ -833,6 +843,80 @@ Author / delivery failure の Issue comment 投稿に失敗した場合:
 Issue comment failure を理由に Codex を再実行してはならない。
 
 Issue comment の結果を local run log へ反映する際は、一時ファイルへの書き込み完了後にログを置き換える。書き込みまたは置き換えが失敗しても、保存済み Author report を含む既存ログを保持し、更新失敗を追加 diagnostic として表示する。
+
+## 9a. `iro run <issue-number> --unmanaged`
+
+### UNMANAGED-RUN-001: operation-local mode
+
+unmanaged Run は config-free な明示 operation とする。`iro.toml` / `WORKFLOW.md` を config / worker policy として read、validate、reconcile してはならない。存在、欠落、不正な内容、読取不能、non-regular のいずれも mode / policy selection を変えない。ただし、これらの file の通常の tracked / untracked 変更も checkout cleanliness の対象となる。
+
+mode は CLI invocation にのみ適用し、project setting、ownership mapping、adoption state として永続化しない。unmanaged Review / Revise / Land、汎用 adoption / status / cleanup command は提供しない。
+
+### UNMANAGED-RUN-002: origin identity and push destination
+
+repository identity は `origin` の configured fetch URL だけから決定する。configured fetch URL は厳密に一つでなければならず、欠落、空、複数、supported GitHub repository として解釈できない値を reject する。複数 URL が同じ repository に normalize されても reject する。
+
+`GH_REPO` / `GH_HOST`、branch upstream、他の remote、project files は target の選択にも mismatch gate にも使用しない。GitHub authentication は `--hostname github.com`、Issue / PR command は `--repo github.com/OWNER/REPO`、REST API は origin-derived owner/repository path と `--hostname github.com` で bind する。
+
+push を行う unmanaged operation は `origin` の effective push URL を検証する。厳密に一つであり、fetch URL と同じ GitHub repository に resolve しなければならない。ゼロ、複数、別 repository は worker / remote mutation 前に reject する。複数の same-repository URL も reject する。remote configuration の自動修正は行わない。
+
+### UNMANAGED-RUN-003: source and preflight
+
+invocation checkout は tracked / non-ignored untracked changes のない clean な named branch `B` でなければならない。detached HEAD は reject する。`B` は default branch でなくてもよい。
+
+local HEAD を full commit OID `H0` として固定する。remote `origin` を直接 read し、`refs/heads/B` が存在して `H0` と一致すること、および `refs/heads/iro/issue-N` が存在しないことを検証する。local remote-tracking ref の古い値を根拠にしない。自動 fetch / pull / reset や別の base への変更は行わない。
+
+Git / GitHub / Codex executable と認証、origin identity / push destination、source cleanliness / named HEAD / remote refs、origin repository の Issue N と comments の可読性を、worktree 作成と Author 起動より前に確認する。Issue payload と comments の検証・順序は RUN-004 と同じとする。GitHub default branch や native closing relation は Run の precondition にしない。
+
+既存 local `iro/issue-N` branch、canonical workspace、ownership mapping の有無を理由に reuse / adoption / repair してはならない。それらを読んで reconcile せず、既存 managed state を変更しない。
+
+### UNMANAGED-RUN-004: worker and detached workspace
+
+各 invocation は verified `H0` から fresh unique detached linked worktree を作成する。概念上の path は `~/.local/share/iro/unmanaged-workspaces/<repository-key>/run-issue-N-<unique>/` とする。Git worktree registration は作成するが、canonical Issue branch / ownership mapping は作成しない。以前の failed unmanaged workspace は再利用しない。
+
+Author 起動前に detached HEAD が exact `H0` であり worktree が clean なことを確認する。invocation checkout の dirty / ignored files をコピーしない。
+
+Author には built-in conservative unmanaged worker policy を developer instructions として注入する。
+
+- `iro.toml` / `WORKFLOW.md` を読まず、これらから policy を選択しない。
+- 上記 instructions の範囲で Codex が読み込んだ `AGENTS.md` guidance に従い、実質的な conflict は編集せず Human に報告する。
+- Issue scope の変更だけを行い、不足する要件や新しい product / architecture 判断を推測せず Human に返す。
+- 不足環境、credential、remote、branch、worktree の provisioning / repair を行わない。human-owned files / changes を保護し、破壊的 cleanup や automatic retry を行わない。
+- RUN-012 と同じ Git read-only、tracker I/O の iro ownership、remote non-mutation、関連 test、変更の uncommitted handoff、日本語 Author report の責務を維持する。
+
+fresh ephemeral session、既定の sandbox / network / approval policy と `--model` / `-m`、`--reasoning-effort`、`--no-sandbox` は RUN-013 と同じとする。managed policy に fallback しない。
+
+### UNMANAGED-RUN-005: revalidation and delivery
+
+worker 成功後に Author stdout / stderr と exit status、repository、Issue、base `B`、source `H0`、workspace path を `unmanaged-runs/<repository-key>/<unique-workspace-name>.log` に保存する。managed run log / ownership を更新しない。log 保存失敗は delivery 前に failure とする。
+
+iro は次を順に実施する。
+
+1. workspace が detached `H0` のままであることを確認し、worker changes を stage する。空 diff は failure とし、空 commit を作成しない。
+2. commit 直前に origin identity / effective push destination を再検証し、remote `origin/B == H0` と task ref の不在を再確認する。
+3. `Implement issue #N` の message で delivery commit `C1` を作成する。sole parent が `H0` であり、workspace が detached `C1` かつ clean なことを確認する。
+4. push 直前にも手順 2 の remote 条件を再検証する。base drift、競合する task ref、identity / destination の変更では non-zero failure とし、push / repair / target substitution を行わない。
+5. exact `C1` を explicit refspec `C1:refs/heads/iro/issue-N` で `origin` に通常 push する。force push は禁止する。
+6. head `iro/issue-N`、base `B`、固定 body に `Refs #N` を含む通常の open PR を作成する。worker text を body に展開しない。PR number の有効な create response を confirmed delivery の境界とする。
+7. PR number / head / base を表示し、Author report を PR comment として best-effort で投稿する。comment failure は warning に留める。managed Land の eligibility を保証する案内はしない。
+
+`Refs #N` は textual traceability であり、native closing relation を保証・要求しない。closing relation の取得を目的に `B` を変更せず、Issue close API を呼ばない。
+
+remote read と push / PR create は単一 transaction ではない。検証で検出した concurrent change は reject し、通常 push の拒否や結果不明は次項に従う。lock、force、automatic retry loop は導入しない。
+
+### UNMANAGED-RUN-006: failure and cleanup
+
+Author failure、stage / commit / revalidation failure、push failure、PR creation / response failure では useful な worktree / index / commit / report を保持し、path と診断を表示して non-zero とする。取得済み Author report と診断の Issue failure comment を best-effort で試み、その失敗は追加 warning とする。log 保存に失敗した場合も Author stdout / stderr を diagnostic に残す。
+
+push failure は remote 更新の可能性を明示し、「remote unchanged」とみなさない。push success 後の PR failure / ambiguous response は remote branch を残し、partial / uncertain delivery と PR が既に存在する可能性を明示する。automatic retry / rollback / repair は行わず、Human に現在の local / remote state の確認を案内する。
+
+confirmed delivery の後だけ、今回作成した detached worktree を通常の `git worktree remove` で best-effort に削除し、path と registration の removal を確認する。force removal、recursive filesystem deletion による代用、branch 削除は行わない。cleanup failure / removal 確認不能でも delivery success と exit status 0 を維持し、warning と path を表示する。cleanup のために delivery を再実行しない。
+
+### UNMANAGED-RUN-007: cross-mode boundaries
+
+unmanaged Run の成功・作成者・delivery comment・local log は後続 managed Review / Revise / Land の eligibility を付与しない。各 managed operation は現在の default base / native closing relation / remote delivery relation、および必要な local ownership / worker policy を通常どおり検証する。一方、Human が現在の state をその contract に合わせた場合、unmanaged 由来という provenance だけを理由に永続的に reject しない（G2）。
+
+managed `tracker.remote` が R1、`origin` が別 repository R2 の場合、managed operation は R1、unmanaged Run は R2 を対象とする。identity の migration / fallback は行わない（G4）。managed status / cleanup は ownership mapping の対象だけを扱い、unmanaged workspace を推測で管理・削除しない。
 
 ## 10. `iro review <pr-number>`
 
@@ -1208,11 +1292,13 @@ Issue comment result
 workspace ownership mapping
 ```
 
-Issue comment result は `run` に適用し、投稿していない場合は `not attempted` を記録する。`revise` は `revisions/<repository-key>/pr-<number>-<timestamp>.log` に PR number、origin Issue number、開始時 HEAD、worker exit status / stdout / stderr 等を保存する。
+上記 ownership mapping / timestamp / Issue comment result は managed `run` に適用し、comment を投稿していない場合は `not attempted` を記録する。unmanaged Run の log と mapping 非作成は UNMANAGED-RUN-005 に従う。`revise` は `revisions/<repository-key>/pr-<number>-<timestamp>.log` に PR number、origin Issue number、開始時 HEAD、worker exit status / stdout / stderr 等を保存する。
 
 Codex thread/session ID は保存対象に含めない。
 
 ## 14. Behavior matrix
+
+以下の matrix は managed operation を対象とする。unmanaged Run の条件と失敗時の保持・cleanup は UNMANAGED-RUN-001 から UNMANAGED-RUN-007 に定義する。
 
 `revise` の local state matrix は REVISE-003、remote preconditions と failure behavior は REVISE-002 / REVISE-007 に定義する。
 

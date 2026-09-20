@@ -9,7 +9,7 @@ import (
 // Execute dispatches the bootstrap MVP CLI commands and returns an exit status.
 func Execute(args []string, out, errOut io.Writer, service *Service) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], land <pr-number>, or cleanup [<issue-number>])")
+		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--unmanaged] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], land <pr-number>, or cleanup [<issue-number>])")
 		return 2
 	}
 
@@ -118,6 +118,7 @@ func parseModelOverride(args []string, command, operand string) (string, error) 
 }
 
 type workerOptions struct {
+	Unmanaged       bool
 	NoSandbox       bool
 	Model           string
 	ReasoningEffort string
@@ -125,6 +126,9 @@ type workerOptions struct {
 
 func parseWorkerOptions(args []string, command, operand string) (workerOptions, error) {
 	usage := fmt.Sprintf("usage: iro %s <%s> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]", command, operand)
+	if command == "run" {
+		usage = strings.Replace(usage, "<"+operand+">", "<"+operand+"> [--unmanaged]", 1)
+	}
 	if len(args) < 2 {
 		return workerOptions{}, fmt.Errorf("%s", usage)
 	}
@@ -134,6 +138,14 @@ func parseWorkerOptions(args []string, command, operand string) (workerOptions, 
 	reasoningEffortSet := false
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
+		case "--unmanaged":
+			if command != "run" {
+				return workerOptions{}, fmt.Errorf("%s", usage)
+			}
+			if options.Unmanaged {
+				return workerOptions{}, fmt.Errorf("unmanaged option may be specified only once")
+			}
+			options.Unmanaged = true
 		case "--no-sandbox":
 			if options.NoSandbox {
 				return workerOptions{}, fmt.Errorf("no-sandbox option may be specified only once")
