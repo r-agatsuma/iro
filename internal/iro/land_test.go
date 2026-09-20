@@ -17,20 +17,25 @@ const landMergeForTest = "abcdef0123456789abcdef0123456789abcdef01"
 const landResponseForTest = `{"data":{"repository":{"defaultBranchRef":{"name":"main"},"isArchived":false,"mergeCommitAllowed":true,"viewerPermission":"WRITE","pullRequest":{"number":42,"state":"OPEN","isDraft":false,"baseRefName":"main","headRefName":"iro/issue-123","headRefOid":"` + landHeadForTest + `","headRepository":{"nameWithOwner":"acme/iro"},"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","isMergeQueueEnabled":false,"closingIssuesReferences":{"totalCount":1,"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}}]}}}}}`
 const landActivePRForTest = `{"number":42,"headRefName":"iro/issue-123","headRepository":{"nameWithOwner":"acme/iro"},"closingIssuesReferences":{"totalCount":1,"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}}]}}`
 
-// Only project configuration reads are available. Any runtime state access or
-// filesystem mutation fails, even when local execution state happens to exist.
+// Land fixtures can restrict project-file reads to iro.toml. Any unexpected
+// filesystem inspection fails, even when local execution state exists.
 type landProjectFiles struct {
 	FileSystem
-	t          *testing.T
-	root       string
-	unreadable string
+	t              *testing.T
+	root           string
+	unreadable     string
+	rejectWorkflow bool
 }
 
 func (f landProjectFiles) check(path string) {
 	f.t.Helper()
-	if path != filepath.Join(f.root, "iro.toml") && path != filepath.Join(f.root, "WORKFLOW.md") {
-		f.t.Fatalf("land accessed local execution state: %s", path)
+	if path == filepath.Join(f.root, "iro.toml") {
+		return
 	}
+	if !f.rejectWorkflow && path == filepath.Join(f.root, "WORKFLOW.md") {
+		return
+	}
+	f.t.Fatalf("land accessed local execution state: %s", path)
 }
 
 func (f landProjectFiles) Stat(path string) (os.FileInfo, error) {
@@ -76,7 +81,7 @@ func newLandFixture(t *testing.T) *landFixture {
 	f.runner = &fakeCommandRunner{lookups: map[string]error{"codex": errors.New("not installed")}}
 	f.runner.fn = f.respond
 	f.service = newTestService(t, f.runner, f.root)
-	f.service.FileSystem = landProjectFiles{t: t, root: f.root}
+	f.service.FileSystem = landProjectFiles{t: t, root: f.root, rejectWorkflow: true}
 	return f
 }
 
@@ -398,37 +403,57 @@ func TestLandMergeFailureDoesNotRetryRepairOrFallback(t *testing.T) {
 }
 
 func TestLandRequiresValidProjectContextBeforeRemoteMutation(t *testing.T) {
-	for _, name := range []string{"iro.toml", "WORKFLOW.md"} {
-		for _, state := range []string{"missing", "directory", "unreadable", "invalid config"} {
-			t.Run(name+"/"+state, func(t *testing.T) {
-				if state == "invalid config" && name != "iro.toml" {
-					return
+	for _, state := range []string{"missing", "directory", "unreadable", "invalid config"} {
+		t.Run("iro.toml/"+state, func(t *testing.T) {
+			f := newLandFixture(t)
+			path := filepath.Join(f.root, "iro.toml")
+			switch state {
+			case "missing", "directory":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
 				}
-				f := newLandFixture(t)
-				path := filepath.Join(f.root, name)
-				switch state {
-				case "missing", "directory":
-					if err := os.Remove(path); err != nil {
-						t.Fatal(err)
-					}
-					if state == "directory" {
-						if err := os.Mkdir(path, 0755); err != nil {
-							t.Fatal(err)
-						}
-					}
-				case "unreadable":
-					f.service.FileSystem = landProjectFiles{t: t, root: f.root, unreadable: name}
-				case "invalid config":
-					if err := os.WriteFile(path, []byte("version = 999\n"), 0644); err != nil {
+				if state == "directory" {
+					if err := os.Mkdir(path, 0755); err != nil {
 						t.Fatal(err)
 					}
 				}
-				err := f.service.Land(42, io.Discard)
-				if err == nil || !strings.Contains(err.Error(), name) || f.mergeCalls != 0 {
-					t.Fatalf("error=%v, merges=%d", err, f.mergeCalls)
+			case "unreadable":
+				f.service.FileSystem = landProjectFiles{t: t, root: f.root, unreadable: "iro.toml", rejectWorkflow: true}
+			case "invalid config":
+				if err := os.WriteFile(path, []byte("version = 999\n"), 0644); err != nil {
+					t.Fatal(err)
 				}
-			})
-		}
+			}
+			err := f.service.Land(42, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), "iro.toml") || f.mergeCalls != 0 {
+				t.Fatalf("error=%v, merges=%d", err, f.mergeCalls)
+			}
+		})
+	}
+	for _, state := range []string{"missing", "directory", "unreadable"} {
+		t.Run("WORKFLOW.md/"+state, func(t *testing.T) {
+			f := newLandFixture(t)
+			path := filepath.Join(f.root, "WORKFLOW.md")
+			switch state {
+			case "missing", "directory":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if state == "directory" {
+					if err := os.Mkdir(path, 0755); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case "unreadable":
+				f.service.FileSystem = landProjectFiles{t: t, root: f.root, unreadable: "WORKFLOW.md", rejectWorkflow: true}
+			}
+			if err := f.service.Land(42, io.Discard); err != nil {
+				t.Fatalf("Land() rejected WORKFLOW.md state: %v", err)
+			}
+			if f.mergeCalls != 1 || !f.merged {
+				t.Fatalf("merges=%d, merged=%t", f.mergeCalls, f.merged)
+			}
+		})
 	}
 	for _, name := range []string{"git", "gh"} {
 		f := newLandFixture(t)
@@ -464,6 +489,18 @@ func TestLandRequiresValidProjectContextBeforeRemoteMutation(t *testing.T) {
 				t.Fatalf("precondition failure allowed: %v, merges=%d", err, f.mergeCalls)
 			}
 		})
+	}
+}
+
+func TestStatusStillRequiresWorkflowAfterLandProjectLoadingChange(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFiles(t, root)
+	if err := os.Remove(filepath.Join(root, "WORKFLOW.md")); err != nil {
+		t.Fatal(err)
+	}
+	service := newTestService(t, statusTestRunner(root, "", false, false), root)
+	if err := service.Status(io.Discard); err == nil || !strings.Contains(err.Error(), "WORKFLOW.md") {
+		t.Fatalf("Status() error = %v, want WORKFLOW.md precondition failure", err)
 	}
 }
 

@@ -1104,7 +1104,7 @@ AI Review の実行、PASS、AI comment、GitHub Human approval、review comment
 
 ### LAND-002: local repository context
 
-Git executable、invocation directory から解決した local Git repository、repository root の readable regular `WORKFLOW.md` と valid supported `iro.toml`、configured `tracker.remote` だけから一意に解決できる GitHub repository identity、`gh` executable / authentication を要求する。
+Git executable、invocation directory から解決した local Git repository、repository root の valid supported `iro.toml`（readable regular file）、configured `tracker.remote` だけから一意に解決できる GitHub repository identity、`gh` executable / authentication を要求する。Land は worker を起動しないため、`WORKFLOW.md` を要求、読み取り、検証してはならない。
 
 INV-010 の GitHub CLI context consistency を適用し、不整合な `GH_HOST` / `GH_REPO` は認証確認・API access 前に拒否する。現在 support する configured remote host は `github.com` のみとする。Land の `gh auth status`、target PR / repository policy の GraphQL、全 page の active delivery PR GraphQL、merge REST API はすべて `--hostname github.com` を明示する。
 
@@ -1216,6 +1216,8 @@ Codex thread/session ID は保存対象に含めない。
 | State | `iro land <pr-number>` |
 |---|---|
 | valid delivery relation / merge policy | validated HEAD を normal merge commit で merge |
+| `WORKFLOW.md` missing / unreadable / non-regular | allowed; Land は file を検査しない |
+| `iro.toml` missing / unreadable / non-regular / invalid | merge 前に error; no remote mutation |
 | Human-created PR / no delivery hint / no AI Review / AI FINDING | allowed; provenance / verdict を判定しない |
 | no GitHub approval | repository policy が許す限り allowed |
 | `GH_HOST` / `GH_REPO` が configured identity と不一致、または malformed | 認証確認・API access 前に error; remediation を表示し environment は変更しない |

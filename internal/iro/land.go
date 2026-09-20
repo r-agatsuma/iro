@@ -29,12 +29,9 @@ func (s *Service) Land(prNumber int, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	config, err := s.loadInitializedConfig(root)
+	config, err := s.loadLandConfig(root)
 	if err != nil {
 		return err
-	}
-	if _, err := s.FileSystem.ReadFile(filepath.Join(root, "WORKFLOW.md")); err != nil {
-		return fmt.Errorf("WORKFLOW.md is unreadable: %w", err)
 	}
 	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
@@ -54,6 +51,18 @@ func (s *Service) Land(prNumber int, out io.Writer) error {
 		return err
 	}
 	return s.mergeLandTarget(root, identity, target, out)
+}
+
+func (s *Service) loadLandConfig(root string) (Config, error) {
+	configPath := filepath.Join(root, "iro.toml")
+	present, regular, err := s.fileState(configPath)
+	if err != nil {
+		return Config{}, fmt.Errorf("inspect iro.toml: %w", err)
+	}
+	if !present || !regular {
+		return Config{}, fmt.Errorf("iro.toml is missing or not a regular file")
+	}
+	return s.loadConfig(root)
 }
 
 func (s *Service) inspectLandTarget(root string, identity RepositoryIdentity, number int) (landTarget, error) {
