@@ -79,6 +79,10 @@ func (f *reviseFixture) respond(spec CommandSpec) CommandResult {
 			return CommandResult{Stdout: filepath.Join(f.root, ".git")}
 		case "symbolic-ref --quiet HEAD":
 			return CommandResult{Stdout: "refs/heads/iro/issue-123\n"}
+		case "ls-tree -z " + revisionHead + " -- WORKFLOW.md":
+			return CommandResult{Stdout: "100644 blob " + revisionHead + "\tWORKFLOW.md\x00"}
+		case "cat-file blob " + revisionHead:
+			return CommandResult{Stdout: workflowTemplate}
 		case "rev-parse HEAD":
 			return CommandResult{Stdout: f.head}
 		case "--no-optional-locks status --porcelain --untracked-files=all":
@@ -288,12 +292,10 @@ func TestReviseRejectsRemotePreconditionsWithoutLocalMutation(t *testing.T) {
 }
 
 func TestReviseRejectsUnavailablePreconditionsBeforeMutation(t *testing.T) {
-	for _, kind := range []string{"workflow", "config", "invalid config", "ambiguous remote", "push destination", "Git remote", "branch HEAD", "gh executable", "gh auth", "codex executable", "codex auth", "Issue", "Issue comments", "PR feedback", "diff", "missing pagination", "missing closing relations", "unknown competing head repository"} {
+	for _, kind := range []string{"config", "invalid config", "ambiguous remote", "push destination", "Git remote", "branch HEAD", "gh executable", "gh auth", "codex executable", "codex auth", "Issue", "Issue comments", "PR feedback", "diff", "missing pagination", "missing closing relations", "unknown competing head repository"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newReviseFixture(t, false)
 			switch kind {
-			case "workflow":
-				mustRemove(t, filepath.Join(f.root, "WORKFLOW.md"))
 			case "config":
 				mustRemove(t, filepath.Join(f.root, "iro.toml"))
 			case "invalid config":
@@ -637,6 +639,148 @@ func TestExecuteRejectsInvalidReviseNumber(t *testing.T) {
 	for _, args := range [][]string{{"revise"}, {"revise", "0"}, {"revise", "-1"}, {"revise", "1", "2"}, {"revise", "https://github.com/acme/iro/pull/42"}, {"revise", "9999999999999999999999999999999"}} {
 		if status := Execute(args, io.Discard, io.Discard, service); status != 2 {
 			t.Fatalf("Execute(%v)=%d", args, status)
+		}
+	}
+}
+
+// Revise must not even inspect the invocation checkout's WORKFLOW.
+type revisePolicyFiles struct {
+	FileSystem
+	t    *testing.T
+	root string
+}
+
+func (f revisePolicyFiles) Stat(path string) (os.FileInfo, error) {
+	if path == filepath.Join(f.root, "WORKFLOW.md") {
+		f.t.Fatal("inspected invocation WORKFLOW")
+	}
+	return f.FileSystem.Stat(path)
+}
+
+func (f revisePolicyFiles) ReadFile(path string) ([]byte, error) {
+	if path == filepath.Join(f.root, "WORKFLOW.md") {
+		f.t.Fatal("read invocation WORKFLOW")
+	}
+	return f.FileSystem.ReadFile(path)
+}
+
+func TestReviseUsesFixedStartingPolicyAcrossExplicitInvocations(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		for _, absent := range []bool{false, true} {
+			t.Run(fmt.Sprintf("existing=%t/absent=%t", existing, absent), func(t *testing.T) {
+				f := newReviseFixture(t, existing)
+				if absent {
+					mustRemove(t, filepath.Join(f.root, "WORKFLOW.md"))
+				}
+				f.service.FileSystem = revisePolicyFiles{f.service.FileSystem, t, f.root}
+				const p1 = "Starting policy P1\n"
+				const p2 = "Edited policy P2\n"
+				policy, start, next := p1, revisionHead, revisionCommit
+				reads, workers, pushes := 0, 0, 0
+				f.runner.fn = func(spec CommandSpec) CommandResult {
+					args := strings.Join(spec.Args, " ")
+					if spec.Name == "git" {
+						switch args {
+						case "ls-tree -z " + start + " -- WORKFLOW.md":
+							if f.head != start || f.dirty || !f.branch {
+								t.Fatal("policy read before verified worktree")
+							}
+							return CommandResult{Stdout: "100644 blob " + start + "\tWORKFLOW.md\x00"}
+						case "cat-file blob " + start:
+							reads++
+							return CommandResult{Stdout: policy}
+						case "ls-remote --heads -- origin refs/heads/iro/issue-123":
+							return CommandResult{Stdout: start + "\trefs/heads/iro/issue-123\n"}
+						case "commit -m Revise issue #123 for PR #42":
+							f.head, f.dirty = next, false
+							return CommandResult{}
+						case "rev-list --parents -n 1 HEAD":
+							return CommandResult{Stdout: next + " " + start}
+						case "push -- origin refs/heads/iro/issue-123:refs/heads/iro/issue-123":
+							pushes++
+						}
+					}
+					if spec.Name == "codex" && containsString(spec.Args, "--ephemeral") {
+						workers++
+						want := "Fixed starting PR HEAD " + start + " worker policy (WORKFLOW.md):\n" + policy
+						if !strings.Contains(string(spec.Stdin), want) || strings.Contains(string(spec.Stdin), workflowTemplate) {
+							t.Fatalf("wrong policy input: %s", spec.Stdin)
+						}
+						if !strings.Contains(string(spec.Stdin), "Head OID: "+start) {
+							t.Fatal("wrong implementation HEAD")
+						}
+						for _, boundary := range []string{"do not reload policy", "cannot be overridden by WORKFLOW.md", "cannot expand permissions", "read-only inspection", "Do not invoke gh"} {
+							if !strings.Contains(args, boundary) {
+								t.Fatalf("missing boundary %q", boundary)
+							}
+						}
+						if strings.Contains(args, "Before modifying files, read WORKFLOW.md completely.") {
+							t.Fatal("mutable policy instruction")
+						}
+						if err := os.WriteFile(filepath.Join(f.workspace, "WORKFLOW.md"), []byte(p2), 0644); err != nil {
+							t.Fatal(err)
+						}
+						policy = p2
+						// The input remains P1 even after the worker changes the file.
+						if !strings.Contains(string(spec.Stdin), want) {
+							t.Fatal("policy changed during Author")
+						}
+					}
+					return f.respond(spec)
+				}
+				if err := f.service.Revise(42, io.Discard); err != nil {
+					t.Fatal(err)
+				}
+				if reads != 1 || workers != 1 || pushes != 1 {
+					t.Fatalf("reads/workers/pushes = %d/%d/%d", reads, workers, pushes)
+				}
+				start, next = revisionCommit, strings.Repeat("a", 40)
+				f.target = strings.ReplaceAll(f.target, revisionHead, start)
+				if err := f.service.Revise(42, io.Discard); err != nil {
+					t.Fatal(err)
+				}
+				if reads != 2 || workers != 2 || pushes != 2 {
+					t.Fatalf("reads/workers/pushes = %d/%d/%d", reads, workers, pushes)
+				}
+			})
+		}
+	}
+}
+
+func TestReviseRejectsInvalidStartingWorkflowBeforeAuthor(t *testing.T) {
+	for _, kind := range []string{"missing", "unreadable tree", "unreadable blob", "directory", "symlink", "submodule"} {
+		for _, existing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/existing=%t", kind, existing), func(t *testing.T) {
+				f := newReviseFixture(t, existing)
+				f.runner.fn = func(spec CommandSpec) CommandResult {
+					if spec.Name == "git" && spec.Args[0] == "ls-tree" {
+						switch kind {
+						case "missing":
+							return CommandResult{}
+						case "unreadable tree":
+							return CommandResult{ExitCode: 1}
+						case "directory":
+							return CommandResult{Stdout: "040000 tree " + revisionHead + "\tWORKFLOW.md\x00"}
+						case "symlink":
+							return CommandResult{Stdout: "120000 blob " + revisionHead + "\tWORKFLOW.md\x00"}
+						case "submodule":
+							return CommandResult{Stdout: "160000 commit " + revisionHead + "\tWORKFLOW.md\x00"}
+						}
+					}
+					if kind == "unreadable blob" && spec.Name == "git" && containsArgs(spec.Args, "cat-file", "blob") {
+						return CommandResult{ExitCode: 1}
+					}
+					return f.respond(spec)
+				}
+				if err := f.service.Revise(42, io.Discard); err == nil || !strings.Contains(err.Error(), "WORKFLOW.md") {
+					t.Fatalf("error = %v", err)
+				}
+				for _, stage := range revisionMutations(f.runner.calls) {
+					if stage == "worker" || stage == "add" || stage == "commit" || stage == "push" {
+						t.Fatalf("unexpected stage %s", stage)
+					}
+				}
+			})
 		}
 	}
 }

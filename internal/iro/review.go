@@ -420,6 +420,10 @@ func (s *Service) runReviewer(workspace string, identity RepositoryIdentity, tar
 }
 
 func buildReviewPayload(identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext) string {
+	return buildPRPayload(identity, target, origin, configData, workflowData, context, "Invoking repository worker policy (WORKFLOW.md)")
+}
+
+func buildPRPayload(identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, policyLabel string) string {
 	unknown := func(value string) string {
 		if strings.TrimSpace(value) == "" {
 			return "(unknown)"
@@ -427,7 +431,7 @@ func buildReviewPayload(identity RepositoryIdentity, target reviewPullRequest, o
 		return value
 	}
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "Repository: %s\n\nProject configuration (iro.toml):\n%s\nInvoking repository worker policy (WORKFLOW.md):\n%s\n", identity.String(), configData, workflowData)
+	fmt.Fprintf(&builder, "Repository: %s\n\nProject configuration (iro.toml):\n%s\n%s:\n%s\n", identity.String(), configData, policyLabel, workflowData)
 	fmt.Fprintf(&builder, "Origin Issue:\nNumber: %d\nTitle: %s\nURL: %s\nBody:\n%s\n\nIssue comments (ordered by createdAt, then immutable ID):\n", origin.Number, origin.Title, origin.URL, origin.Body)
 	if len(origin.Comments) == 0 {
 		builder.WriteString("(none)\n")
