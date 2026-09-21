@@ -10,6 +10,8 @@ import (
 
 const landPreflightQuery = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name} isArchived mergeCommitAllowed viewerPermission pullRequest(number:$number){number state isDraft baseRefName headRefName headRefOid headRepository{nameWithOwner} mergeable mergeStateStatus isMergeQueueEnabled closingIssuesReferences(first:2){totalCount nodes{number repository{nameWithOwner}}}}}}`
 
+const unmanagedLandPreflightQuery = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){isArchived mergeCommitAllowed viewerPermission pullRequest(number:$number){number state isDraft headRefOid headRepository{nameWithOwner} mergeable mergeStateStatus isMergeQueueEnabled}}}`
+
 type landTarget struct {
 	Number      int
 	OriginIssue int
@@ -18,6 +20,14 @@ type landTarget struct {
 
 // Land treats explicit invocation as Human authorization for one remote merge.
 func (s *Service) Land(prNumber int, out io.Writer) error {
+	return s.land(prNumber, false, out)
+}
+
+func (s *Service) landUnmanaged(prNumber int, out io.Writer) error {
+	return s.land(prNumber, true, out)
+}
+
+func (s *Service) land(prNumber int, unmanaged bool, out io.Writer) error {
 	if prNumber <= 0 {
 		return fmt.Errorf("pull request number must be a positive decimal integer")
 	}
@@ -28,15 +38,20 @@ func (s *Service) Land(prNumber int, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	config, err := s.loadProjectConfig(root)
-	if err != nil {
-		return err
+	var identity RepositoryIdentity
+	if unmanaged {
+		identity, err = s.originIdentity(root)
+	} else {
+		var config Config
+		config, err = s.loadProjectConfig(root)
+		if err == nil {
+			identity, err = s.repositoryIdentity(root, config)
+		}
+		if err == nil {
+			err = checkGitHubContext(identity)
+		}
 	}
-	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
-		return err
-	}
-	if err := checkGitHubContext(identity); err != nil {
 		return err
 	}
 	if err := s.requireExecutable("gh"); err != nil {
@@ -45,17 +60,21 @@ func (s *Service) Land(prNumber int, out io.Writer) error {
 	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
 		return err
 	}
-	target, err := s.inspectLandTarget(root, identity, prNumber)
+	target, err := s.inspectLandTarget(root, identity, prNumber, unmanaged)
 	if err != nil {
 		return err
 	}
 	return s.mergeLandTarget(root, identity, target, out)
 }
 
-func (s *Service) inspectLandTarget(root string, identity RepositoryIdentity, number int) (landTarget, error) {
+func (s *Service) inspectLandTarget(root string, identity RepositoryIdentity, number int, unmanaged bool) (landTarget, error) {
+	query := landPreflightQuery
+	if unmanaged {
+		query = unmanagedLandPreflightQuery
+	}
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
-		Args: []string{"api", "graphql", "--hostname", identity.Host(), "-f", "query=" + landPreflightQuery, "-f", "owner=" + identity.Owner, "-f", "name=" + identity.Name, "-F", "number=" + strconv.Itoa(number)},
+		Args: []string{"api", "graphql", "--hostname", identity.Host(), "-f", "query=" + query, "-f", "owner=" + identity.Owner, "-f", "name=" + identity.Name, "-F", "number=" + strconv.Itoa(number)},
 		Dir:  root,
 	})
 	var response struct {
@@ -92,7 +111,7 @@ func (s *Service) inspectLandTarget(root string, identity RepositoryIdentity, nu
 		return landTarget{}, fmt.Errorf("could not inspect PR #%d and repository merge policy; verify GitHub access", number)
 	}
 	repo := response.Data.Repository
-	if repo.DefaultBranchRef == nil || repo.DefaultBranchRef.Name == "" {
+	if !unmanaged && (repo.DefaultBranchRef == nil || repo.DefaultBranchRef.Name == "") {
 		return landTarget{}, fmt.Errorf("configured repository default branch is unavailable; inspect remote state")
 	}
 	pr := repo.PullRequest
@@ -106,22 +125,31 @@ func (s *Service) inspectLandTarget(root string, identity RepositoryIdentity, nu
 		return landTarget{}, fmt.Errorf("PR #%d draft state is unavailable; inspect remote state", number)
 	}
 	if *pr.IsDraft {
-		return landTarget{}, fmt.Errorf("pull request #%d is a draft and cannot be landed\nremediation: mark the pull request ready for review, then retry `iro land %d`", number, number)
+		return landTarget{}, fmt.Errorf("pull request #%d is a draft and cannot be landed\nremediation: mark the pull request ready for review, then retry `%s`", number, landInvocation(number, unmanaged))
 	}
-	if pr.BaseRefName != repo.DefaultBranchRef.Name {
-		return landTarget{}, fmt.Errorf("PR #%d targets %q, but land requires default branch %q; inspect the selected PR", number, pr.BaseRefName, repo.DefaultBranchRef.Name)
-	}
-	relations := pr.ClosingIssuesReferences
-	if relations.TotalCount != 1 || len(relations.Nodes) != 1 {
-		return landTarget{}, fmt.Errorf("PR #%d must have exactly one origin Issue closing relation; inspect remote state", number)
-	}
-	origin := relations.Nodes[0]
-	if origin.Number <= 0 || !strings.EqualFold(origin.Repository.NameWithOwner, identity.String()) {
-		return landTarget{}, fmt.Errorf("PR #%d origin Issue must belong to configured repository %s; inspect its closing relation", number, identity.String())
-	}
-	branch := fmt.Sprintf("iro/issue-%d", origin.Number)
-	if pr.HeadRefName != branch || pr.HeadRepository == nil || !strings.EqualFold(pr.HeadRepository.NameWithOwner, identity.String()) {
-		return landTarget{}, fmt.Errorf("land requires PR #%d head to be %s in configured repository %s; inspect the selected PR", number, branch, identity.String())
+	originIssue := 0
+	branch := ""
+	if unmanaged {
+		if pr.HeadRepository == nil || !strings.EqualFold(pr.HeadRepository.NameWithOwner, identity.String()) {
+			return landTarget{}, fmt.Errorf("PR #%d head must belong to origin repository %s", number, identity.String())
+		}
+	} else {
+		if pr.BaseRefName != repo.DefaultBranchRef.Name {
+			return landTarget{}, fmt.Errorf("PR #%d targets %q, but land requires default branch %q; inspect the selected PR", number, pr.BaseRefName, repo.DefaultBranchRef.Name)
+		}
+		relations := pr.ClosingIssuesReferences
+		if relations.TotalCount != 1 || len(relations.Nodes) != 1 {
+			return landTarget{}, fmt.Errorf("PR #%d must have exactly one origin Issue closing relation; inspect remote state", number)
+		}
+		origin := relations.Nodes[0]
+		originIssue = origin.Number
+		if origin.Number <= 0 || !strings.EqualFold(origin.Repository.NameWithOwner, identity.String()) {
+			return landTarget{}, fmt.Errorf("PR #%d origin Issue must belong to configured repository %s; inspect its closing relation", number, identity.String())
+		}
+		branch = fmt.Sprintf("iro/issue-%d", origin.Number)
+		if pr.HeadRefName != branch || pr.HeadRepository == nil || !strings.EqualFold(pr.HeadRepository.NameWithOwner, identity.String()) {
+			return landTarget{}, fmt.Errorf("land requires PR #%d head to be %s in configured repository %s; inspect the selected PR", number, branch, identity.String())
+		}
 	}
 	if !validCommitOID(pr.HeadRefOID) {
 		return landTarget{}, fmt.Errorf("PR #%d HEAD commit is invalid or unavailable; inspect remote state", number)
@@ -147,14 +175,16 @@ func (s *Service) inspectLandTarget(root string, identity RepositoryIdentity, nu
 	default:
 		return landTarget{}, fmt.Errorf("PR #%d merge state %q does not allow land; inspect repository rules and required checks/reviews, then retry after they are satisfied", number, pr.MergeStateStatus)
 	}
-	base, err := s.inspectDeliveryPRs(root, identity, origin.Number, branch, number)
-	if err != nil {
-		return landTarget{}, err
+	if !unmanaged {
+		base, err := s.inspectDeliveryPRs(root, identity, originIssue, branch, number)
+		if err != nil {
+			return landTarget{}, err
+		}
+		if base != pr.BaseRefName {
+			return landTarget{}, fmt.Errorf("repository default branch changed during inspection; inspect remote state and retry")
+		}
 	}
-	if base != pr.BaseRefName {
-		return landTarget{}, fmt.Errorf("repository default branch changed during inspection; inspect remote state and retry")
-	}
-	return landTarget{Number: number, OriginIssue: origin.Number, HeadOID: pr.HeadRefOID}, nil
+	return landTarget{Number: number, OriginIssue: originIssue, HeadOID: pr.HeadRefOID}, nil
 }
 
 func (s *Service) mergeLandTarget(root string, identity RepositoryIdentity, target landTarget, out io.Writer) error {
@@ -171,10 +201,22 @@ func (s *Service) mergeLandTarget(root string, identity RepositoryIdentity, targ
 		SHA    string
 	}
 	if !commandSucceeded(result) || json.Unmarshal([]byte(result.Stdout), &response) != nil || !response.Merged || !validCommitOID(response.SHA) {
-		return fmt.Errorf("merge of PR #%d at validated HEAD %s failed or could not be confirmed; inspect the remote PR, current HEAD, and repository rules before explicitly retrying `iro land %d`; no automatic retry was attempted", target.Number, target.HeadOID, target.Number)
+		return fmt.Errorf("merge of PR #%d at validated HEAD %s failed or could not be confirmed; inspect the remote PR, current HEAD, and repository rules before explicitly retrying `%s`; no automatic retry was attempted", target.Number, target.HeadOID, landInvocation(target.Number, target.OriginIssue == 0))
 	}
-	fmt.Fprintf(out, "Landed PR #%d for Issue #%d with merge commit %s\n", target.Number, target.OriginIssue, response.SHA)
+	if target.OriginIssue == 0 {
+		fmt.Fprintf(out, "Landed PR #%d with merge commit %s\n", target.Number, response.SHA)
+	} else {
+		fmt.Fprintf(out, "Landed PR #%d for Issue #%d with merge commit %s\n", target.Number, target.OriginIssue, response.SHA)
+	}
 	fmt.Fprintln(out, "\nSync your local default branch with the remote before the next iro run.")
 	fmt.Fprintln(out, "For example: git pull")
 	return nil
+}
+
+func landInvocation(number int, unmanaged bool) string {
+	command := fmt.Sprintf("iro land %d", number)
+	if unmanaged {
+		command += " --unmanaged"
+	}
+	return command
 }
