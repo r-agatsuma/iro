@@ -61,6 +61,17 @@ func (s *Service) originIdentity(root string) (RepositoryIdentity, error) {
 	if err != nil {
 		return RepositoryIdentity{}, fmt.Errorf("origin cannot identify a supported GitHub repository: %w", err)
 	}
+	// Git expands url.*.insteadOf for origin reads. A rewrite may change the
+	// transport, but must not redirect ref validation to another repository.
+	result = s.Runner.Run(CommandSpec{Name: "git", Args: []string{"remote", "get-url", "--all", "origin"}, Dir: root})
+	url, err = singleRemoteURL(result)
+	if err != nil {
+		return RepositoryIdentity{}, fmt.Errorf("origin requires exactly one effective fetch URL: %w", err)
+	}
+	destination, err := parseUnmanagedGitHubRemote(url)
+	if err != nil || destination.Canonical() != identity.Canonical() {
+		return RepositoryIdentity{}, fmt.Errorf("origin effective fetch destination must identify the origin GitHub repository; inspect remote configuration manually")
+	}
 	return identity, nil
 }
 
@@ -173,7 +184,10 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 
 func (s *Service) revalidateUnmanagedRun(root string, identity RepositoryIdentity, base, head, branch string) error {
 	current, err := s.originIdentity(root)
-	if err != nil || current.Canonical() != identity.Canonical() {
+	if err != nil {
+		return fmt.Errorf("origin repository changed or is unreadable: %w", err)
+	}
+	if current.Canonical() != identity.Canonical() {
 		return fmt.Errorf("origin repository changed or is unreadable; inspect remote configuration")
 	}
 	if err := s.validateOriginPushDestination(root, identity); err != nil {
@@ -307,7 +321,8 @@ func (s *Service) deliverUnmanaged(root, workspace string, identity RepositoryId
 	if err := s.revalidateUnmanagedRun(workspace, identity, base, head, branch); err != nil {
 		return fmt.Errorf("local commit %s retained; no push attempted: %w", commit, err)
 	}
-	result = s.Runner.Run(CommandSpec{Name: "git", Args: []string{"push", "--", "origin", commit + ":refs/heads/" + branch}, Dir: workspace})
+	// An explicit refspec alone does not override push.followTags.
+	result = s.Runner.Run(CommandSpec{Name: "git", Args: []string{"push", "--no-follow-tags", "--", "origin", commit + ":refs/heads/" + branch}, Dir: workspace})
 	if !commandSucceeded(result) {
 		return fmt.Errorf("push failed or is uncertain; local commit %s retained; remote branch may have been updated", commit)
 	}

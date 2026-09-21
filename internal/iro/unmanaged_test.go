@@ -66,7 +66,7 @@ func (f *unmanagedFixture) run(spec CommandSpec) CommandResult {
 		switch command {
 		case "rev-parse --show-toplevel":
 			return CommandResult{Stdout: f.root}
-		case "config --get-all remote.origin.url", "remote get-url --push --all origin":
+		case "config --get-all remote.origin.url", "remote get-url --all origin", "remote get-url --push --all origin":
 			return CommandResult{Stdout: "git@github.com:acme/iro.git\n"}
 		case "symbolic-ref --quiet HEAD":
 			if spec.Dir == f.root {
@@ -89,7 +89,7 @@ func (f *unmanagedFixture) run(spec CommandSpec) CommandResult {
 			return CommandResult{}
 		case "rev-list --parents -n 1 HEAD":
 			return CommandResult{Stdout: reviewHeadForTest + " " + reviewBaseForTest}
-		case "push -- origin " + reviewHeadForTest + ":refs/heads/iro/issue-123":
+		case "push --no-follow-tags -- origin " + reviewHeadForTest + ":refs/heads/iro/issue-123":
 			return CommandResult{}
 		case "worktree list --porcelain":
 			return CommandResult{Stdout: "worktree " + f.root + "\nbranch refs/heads/release/topic\n\n"}
@@ -295,6 +295,12 @@ func TestUnmanagedPreconditions(t *testing.T) {
 		{"empty additional URL", "config --get-all remote.origin.url", CommandResult{Stdout: "git@github.com:acme/iro.git\n\n"}, "exactly one configured fetch URL"},
 		{"unsupported host", "config --get-all remote.origin.url", CommandResult{Stdout: "git@example.com:acme/iro.git"}, "supported GitHub repository"},
 		{"malformed URL", "config --get-all remote.origin.url", CommandResult{Stdout: "not-a-url"}, "supported GitHub repository"},
+		{"unreadable effective fetch URL", "remote get-url --all origin", CommandResult{ExitCode: 1}, "exactly one effective fetch URL"},
+		{"zero effective fetch URLs", "remote get-url --all origin", CommandResult{}, "exactly one effective fetch URL"},
+		{"empty effective fetch URL", "remote get-url --all origin", CommandResult{Stdout: "\n"}, "exactly one effective fetch URL"},
+		{"multiple effective fetch URLs", "remote get-url --all origin", CommandResult{Stdout: "git@github.com:acme/iro.git\nhttps://github.com/ACME/IRO\n"}, "exactly one effective fetch URL"},
+		{"rewritten fetch repository with matching push URL", "remote get-url --all origin", CommandResult{Stdout: "git@github.com:other/repo.git\n"}, "effective fetch destination"},
+		{"invalid effective fetch URL", "remote get-url --all origin", CommandResult{Stdout: "invalid"}, "effective fetch destination"},
 		{"zero push URLs", "remote get-url --push --all origin", CommandResult{}, "exactly one effective push URL"},
 		{"multiple same push URLs", "remote get-url --push --all origin", CommandResult{Stdout: "git@github.com:acme/iro.git\nhttps://github.com/ACME/IRO\n"}, "exactly one effective push URL"},
 		{"different push repository", "remote get-url --push --all origin", CommandResult{Stdout: "git@github.com:other/repo.git"}, "push destination"},
@@ -319,6 +325,9 @@ func TestUnmanagedPreconditions(t *testing.T) {
 			if code != 1 || !strings.Contains(diagnostic, tc.want) {
 				t.Fatalf("code=%d stderr=%s", code, diagnostic)
 			}
+			if tc.command == "remote get-url --all origin" && f.remoteChecks != 0 {
+				t.Fatal("remote refs were read before effective fetch URL rejection")
+			}
 			for _, stage := range f.stages {
 				if stage != "remote-check" {
 					t.Fatalf("side effect before rejection: %s", stage)
@@ -329,7 +338,7 @@ func TestUnmanagedPreconditions(t *testing.T) {
 }
 
 func TestUnmanagedOriginURLValidation(t *testing.T) {
-	for _, command := range []string{"config --get-all remote.origin.url", "remote get-url --push --all origin"} {
+	for _, command := range []string{"config --get-all remote.origin.url", "remote get-url --all origin", "remote get-url --push --all origin"} {
 		for _, tc := range []struct {
 			url   string
 			valid bool
@@ -382,9 +391,21 @@ func TestUnmanagedOriginURLValidation(t *testing.T) {
 	}
 }
 
+func TestUnmanagedFetchRewritePreservesConfiguredIdentity(t *testing.T) {
+	f := newUnmanagedFixture(t)
+	f.intercept = func(spec CommandSpec) (CommandResult, bool) {
+		// The raw fetch and effective push URLs still identify acme/iro over SSH.
+		return CommandResult{Stdout: "https://github.com/ACME/IRO\n"}, spec.Name == "git" && reflect.DeepEqual(spec.Args, []string{"remote", "get-url", "--all", "origin"})
+	}
+	// The strict fixture checks that every GitHub call uses the raw identity.
+	if code, _, diagnostic := f.execute(); code != 0 {
+		t.Fatal(diagnostic)
+	}
+}
+
 func TestUnmanagedRevalidatesBeforeCommitAndPush(t *testing.T) {
 	for _, check := range []int{2, 3} {
-		for _, failure := range []string{"base drift", "task collision", "identity drift", "push destination drift", "fetch transport drift", "push transport drift"} {
+		for _, failure := range []string{"base drift", "task collision", "identity drift", "push destination drift", "fetch transport drift", "push transport drift", "effective fetch destination drift", "effective fetch transport drift", "effective fetch unreadable"} {
 			t.Run(fmt.Sprintf("%d/%s", check, failure), func(t *testing.T) {
 				f := newUnmanagedFixture(t)
 				f.intercept = func(spec CommandSpec) (CommandResult, bool) {
@@ -392,11 +413,21 @@ func TestUnmanagedRevalidatesBeforeCommitAndPush(t *testing.T) {
 						return CommandResult{}, false
 					}
 					if f.remoteChecks == check-1 {
-						if failure == "identity drift" && spec.Args[0] == "config" || failure == "push destination drift" && spec.Args[0] == "remote" {
+						if failure == "identity drift" && spec.Args[0] == "config" || failure == "push destination drift" && containsString(spec.Args, "--push") {
 							return CommandResult{Stdout: "git@github.com:other/repo.git"}, true
 						}
-						if failure == "fetch transport drift" && spec.Args[0] == "config" || failure == "push transport drift" && spec.Args[0] == "remote" {
+						if failure == "fetch transport drift" && spec.Args[0] == "config" || failure == "push transport drift" && containsString(spec.Args, "--push") {
 							return CommandResult{Stdout: "https://github.com:8443/acme/iro.git\n"}, true
+						}
+						if reflect.DeepEqual(spec.Args, []string{"remote", "get-url", "--all", "origin"}) {
+							switch failure {
+							case "effective fetch destination drift":
+								return CommandResult{Stdout: "git@github.com:other/repo.git\n"}, true
+							case "effective fetch transport drift":
+								return CommandResult{Stdout: "https://github.com:8443/acme/iro.git\n"}, true
+							case "effective fetch unreadable":
+								return CommandResult{ExitCode: 1}, true
+							}
 						}
 					}
 					if spec.Args[0] == "ls-remote" && f.remoteChecks == check {
@@ -415,6 +446,9 @@ func TestUnmanagedRevalidatesBeforeCommitAndPush(t *testing.T) {
 				}
 				if containsString(f.stages, "commit") != (check == 3) {
 					t.Fatal(f.stages)
+				}
+				if strings.HasPrefix(failure, "effective fetch") && f.remoteChecks != check-1 {
+					t.Fatal("remote refs were read before effective fetch URL rejection")
 				}
 			})
 		}
