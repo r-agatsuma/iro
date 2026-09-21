@@ -48,13 +48,15 @@ managed `iro run` が行う GitHub operation は次とする。
 
 `iro run --unmanaged` は origin-derived repository の Issue / comments を read し、invocation branch を base とする PR を create する。Author / delivery failure 時の Issue comment と、成功時の Author report の PR comment も同じ repository に限定する。default branch / native closing relation の取得や Land hint は要求しない。詳細は UNMANAGED-RUN-001 以降に従う。
 
-`iro review` が行う GitHub operation は次とする。
+managed `iro review` が行う GitHub operation は次とする。
 
 - configured repository の default branch と target PR metadata / closing relation の read
 - origin Issue とその comments の read
 - target PR の body、diff、changed files、conversation、review feedback、inline review comments、checks の read
 - disposable review workspace を materialize するための repository / PR HEAD の read
 - target PR への Reviewer final response comment の create
+
+unmanaged Review は origin-derived repository の指定 PR と Human が `--issue` で指定した Issue / comments を read し、PR HEAD の snapshot を review して opaque な response を PR comment として一度だけ投稿する。詳細は UNMANAGED-REVIEW-001 以降に従う。
 
 `iro revise` が行う GitHub operation は次とする。
 
@@ -142,7 +144,7 @@ MVP は Human が明示的に Issue を dispatch する trusted development VM �
 
 managed `run` / `review` / `revise` / `land` は、configured `tracker.remote` だけから解決した GitHub identity（host、owner、repository）と、継承した `GH_HOST` / `GH_REPO` の整合性を共通 precondition として検証しなければならない。現在 support する host は `github.com` のみとする。
 
-unmanaged Run は例外として `origin` だけから identity を解決し、`GH_HOST` / `GH_REPO` を selector や mismatch gate にしない。unset、malformed、不一致のいずれも独立した reject 理由にせず、environment を書き換えない。各 GitHub operation の明示的な host / repository binding は unmanaged でも必須とする（UNMANAGED-RUN-002）。
+unmanaged Run / Review は例外として `origin` だけから identity を解決し、`GH_HOST` / `GH_REPO` を selector や mismatch gate にしない。unset、malformed、不一致のいずれも独立した reject 理由にせず、environment を書き換えない。各 GitHub operation の明示的な host / repository binding は unmanaged でも必須とする（UNMANAGED-RUN-002）。
 
 | Environment | Allowed condition |
 |---|---|
@@ -941,6 +943,8 @@ no-sandbox-option       := "--no-sandbox"
 
 worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。空値、重複指定、unsupported extra arguments は usage error とし、Reviewer 起動前に reject する。省略した model / reasoning effort は Codex configuration / default selection に委譲し、unsupported effort の fallback は行わない。PR URL、owner/repo#number、複数 PR を受け付けない。
 
+以下 REVIEW-002 から REVIEW-008 は managed Review の contract とする。unmanaged form は UNMANAGED-REVIEW-001 以降の差分に従う。
+
 ### REVIEW-002: local repository context
 
 `iro review` は invocation directory から Git repository root を解決し、そこに readable regular file である valid supported `iro.toml` と `WORKFLOW.md` が存在することを要求する。`tracker.remote` だけから GitHub repository identity を一意に解決する。
@@ -1056,6 +1060,44 @@ iro review command success != PASS
 Review は target source branch、persistent Issue worktree、local ownership mapping、Git history、Issue specification を変更しない。commit、push、PR branch mutation、merge、Issue mutation、native approval / request changes、automatic revise、review thread resolve を行わない。
 
 主要な persistent remote side effect は、Reviewer final response を target PR conversation comment として作成することだけである。
+
+### UNMANAGED-REVIEW-001: CLI and explicit specification
+
+```text
+iro review <pr-number> --unmanaged --issue <issue-number> [worker options...]
+```
+
+PR M を implementation target、Issue N を Human が選択した specification context とする。全 option は positional PR operand の後に置く。option 間の順序は問わない。`--unmanaged` は値なしで exactly once、`--issue` は positive decimal Issue number を値として exactly once 必須とする。managed Review に `--issue` を指定してはならない。これは worker configuration ではなく orchestration input である。
+
+既存の `--model` / `-m`、`--reasoning-effort`、`--no-sandbox` は同じ意味で併用できる。missing / empty / invalid / duplicate Issue、duplicate unmanaged、unsupported flag、extra argument は Git・Reviewer・remote operation より前に usage-error status 2 とする。
+
+### UNMANAGED-REVIEW-002: origin identity and eligibility
+
+Git repository root と、UNMANAGED-RUN-002 の origin fetch identity primitive を使用する。configured / effective origin fetch URL はそれぞれ exactly one で同一 GitHub repository を識別しなければならない。push URL の個数や宛先は検査しない。`iro.toml` / `WORKFLOW.md` を config / policy として読み取らず、存在・内容を precondition にしない。`GH_REPO` / `GH_HOST` / upstream は selector にも独立した mismatch gate にもしない。GitHub calls は origin identity の host / repository を明示する。
+
+PR M が同じ repository に存在し readable / OPEN で、head repository も同じ repository でなければならない。Draft は許可する。Issue N が同じ repository で取得可能であることを要求する。default branch / default base、native closing relation、canonical head name、creator provenance、ownership mapping は要求しない。managed Review の fork eligibility は変更しない。
+
+### UNMANAGED-REVIEW-003: snapshot and Reviewer
+
+preflight で base branch / base OID と PR HEAD `H1` を記録する。両 OID は valid commit OID を要求する。PR / Issue context、worker executable / authentication を確認後、origin から exact H1 を fetch し、毎回 unique な detached linked worktree を新規作成する。既存 managed / unmanaged workspace を adopt / reuse しない。Reviewer 前に detached state と workspace HEAD == H1 を検証する。
+
+Reviewer は built-in unmanaged policy と REVIEW-006 の read-only Reviewer role を適用し、project files を policy として読まない。source edit、Git mutation、tracker / remote mutation、環境の自動補完を禁止する。既定 sandbox、disposable build / test artifact、worker option の意味は managed Reviewer と同じとする。
+
+provenance と opaque output の責務は REVIEW-004 / REVIEW-007 に従う。PR diff / feedback は取得時の context であり、verified workspace H1 と異なる concurrent update を含む可能性がある。Reviewer は verified H1 の内容を review target とする。Reviewer 開始後に remote HEAD が H2 に進んでも H1 provenance の review を投稿してよい。post-review freshness gate を追加しない。
+
+### UNMANAGED-REVIEW-004: comment and cleanup
+
+Reviewer が exit status 0 と non-empty stdout を返した場合、opaque response を一切加工せず PR M に exactly one attempt で投稿し、その後 linked-worktree cleanup を試行する。verdict による成否判定や自動 retry は行わない。comment API の HTTP 201 と有効な comment ID を含む response を確認して投稿成功とする。明示的な HTTP 4xx rejection（timeout 408 を除く）は definite failure、それ以外の transport failure / 不正・不完全 response / 結果未確認は ambiguous outcome とする。
+
+| Result | Comment attempts | Cleanup | Command result |
+|---|---|---|---|
+| Reviewer failure / empty output | 0 | best effort | non-zero |
+| Confirmed comment success | 1 | success | success |
+| Confirmed comment success | 1 | failure | success + cleanup warning / retained path |
+| Definite comment failure | 1 | best effort | non-zero; 投稿成功を主張しない |
+| Ambiguous comment outcome | 1 | best effort | non-zero; comment が存在する可能性と、再実行前に PR M を確認する案内 |
+
+workspace verification / materialization failure も作成済み path に best-effort cleanup を試行する。cleanup success は linked-worktree directory と Git worktree registration の両方が消えたことを確認する。cleanup failure は常に warning と残存 path を示し、comment retry を許可しない。workspace は source / delivery recovery state として保持する設計ではなく、cleanup 失敗時に物理的に残る場合だけ Human が確認する。managed Review の cleanup-first / cleanup failure 時 comment 非投稿という contract は変更しない。
 
 ## 11. `iro revise <pr-number>`
 
@@ -1304,7 +1346,7 @@ Codex thread/session ID は保存対象に含めない。
 
 ## 14. Behavior matrix
 
-以下の matrix は managed operation を対象とする。unmanaged Run の条件と失敗時の保持・cleanup は UNMANAGED-RUN-001 から UNMANAGED-RUN-007 に定義する。
+以下の matrix は managed operation を対象とする。unmanaged Review は UNMANAGED-REVIEW-001 から UNMANAGED-REVIEW-004 に従う。unmanaged Run の条件と失敗時の保持・cleanup は UNMANAGED-RUN-001 から UNMANAGED-RUN-007 に定義する。
 
 `revise` の local state matrix は REVISE-003、remote preconditions と failure behavior は REVISE-002 / REVISE-007 に定義する。
 

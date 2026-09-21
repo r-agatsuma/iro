@@ -183,11 +183,20 @@ func (s *Service) reviewWithOptions(prNumber int, options workerOptions, out io.
 }
 
 func (s *Service) inspectPRTarget(root string, identity RepositoryIdentity, number int, operation string) (reviewPullRequest, error) {
+	return s.inspectPRTargetWithIssue(root, identity, number, operation, 0)
+}
+
+func (s *Service) inspectPRTargetWithIssue(root string, identity RepositoryIdentity, number int, operation string, specificationIssue int) (reviewPullRequest, error) {
+	query := reviewPreflightQuery
+	if specificationIssue > 0 {
+		query = strings.Replace(query, "defaultBranchRef{name} ", "", 1)
+		query = strings.Replace(query, " closingIssuesReferences(first:2){totalCount nodes{number repository{nameWithOwner}}}", "", 1)
+	}
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
 		Args: []string{
 			"api", "graphql", "--hostname", identity.Host(),
-			"-f", "query=" + reviewPreflightQuery,
+			"-f", "query=" + query,
 			"-f", "owner=" + identity.Owner,
 			"-f", "name=" + identity.Name,
 			"-F", "number=" + strconv.Itoa(number),
@@ -229,10 +238,10 @@ func (s *Service) inspectPRTarget(root string, identity RepositoryIdentity, numb
 		}
 	}
 	if !commandSucceeded(result) || json.Unmarshal([]byte(result.Stdout), &response) != nil || len(response.Errors) > 0 || response.Data.Repository == nil {
-		return reviewPullRequest{}, fmt.Errorf("could not inspect PR #%d and repository default branch; verify GitHub access", number)
+		return reviewPullRequest{}, fmt.Errorf("could not inspect PR #%d metadata; verify GitHub access", number)
 	}
 	repository := response.Data.Repository
-	if repository.DefaultBranchRef == nil || repository.DefaultBranchRef.Name == "" {
+	if specificationIssue == 0 && (repository.DefaultBranchRef == nil || repository.DefaultBranchRef.Name == "") {
 		return reviewPullRequest{}, fmt.Errorf("configured repository default branch is unavailable")
 	}
 	pr := repository.PullRequest
@@ -245,16 +254,22 @@ func (s *Service) inspectPRTarget(root string, identity RepositoryIdentity, numb
 		}
 		return reviewPullRequest{}, fmt.Errorf("PR #%d must be open for %s", number, operation)
 	}
-	if pr.BaseRefName != repository.DefaultBranchRef.Name {
-		return reviewPullRequest{}, fmt.Errorf("PR #%d targets %q, but %s requires default branch %q", number, pr.BaseRefName, operation, repository.DefaultBranchRef.Name)
-	}
-	relations := pr.ClosingIssuesReferences
-	if relations.TotalCount != 1 || len(relations.Nodes) != 1 {
-		return reviewPullRequest{}, fmt.Errorf("PR #%d must have exactly one origin Issue closing relation; found %d", number, relations.TotalCount)
-	}
-	origin := relations.Nodes[0]
-	if origin.Number <= 0 || !strings.EqualFold(origin.Repository.NameWithOwner, identity.String()) {
-		return reviewPullRequest{}, fmt.Errorf("PR #%d origin Issue must belong to configured repository %s", number, identity.String())
+	originNumber := specificationIssue
+	if specificationIssue == 0 {
+		if pr.BaseRefName != repository.DefaultBranchRef.Name {
+			return reviewPullRequest{}, fmt.Errorf("PR #%d targets %q, but %s requires default branch %q", number, pr.BaseRefName, operation, repository.DefaultBranchRef.Name)
+		}
+		relations := pr.ClosingIssuesReferences
+		if relations.TotalCount != 1 || len(relations.Nodes) != 1 {
+			return reviewPullRequest{}, fmt.Errorf("PR #%d must have exactly one origin Issue closing relation; found %d", number, relations.TotalCount)
+		}
+		origin := relations.Nodes[0]
+		if origin.Number <= 0 || !strings.EqualFold(origin.Repository.NameWithOwner, identity.String()) {
+			return reviewPullRequest{}, fmt.Errorf("PR #%d origin Issue must belong to configured repository %s", number, identity.String())
+		}
+		originNumber = origin.Number
+	} else if pr.HeadRepository == nil || !strings.EqualFold(pr.HeadRepository.NameWithOwner, identity.String()) {
+		return reviewPullRequest{}, fmt.Errorf("unmanaged review requires PR #%d head repository to be %s", number, identity.String())
 	}
 	if pr.HeadRefOID == "" {
 		return reviewPullRequest{}, fmt.Errorf("PR #%d HEAD commit is unavailable", number)
@@ -276,7 +291,7 @@ func (s *Service) inspectPRTarget(root string, identity RepositoryIdentity, numb
 		ChangedFiles:   pr.ChangedFiles,
 		Additions:      pr.Additions,
 		Deletions:      pr.Deletions,
-		OriginIssue:    origin.Number,
+		OriginIssue:    originNumber,
 	}
 	if pr.HeadRepository != nil {
 		target.HeadRepository = pr.HeadRepository.NameWithOwner
@@ -405,7 +420,14 @@ func (s *Service) materializeReviewWorkspace(root string, identity RepositoryIde
 
 func (s *Service) runReviewer(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, options workerOptions) CommandResult {
 	payload := buildReviewPayload(identity, target, origin, configData, workflowData, context)
-	instructions := fmt.Sprintf("%s\n\nTrusted review provenance (supplied by iro):\nModel: %s\nBase branch: %s\nBase OID: %s\nReviewed HEAD OID: %s\n", reviewerDeveloperInstructions, reviewerModelIdentity, target.BaseRefName, target.BaseRefOID, target.HeadRefOID)
+	if options.Unmanaged {
+		payload = buildPRPayload(identity, target, origin, nil, workflowData, context, "Built-in unmanaged Reviewer policy")
+	}
+	policy := reviewerDeveloperInstructions
+	if options.Unmanaged {
+		policy = strings.Replace(policy, "Follow the AGENTS.md instruction chain loaded by Codex and the invoking repository's WORKFLOW.md supplied in the review input.", "Follow the AGENTS.md instruction chain loaded by Codex within the built-in unmanaged policy. Do not read iro.toml or WORKFLOW.md. Do not provision or repair missing environments, credentials, remotes, branches, or worktrees. If guidance conflicts or a new specification decision is required, stop and report it for human judgment. Review the verified workspace HEAD supplied in trusted provenance; fetched PR diff and feedback may reflect concurrent changes and must not replace that snapshot.", 1)
+	}
+	instructions := fmt.Sprintf("%s\n\nTrusted review provenance (supplied by iro):\nModel: %s\nBase branch: %s\nBase OID: %s\nReviewed HEAD OID: %s\n", policy, reviewerModelIdentity, target.BaseRefName, target.BaseRefOID, target.HeadRefOID)
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",
 		Args: withCodexOptions(append(codexWorkerArgs(workspace, options), []string{
@@ -431,7 +453,11 @@ func buildPRPayload(identity RepositoryIdentity, target reviewPullRequest, origi
 		return value
 	}
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "Repository: %s\n\nProject configuration (iro.toml):\n%s\n%s:\n%s\n", identity.String(), configData, policyLabel, workflowData)
+	fmt.Fprintf(&builder, "Repository: %s\n\n", identity.String())
+	if configData != nil {
+		fmt.Fprintf(&builder, "Project configuration (iro.toml):\n%s\n", configData)
+	}
+	fmt.Fprintf(&builder, "%s:\n%s\n", policyLabel, workflowData)
 	fmt.Fprintf(&builder, "Origin Issue:\nNumber: %d\nTitle: %s\nURL: %s\nBody:\n%s\n\nIssue comments (ordered by createdAt, then immutable ID):\n", origin.Number, origin.Title, origin.URL, origin.Body)
 	if len(origin.Comments) == 0 {
 		builder.WriteString("(none)\n")
