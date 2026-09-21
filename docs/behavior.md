@@ -58,13 +58,15 @@ managed `iro review` が行う GitHub operation は次とする。
 
 unmanaged Review は origin-derived repository の指定 PR と Human が `--issue` で指定した Issue / comments を read し、PR HEAD の snapshot を review して opaque な response を PR comment として一度だけ投稿する。詳細は UNMANAGED-REVIEW-001 以降に従う。
 
-`iro revise` が行う GitHub operation は次とする。
+managed `iro revise` が行う GitHub operation は次とする。
 
 - configured repository の default branch、target PR metadata / closing relation、active delivery PR relation の read
 - origin Issue とその comments、および target PR の body、diff、conversation、reviews、inline review comments、checks の read
 - canonical Issue worktree を materialize するための remote PR HEAD の read
 
-`revise` は canonical branch への Git push で既存 PR を更新する。新規 PR 作成、Issue / PR comment 投稿、review thread resolve は行わない。Author の作業報告は local log に保持する。
+managed `revise` は canonical branch への Git push で既存 PR を更新する。unmanaged Revise は origin-derived repository の選択 PR、明示 Issue と comments、PR feedback を read し、選択 PR の同一 head ref へ push する。native closing relation / default branch / 他の OPEN PR の存在を判定に使用しない。詳細は UNMANAGED-REVISE-001 以降に従う。
+
+いずれの Revise も新規 PR 作成、Issue / PR comment 投稿、review thread resolve は行わない。Author の作業報告は local log に保持する。
 
 `iro land` が行う GitHub operation は次とする。
 
@@ -116,10 +118,10 @@ Human による `iro land <pr-number>` の明示実行自体を、その PR の 
 
 ### INV-007: dirty state is human-owned
 
-`iro` は開始時に存在する dirty worktree を自動で reset、clean、stash、commit、delete してはならない。検証済みの clean な owned worktree で今回の worker が生成した変更だけを RUN-016 / REVISE-006 に従って commit する。
+`iro` は開始時に存在する dirty worktree を自動で reset、clean、stash、commit、delete してはならない。検証済みの clean な owned worktree で今回の worker が生成した変更だけを RUN-016 / REVISE-006 / UNMANAGED-REVISE-004 に従って commit する。
 
 `iro run` で dirty state を検出した場合は変更せず failure とし、cleanup / stash の方法は Human に委ねる。
-`iro revise` も canonical Issue worktree の dirty state を同じ方針で拒否する。
+managed `iro revise` も canonical Issue worktree の dirty state を同じ方針で拒否する。
 `iro status` は dirty state を `DIRTY` として観測し、これだけを理由に failure としてはならない。
 
 ### INV-008: Codex is disposable
@@ -144,7 +146,7 @@ MVP は Human が明示的に Issue を dispatch する trusted development VM �
 
 managed `run` / `review` / `revise` / `land` は、configured `tracker.remote` だけから解決した GitHub identity（host、owner、repository）と、継承した `GH_HOST` / `GH_REPO` の整合性を共通 precondition として検証しなければならない。現在 support する host は `github.com` のみとする。
 
-unmanaged Run / Review は例外として `origin` だけから identity を解決し、`GH_HOST` / `GH_REPO` を selector や mismatch gate にしない。unset、malformed、不一致のいずれも独立した reject 理由にせず、environment を書き換えない。各 GitHub operation の明示的な host / repository binding は unmanaged でも必須とする（UNMANAGED-RUN-002）。
+unmanaged Run / Review / Revise は例外として `origin` だけから identity を解決し、`GH_HOST` / `GH_REPO` を selector や mismatch gate にしない。unset、malformed、不一致のいずれも独立した reject 理由にせず、environment を書き換えない。各 GitHub operation の明示的な host / repository binding は unmanaged でも必須とする（UNMANAGED-RUN-002）。
 
 | Environment | Allowed condition |
 |---|---|
@@ -548,7 +550,7 @@ no-sandbox-option       := "--no-sandbox"
 
 worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。省略した model / reasoning effort は Codex configuration / default selection に委譲する。model と reasoning effort は synthetic model name に結合せず、reasoning effort は modelごとの catalog なしに指定値を requested configuration としてそのまま Codex に渡す。空値、重複指定、unsupported extra arguments は usage error とし、main side effect 前に reject する。unsupported model / effort の fallback は行わず、Codex 側の reject は通常の worker failure とする。MVP では Issue URL、owner/repo#number、複数 Issue を受け付けない。
 
-`--unmanaged` は値を取らず、Issue operand の後に一度だけ指定できる。他の worker option との順序は意味を持たない。`--issue`、operand より前の option、`--unmanaged=true`、重複、余分な引数は Git / worker / remote side effect より前に usage error（exit status 2）とする。`review` / `revise` / `land` では `--unmanaged` を受け付けない。
+`--unmanaged` は値を取らず、Issue operand の後に一度だけ指定できる。他の worker option との順序は意味を持たない。`--issue`、operand より前の option、`--unmanaged=true`、重複、余分な引数は Git / worker / remote side effect より前に usage error（exit status 2）とする。`review` / `revise` の unmanaged form はそれぞれの節に従う。`land` では `--unmanaged` を受け付けない。
 
 ### RUN-002: source repository
 
@@ -854,7 +856,7 @@ Issue comment の結果を local run log へ反映する際は、一時ファイ
 
 unmanaged Run は config-free な明示 operation とする。`iro.toml` / `WORKFLOW.md` を config / worker policy として read、validate、reconcile してはならない。存在、欠落、不正な内容、読取不能、non-regular のいずれも mode / policy selection を変えない。ただし、これらの file の通常の tracked / untracked 変更も checkout cleanliness の対象となる。
 
-mode は CLI invocation にのみ適用し、project setting、ownership mapping、adoption state として永続化しない。unmanaged Review / Revise / Land、汎用 adoption / status / cleanup command は提供しない。
+mode は CLI invocation にのみ適用し、project setting、ownership mapping、adoption state として永続化しない。unmanaged Review / Revise はそれぞれの節に定義する。unmanaged Land、汎用 adoption / status / cleanup command は提供しない。
 
 ### UNMANAGED-RUN-002: origin identity and push destination
 
@@ -1101,6 +1103,8 @@ workspace verification / materialization failure も作成済み path に best-e
 
 ## 11. `iro revise <pr-number>`
 
+`--unmanaged` を指定しない場合は REVISE-001 から REVISE-007 の managed contract を適用する。unmanaged form は UNMANAGED-REVISE-001 以降に従い、managed policy / ownership に fallback しない。
+
 ### REVISE-001: purpose and arguments
 
 `iro revise` は Human が明示した remote delivery PR に fresh Author worker で参加し、現在の Issue specification と PR feedback に基づいて同じ canonical branch / PR を更新する operation である。
@@ -1222,6 +1226,78 @@ worker / validation / staging / commit failure は worktree と可能な index c
 
 Author report は local log に残すが、operation receipt や durable semantic state の代替ではない。必要な Human decision は Issue / PR に Human が記録する。preflight と Git push は atomic ではなく、最終検査後の concurrent relation change を完全には防げない。通常 push の non-fast-forward rejection を維持し、排他制御、自動 Review→Revise loop、watermark は実装しない。
 
+### UNMANAGED-REVISE-001: explicit PR, Issue, and ref-level authorization
+
+```text
+iro revise <pr-number> --unmanaged --issue <issue-number> [worker options...]
+```
+
+PR operand は positive decimal integer とし、すべての option をその後に指定する。`--unmanaged` は値を取らず exactly once、`--issue` は positive decimal Issue number を値として exactly once 必須とする。option 間の順序は意味を持たない。managed Revise は `--issue` を受け付けない。`--issue` は orchestration input であり、worker configuration option ではない。
+
+`--model` / `-m`、`--reasoning-effort`、`--no-sandbox` は managed Revise と同じ意味で併用できる。missing / empty / invalid / duplicate Issue、duplicate unmanaged flag、値付き `--unmanaged`、unsupported flag、余分な引数、operand 前の option は Git / Author / remote side effect より前に usage error（exit status 2）とする。
+
+選択 PR を `M`、Human が選択した specification Issue を `N`、PR head ref を `F`、base ref name を `B`、検証済み開始 HEAD を `H1` とする。この invocation は M を通して選んだ同一 repository の remote head ref F の更新を許可し、M / F の exclusive ownership を取得しない。
+
+同じ head repository / ref F を共有する別の OPEN PR `K` が存在してよい。既存 K、materialization 中 / Author 実行中 / commit 後の K の出現は eligibility / revalidation 条件にしない。他の OPEN PR を列挙して uniqueness を検証しない。push 成功により M と K の両方が新 commit を観測し得るが、K を close / retarget / merge / repair しない。
+
+### UNMANAGED-REVISE-002: identity and eligibility
+
+UNMANAGED-RUN-002 の origin identity / push validation primitives を使用する。configured / effective fetch URL はそれぞれ exactly one、effective push URL も exactly one で、同じ supported GitHub repository を識別しなければならない。`GH_REPO` / `GH_HOST` / upstream は target selector や独立した reject 条件にせず、すべての GitHub I/O は origin-derived host / repository を明示する。
+
+`iro.toml` / `WORKFLOW.md` を config / policy として read / validate / reconcile しない。invocation checkout の branch / HEAD / cleanliness、managed canonical branch / worktree / ownership mapping は precondition にしない。既存 managed state の reuse / adoption / synchronization は行わない。
+
+Git / GitHub / Codex executable と認証、および次を Author 起動前に要求する。
+
+- M が origin repository に存在し、readable で OPEN（Draft を許可する）。head repository は origin repository と一致する。
+- N が同一 repository に存在し、body / comments を取得できる。Issue の検証・順序は RUN-004 と同じとする。
+- F / B が取得でき、F は有効な head ref、H1 は有効かつ取得可能な commit OID である。
+- remote を直接 read した `origin/F == H1`。古い remote-tracking ref は根拠にしない。
+- PR context の取得と feedback の正規化が成功する。
+
+任意の F、non-default B、native closing relation の欠落・変化を許可する。N と native origin Issue の reconciliation は行わず、default branch / closing relation / canonical active-Issue uniqueness を取得・要求しない。base tip OID の一致は要求しない。
+
+### UNMANAGED-REVISE-003: materialization and built-in Author policy
+
+exact H1 の objects を `origin` から取得し、commit object であることを確認する。fetch は local branch、remote-tracking refs、`FETCH_HEAD` を更新しない。各 invocation で fresh unique detached linked worktree を H1 に作成する。概念上の path は `unmanaged-workspaces/<repository-key>/revise-pr-M-<unique>/` とし、以前の failed unmanaged workspace を再利用しない。canonical branch や ownership mapping は作成しない。
+
+materialization 後に remote 条件を再検証する。local workspace は directory で、同一 repository の linked worktree として一つだけ登録され、detached HEAD が exact H1、clean でなければならない。Author には UNMANAGED-RUN-004 の built-in conservative policy と unmanaged Revise 固有の instructions を注入し、明示 Issue N、PR metadata / body / diff / feedback / checks、verified H1 から始まる implementation を渡す。N を native origin relation と表現しない。
+
+Author は fresh ephemeral session とし、Git read-only、tracker I/O の iro ownership、remote non-mutation、関連 validation、uncommitted handoff、日本語 report の boundary を維持する。WORKFLOW を編集しても invocation 中の built-in policy は置換しない。AGENTS guidance が core / built-in policy と実質的に conflict する場合は編集せず報告する。
+
+Author stdout / stderr、exit status、repository、M / N / F / B / H1、workspace path を `unmanaged-revisions/<repository-key>/<unique-workspace-name>.log` に保存する。Author failure、空 report、log 保存失敗は delivery 前に failure とし、report 保存失敗時も stdout / stderr を diagnostic に残す。
+
+### UNMANAGED-REVISE-004: revalidation, commit, and normal push
+
+Author 完了後かつ commit 前に以下を検証する。
+
+- origin fetch identity / effective push destination が同じ repository を指す。
+- M が OPEN、head repository が同じ、head ref が F、PR HEAD が H1、`origin/F == H1`、base ref name が B のままである。
+- local directory / registration / Git common directory / 作成時の worktree 固有 Git directory が invocation の detached linked worktree として整合し、detached HEAD が H1 のままである。今回の Author の file changes は許可する。
+
+`git diff --check`、`git add --all`、`git diff --cached --check` で検証し、空の staged diff は failure とする。検証済み staged tree を記録し、`Revise issue #N for PR #M` で commit C1 を作成する。C1 の sole parent は H1、commit tree は検証済み staged tree と一致しなければならない。
+
+commit 後かつ push 前にも上記 remote 条件を再検証し、workspace integrity、detached HEAD == C1、clean state を確認する。base branch tip の advancement は base ref name が B のままなら許可する。base ref-name / head repository / head ref / PR HEAD / origin ref の drift は local state を保持して拒否し、repair / push / target substitution しない。native closing relation の変化や shared-head PR の存在は独立した reject 理由にしない。
+
+detached HEAD の検証済み C1 を `git push --no-follow-tags --no-recurse-submodules -- origin C1:refs/heads/F` で通常 push する。明示 refspec と overrides により他の ref / tag / submodule remote への追加 push を行わない。force push、replacement PR、ref rename、PR body / base rewrite、adoption mapping、auto-rebase / merge / reset / clean / stash は行わない。
+
+通常 push の confirmed success を delivery completion とし、M と F を表示する。remote read と push は atomic ではなく、最終 read 後の concurrent change を lock しない。non-fast-forward rejection を維持し、失敗や結果不明を retry しない。
+
+### UNMANAGED-REVISE-005: retained state and post-push cleanup
+
+materialization / Author / validation / staging / commit / revalidation failure、failed / ambiguous push は useful な local workspace / index / commit / report を保持する。diagnostic は retained path、stopped stage、starting HEAD を超える local commit の有無（HEAD が読めない場合は unknown）、remote mutation を試行したかを示す。push failure は remote が更新済みの可能性を明示し、unchanged と推測しない。Human に local / remote state 確認を委ね、自動 retry / rollback / repair は行わない。failure の Issue / PR comment 投稿は行わない。
+
+confirmed push success の後は必ず、今回の detached linked worktree に対して best-effort cleanup を試みる。UNMANAGED-RUN-006 と同じ通常の `git worktree remove` と directory / registration の removal 確認を行う。削除成功は directory と Git registration の両方が消えていることを要求する。
+
+cleanup failure / removal 確認不能でも delivery success と exit status 0 を維持し、warning と retained path を表示する。cleanup failure を理由に再 push しない。failed / ambiguous push では success cleanup を実行せず、local state を残す。
+
+### UNMANAGED-REVISE-006: cross-mode boundaries
+
+configured managed repository R1 と origin repository R2 が異なる場合、managed Revise は R1 と INV-010 の context checks、unmanaged Revise は R2 と上記 origin contract を使用する。両 mode の identity を migration / reconciliation しない。
+
+unmanaged Revise が canonical managed ref を更新しても、既存 managed branch / worktree / ownership mapping は更新しない。後続 managed Revise は通常の現在状態検査を行い、stale local HEAD や dirty / partial state を拒否し得る（G1）。unmanaged で明示した Issue B が native Issue A と異なっても、後続 managed Revise は現在の native relation から A を解決する（G3）。
+
+unmanaged Revise が WORKFLOW を P1 から P2 に変更して delivery しても、その invocation は built-in policy のままである。後続 managed Revise が通常の eligibility を満たす場合は、自身の verified starting HEAD にある P2 を REVISE-005 に従って固定 policy とする（G5）。managed の canonical relation / uniqueness / ownership / local validation / push safety は維持し、unmanaged の shared-head 許可を適用しない。
+
 ## 12. `iro land <pr-number>`
 
 ### LAND-001: Human authorization and target selection
@@ -1340,13 +1416,13 @@ Issue comment result
 workspace ownership mapping
 ```
 
-上記 ownership mapping / timestamp / Issue comment result は managed `run` に適用し、comment を投稿していない場合は `not attempted` を記録する。unmanaged Run の log と mapping 非作成は UNMANAGED-RUN-005 に従う。`revise` は `revisions/<repository-key>/pr-<number>-<timestamp>.log` に PR number、origin Issue number、開始時 HEAD、worker exit status / stdout / stderr 等を保存する。
+上記 ownership mapping / timestamp / Issue comment result は managed `run` に適用し、comment を投稿していない場合は `not attempted` を記録する。unmanaged Run の log と mapping 非作成は UNMANAGED-RUN-005 に従う。managed `revise` は `revisions/<repository-key>/pr-<number>-<timestamp>.log` に PR number、origin Issue number、開始時 HEAD、worker exit status / stdout / stderr 等を保存する。
 
 Codex thread/session ID は保存対象に含めない。
 
 ## 14. Behavior matrix
 
-以下の matrix は managed operation を対象とする。unmanaged Review は UNMANAGED-REVIEW-001 から UNMANAGED-REVIEW-004 に従う。unmanaged Run の条件と失敗時の保持・cleanup は UNMANAGED-RUN-001 から UNMANAGED-RUN-007 に定義する。
+以下の matrix は managed operation を対象とする。unmanaged Review は UNMANAGED-REVIEW-001 から UNMANAGED-REVIEW-004、unmanaged Revise は UNMANAGED-REVISE-001 から UNMANAGED-REVISE-006 に従う。unmanaged Run の条件と失敗時の保持・cleanup は UNMANAGED-RUN-001 から UNMANAGED-RUN-007 に定義する。
 
 `revise` の local state matrix は REVISE-003、remote preconditions と failure behavior は REVISE-002 / REVISE-007 に定義する。
 

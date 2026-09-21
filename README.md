@@ -65,7 +65,7 @@ iro init
 iro doctor
 iro run <issue-number> [--unmanaged] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
 iro review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
-iro revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
+iro revise <pr-number> [--unmanaged --issue <issue-number>] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
 iro land <pr-number>
 iro status
 iro cleanup [<issue-number>]
@@ -100,6 +100,12 @@ worker 成功後は iro が変更を commit / push し、`iro/issue-N` を head�
 commit と push の直前に base と remote task ref を再検証し、`H0` だけを parent とする commit を通常 push します。作成する PR は base `B`、body は `Refs #N` です。native Issue close は保証せず、後続 managed Review / Revise / Land はそれぞれの通常の contract を満たす場合だけ利用できます。
 
 配送失敗では worktree と作業報告を保持し、push / PR の結果が不明ならその可能性を報告します。自動 retry / rollback は行いません。PR 作成確認後は通常の Git worktree 削除を試み、cleanup だけが失敗した場合は成功のまま warning と path を表示します。保持された unmanaged worktree は次回に再利用せず、managed status / cleanup の対象にもなりません。
+
+### Unmanaged Revise
+
+`iro revise M --unmanaged --issue N` は、`origin` と同じ repository の既存 OPEN PR M を、Human が指定した Issue N と PR feedback に基づいて更新します。任意の head ref / base を許可し、native closing relation や managed ownership は要求しません。`iro.toml` / `WORKFLOW.md` を policy として読まず、built-in policy と fresh detached worktree を使用します。既存の worker options を併用できます。
+
+Author 完了後と push 前に選択 PR / head ref / HEAD / base ref name を再検証し、同じ head ref へ通常 push します。同じ ref を共有する他の PR も更新を観測し得ます。既存 managed worktree / mapping の同期は行いません。失敗時は useful な local state と停止段階を報告して保持し、push 成功後は worktree cleanup を試みます。cleanup だけの失敗は delivery 成功を維持して warning と path を表示します。
 
 ### Review and Revise
 
