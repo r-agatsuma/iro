@@ -48,6 +48,38 @@ iro run 123
 
 `123` は対象 Issue number です。これは session resume ではなく fresh Author の rerun です。整合した既存 owned worktree は再利用され、その branch が default branch の新しい HEAD に自動追従することはありません。active delivery PR がある場合は Run を繰り返さず、relation を確認して `iro revise <pr-number>` を使います。
 
+## 中断した managed Run 後に partial state が残った
+
+Ctrl-C や worker の中断後に、Human が branch、worktree、または mapping の一部だけを手動で削除すると、次の `iro run 123` は local managed state を `BROKEN` として拒否することがあります。次の4つは別々の resource です。
+
+- local branch `iro/issue-123`
+- Git の worktree registration
+- canonical filesystem worktree path
+- iro の canonical ownership mapping
+
+まず、失敗診断に表示された path を使って個別に確認します。`iro status` と targeted な `iro cleanup 123` を使い、別の Issue まで処理する `iro cleanup` は troubleshooting の最初の選択肢にしないでください。
+
+```bash
+iro status
+git branch --list 'iro/issue-123'
+git worktree list --porcelain
+test -e /reported/issue-worktree-path && echo "worktree path exists"
+ls -l /reported/ownership-mapping-path
+```
+
+通常の dirty worktree だけが残っている場合は、変更を inspect して保存または破棄した後、対象 Issue を指定して `iro cleanup 123` を実行します。cleanup は自動で reset、stash、clean、削除を行わないため、dirty worktree の扱いを Human が選びます。
+
+一方、手動削除後の `BROKEN` partial state では、branch、Git worktree registration、filesystem path、ownership mapping の対応関係を Human が確認する必要があります。linked worktree の directory を `rm -rf` で削除しても、Git の worktree registration や iro の ownership mapping は削除されません。iro は ownership が不明な状態を推測して repair、adopt、prune しません。
+
+Human が保存範囲と所有関係を確認したうえで、local branch、canonical worktree path、Git worktree registration のすべてが無く、残っているのがその Issue の stale ownership mapping だけだと独立に確認できた場合に限り、診断に表示された mapping path を対象に手動削除できます。
+
+```bash
+rm -- /reported/ownership-mapping-path
+iro run 123
+```
+
+これは stale mapping だけが残った場合の限定的な手順であり、任意の `BROKEN` row に mapping 削除を適用する一般的な修正ではありません。branch、worktree registration、path のいずれかが残っている、内容を保存していない、または ownership が不明な場合は mapping を削除せず、表示された4つの resource を確認してから Human が次の操作を判断します。
+
 ## partial changes を保存したい
 
 保存先は対象 worktree の外を選びます。単一の `git diff > file.patch` は万能 backup ではありません。
