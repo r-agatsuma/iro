@@ -89,7 +89,8 @@ func (f *unmanagedFixture) run(spec CommandSpec) CommandResult {
 			return CommandResult{}
 		case "rev-list --parents -n 1 HEAD":
 			return CommandResult{Stdout: reviewHeadForTest + " " + reviewBaseForTest}
-		case "push --no-follow-tags -- origin " + reviewHeadForTest + ":refs/heads/iro/issue-123":
+		// Require both overrides so ambient settings cannot push tags or submodules.
+		case "push --no-follow-tags --no-recurse-submodules -- origin " + reviewHeadForTest + ":refs/heads/iro/issue-123":
 			return CommandResult{}
 		case "worktree list --porcelain":
 			return CommandResult{Stdout: "worktree " + f.root + "\nbranch refs/heads/release/topic\n\n"}

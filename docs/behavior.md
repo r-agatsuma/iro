@@ -902,7 +902,7 @@ iro は次を順に実施する。
 2. commit 直前に origin identity / effective push destination を再検証し、remote `origin/B == H0` と task ref の不在を再確認する。
 3. `Implement issue #N` の message で delivery commit `C1` を作成する。sole parent が `H0` であり、workspace が detached `C1` かつ clean なことを確認する。
 4. push 直前にも手順 2 の remote 条件を再検証する。base drift、競合する task ref、identity / destination の変更では non-zero failure とし、push / repair / target substitution を行わない。
-5. exact `C1` を explicit refspec `C1:refs/heads/iro/issue-N` で `origin` に通常 push する。`--no-follow-tags` を明示し、`push.followTags=true` が設定されていても到達可能な annotated tag を追加で push しない。force push は禁止する。
+5. exact `C1` を explicit refspec `C1:refs/heads/iro/issue-N` で `origin` に通常 push する。`--no-follow-tags` と `--no-recurse-submodules` を明示し、`push.followTags=true` や `push.recurseSubmodules=on-demand` / `only` が設定されていても、到達可能な annotated tag の追加 push や submodule remote への再帰 push を行わない。ambient Git configuration による task ref 以外への追加 remote mutation を許可しない。force push は禁止する。
 6. head `iro/issue-N`、base `B`、固定 body に `Refs #N` を含む通常の open PR を作成する。worker text を body に展開しない。PR number の有効な create response を confirmed delivery の境界とする。
 7. PR number / head / base を表示し、Author report を PR comment として best-effort で投稿する。comment failure は warning に留める。managed Land の eligibility を保証する案内はしない。
 

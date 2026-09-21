@@ -321,8 +321,8 @@ func (s *Service) deliverUnmanaged(root, workspace string, identity RepositoryId
 	if err := s.revalidateUnmanagedRun(workspace, identity, base, head, branch); err != nil {
 		return fmt.Errorf("local commit %s retained; no push attempted: %w", commit, err)
 	}
-	// An explicit refspec alone does not override push.followTags.
-	result = s.Runner.Run(CommandSpec{Name: "git", Args: []string{"push", "--no-follow-tags", "--", "origin", commit + ":refs/heads/" + branch}, Dir: workspace})
+	// An explicit refspec alone does not override push.followTags or push.recurseSubmodules.
+	result = s.Runner.Run(CommandSpec{Name: "git", Args: []string{"push", "--no-follow-tags", "--no-recurse-submodules", "--", "origin", commit + ":refs/heads/" + branch}, Dir: workspace})
 	if !commandSucceeded(result) {
 		return fmt.Errorf("push failed or is uncertain; local commit %s retained; remote branch may have been updated", commit)
 	}
