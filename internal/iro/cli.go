@@ -9,7 +9,7 @@ import (
 // Execute dispatches the bootstrap MVP CLI commands and returns an exit status.
 func Execute(args []string, out, errOut io.Writer, service *Service) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--unmanaged] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], review <pr-number> [--unmanaged --issue <issue-number>] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], revise <pr-number> [--unmanaged --issue <issue-number>] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], land <pr-number>, or cleanup [<issue-number>])")
+		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--unmanaged] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], review <pr-number> [--unmanaged --issue <issue-number>] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], revise <pr-number> [--unmanaged --issue <issue-number>] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], land <pr-number> [--unmanaged], or cleanup [<issue-number>])")
 		return 2
 	}
 
@@ -84,8 +84,8 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 			err = service.reviseWithOptions(number, options, out)
 		}
 	case "land":
-		if len(args) != 2 {
-			fmt.Fprintln(errOut, "error: usage: iro land <pr-number>")
+		if len(args) != 2 && (len(args) != 3 || args[2] != "--unmanaged") {
+			fmt.Fprintln(errOut, "error: usage: iro land <pr-number> [--unmanaged]")
 			return 2
 		}
 		number, parseErr := parsePullRequestNumber(args[1])
@@ -93,7 +93,11 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
-		err = service.Land(number, out)
+		if len(args) == 3 {
+			err = service.landUnmanaged(number, out)
+		} else {
+			err = service.Land(number, out)
+		}
 	case "cleanup":
 		if len(args) == 1 {
 			err = service.CleanupAll(out)

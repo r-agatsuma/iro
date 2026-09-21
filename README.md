@@ -66,7 +66,7 @@ iro doctor
 iro run <issue-number> [--unmanaged] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
 iro review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
 iro revise <pr-number> [--unmanaged --issue <issue-number>] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
-iro land <pr-number>
+iro land <pr-number> [--unmanaged]
 iro status
 iro cleanup [<issue-number>]
 ```

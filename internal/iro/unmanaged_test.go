@@ -260,7 +260,7 @@ func TestUnmanagedCLIOptions(t *testing.T) {
 	}
 	invalid := [][]string{
 		{"run", "--unmanaged", "123"}, {"run", "--unmanaged"}, {"run", "--issue", "123", "--unmanaged"},
-		{"review", "42", "--unmanaged"}, {"revise", "42", "--unmanaged"}, {"land", "42", "--unmanaged"},
+		{"review", "42", "--unmanaged"}, {"revise", "42", "--unmanaged"},
 		{"run", "123", "--issue", "123"},
 	}
 	for _, suffix := range [][]string{
@@ -689,7 +689,7 @@ func TestUnmanagedG2ManagedEligibilityUsesCurrentRelationNotProvenance(t *testin
 			case "revise":
 				_, err = f.service.inspectReviseTarget(f.root, identity, 42)
 			case "land":
-				_, err = f.service.inspectLandTarget(f.root, identity, 42)
+				_, err = f.service.inspectLandTarget(f.root, identity, 42, false)
 			}
 			if err != nil {
 				t.Fatalf("human-reshaped relation was rejected: %v", err)

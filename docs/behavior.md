@@ -32,7 +32,7 @@ precondition failure 時に不足環境を自動 provisioning してはならな
 破壊的な local resource 操作では、`iro` は ownership を確認できる resource だけを変更してよい。
 ownership が不明な branch、worktree、file を iro-owned と推測してはならない。
 
-`land` の remote eligibility は LAND-003 の delivery relation に従う。local ownership mapping や remote PR の creator identity を要求しない。
+managed `land` の remote eligibility は LAND-003 の delivery relation、unmanaged `land` は UNMANAGED-LAND-002 に従う。local ownership mapping や remote PR の creator identity を要求しない。
 
 ### INV-004: tracker authority
 
@@ -68,10 +68,12 @@ managed `revise` は canonical branch への Git push で既存 PR を更新す�
 
 いずれの Revise も新規 PR 作成、Issue / PR comment 投稿、review thread resolve は行わない。Author の作業報告は local log に保持する。
 
-`iro land` が行う GitHub operation は次とする。
+managed `iro land` が行う GitHub operation は次とする。
 
 - configured repository の default branch、target PR metadata / closing relation、active delivery PR relation、merge policy の read
 - Human が明示した PR の validated HEAD に bind した normal merge commit による merge
+
+unmanaged `iro land` は origin-derived repository の選択 PR metadata / merge policy を read し、その PR の validated HEAD に bind した normal merge を一度だけ試行する（UNMANAGED-LAND-001 以降）。
 
 `iro` は Issue create、close、reopen、label、assignee、milestone、Project state を API で自動変更してはならない。PR 作成時点では Issue を close しない。`land` の merge 成功に伴う origin Issue の close は GitHub native closing relation に委ねる。
 
@@ -146,7 +148,7 @@ MVP は Human が明示的に Issue を dispatch する trusted development VM �
 
 managed `run` / `review` / `revise` / `land` は、configured `tracker.remote` だけから解決した GitHub identity（host、owner、repository）と、継承した `GH_HOST` / `GH_REPO` の整合性を共通 precondition として検証しなければならない。現在 support する host は `github.com` のみとする。
 
-unmanaged Run / Review / Revise は例外として `origin` だけから identity を解決し、`GH_HOST` / `GH_REPO` を selector や mismatch gate にしない。unset、malformed、不一致のいずれも独立した reject 理由にせず、environment を書き換えない。各 GitHub operation の明示的な host / repository binding は unmanaged でも必須とする（UNMANAGED-RUN-002）。
+unmanaged Run / Review / Revise / Land は例外として `origin` だけから identity を解決し、`GH_HOST` / `GH_REPO` を selector や mismatch gate にしない。unset、malformed、不一致のいずれも独立した reject 理由にせず、environment を書き換えない。各 GitHub operation の明示的な host / repository binding は unmanaged でも必須とする（UNMANAGED-RUN-002）。
 
 | Environment | Allowed condition |
 |---|---|
@@ -856,7 +858,7 @@ Issue comment の結果を local run log へ反映する際は、一時ファイ
 
 unmanaged Run は config-free な明示 operation とする。`iro.toml` / `WORKFLOW.md` を config / worker policy として read、validate、reconcile してはならない。存在、欠落、不正な内容、読取不能、non-regular のいずれも mode / policy selection を変えない。ただし、これらの file の通常の tracked / untracked 変更も checkout cleanliness の対象となる。
 
-mode は CLI invocation にのみ適用し、project setting、ownership mapping、adoption state として永続化しない。unmanaged Review / Revise はそれぞれの節に定義する。unmanaged Land、汎用 adoption / status / cleanup command は提供しない。
+mode は CLI invocation にのみ適用し、project setting、ownership mapping、adoption state として永続化しない。unmanaged Review / Revise / Land はそれぞれの節に定義する。汎用 adoption / status / cleanup command は提供しない。
 
 ### UNMANAGED-RUN-002: origin identity and push destination
 
@@ -1298,7 +1300,9 @@ unmanaged Revise が canonical managed ref を更新しても、既存 managed b
 
 unmanaged Revise が WORKFLOW を P1 から P2 に変更して delivery しても、その invocation は built-in policy のままである。後続 managed Revise が通常の eligibility を満たす場合は、自身の verified starting HEAD にある P2 を REVISE-005 に従って固定 policy とする（G5）。managed の canonical relation / uniqueness / ownership / local validation / push safety は維持し、unmanaged の shared-head 許可を適用しない。
 
-## 12. `iro land <pr-number>`
+## 12. `iro land <pr-number> [--unmanaged]`
+
+LAND-001 から LAND-007 は managed Land の contract とする。unmanaged Land の差分は UNMANAGED-LAND-001 以降に定義する。
 
 ### LAND-001: Human authorization and target selection
 
@@ -1396,6 +1400,34 @@ successful merge の local sync hint は informational であり、merge success
 
 HEAD の一致は merge API の atomic guard で保証する。preflight の全 relation / policy read と merge は単一 transaction ではなく、検証後の base / closing relation 等の concurrent change まで lock するものではない。排他制御、独自 merge queue、automatic repair は導入しない。
 
+### UNMANAGED-LAND-001: CLI and origin identity
+
+受け付ける unmanaged form は `iro land <pr-number> --unmanaged` だけとする。`--unmanaged` は positional PR operand の後に一度だけ指定でき、値を取らない。managed form は `iro land <pr-number>` のままとする。両 mode とも `--issue`、worker options、重複 flag、未対応 flag、余分な引数を Git / remote operation 前に usage error（exit status 2）で拒否する。Land は worker option parser を使用しない。
+
+Git executable、local Git repository、`gh` executable / authentication を要求する。unmanaged Run / Review / Revise と共通の origin identity primitive により、origin の configured fetch URL が exactly 1 件で、有効な supported GitHub URL であり、effective fetch URL も exactly 1 件かつ同一 repository を指すことを検証する。push は行わず、push URL の数や妥当性を検査しない。
+
+`iro.toml` と `WORKFLOW.md` は読み取り・検証しない。ambient `GH_REPO` / `GH_HOST`、upstream は対象選択にも独立した拒否条件にも使わない。authentication と全 API request は `--hostname github.com` を明示し、API は origin-derived owner / repository と選択した PR number を明示する。
+
+### UNMANAGED-LAND-002: selected PR and merge safety
+
+Human が選択した PR M が origin repository に存在し、readable / OPEN / non-Draft で、head repository が同じ repository であること、有効な HEAD OID H を取得できることを要求する。origin Issue、native closing relation、canonical head name、default base、canonical active-delivery uniqueness、shared-head exclusivity は要求せず、relation / default branch / active PR enumeration を取得しない。
+
+repository permission、archived state、normal merge method support、mergeability、required checks / reviews、merge queue、unknown / unsupported policy は LAND-004 と同じ保守的な規則で判定する。optional failing checks と `BEHIND` の扱いも同じとし、branch を auto-update しない。Draft remediation は再実行例にも `--unmanaged` を保持する。
+
+preflight failure では merge を試行しない。preflight 成功時だけ、origin repository の exact PR M に対して LAND-006 と同じ同期 REST merge API を一度実行する。payload は `sha: H` と `merge_method: merge` とし、HEAD drift は endpoint の atomic guard により拒否される。admin bypass、force merge、alternate method、automatic retry、target substitution、relation repair を行わない。
+
+merge command 自体の成功と、有効な response の `merged: true` および有効な merge commit OID の両方を確認した場合だけ成功とする。request failure、HEAD binding rejection、`merged:false`、malformed / incomplete response、missing / invalid merge OID、通信断等による結果未確認は non-zero とする。失敗・不明時は remote が未変更だと推測せず、Human に PR M、current HEAD、repository policy を確認したうえで `iro land M --unmanaged` を明示的に再実行するよう案内する。自動再試行・fallback・repair や成功表示を行わない。
+
+成功時は `Landed PR #M with merge commit <merge-commit-oid>` と LAND-006 の informational local sync hint を表示し、要求していない origin Issue を創作・表示しない。
+
+### UNMANAGED-LAND-003: shared heads and cross-mode boundaries
+
+別の OPEN PR K が M と同じ head ref を共有していても、それ自体を拒否理由にしない。iro が merge する対象は M だけで、K に対する close / merge / retarget / repair は一切実行しない。K の扱いは Human の責任とする。GitHub 自身の native relation や repository 設定に基づく動作は変更しない。
+
+成功・失敗にかかわらず managed ownership / adoption state、local branch / worktree / log を作成・更新・削除しない。configured managed repository R1 と origin repository R2 が異なる場合も、managed Land は R1 と INV-010 の context checks、unmanaged Land は R2 を使用し、両 mode を reconcile しない。
+
+unmanaged success は後続 managed Land の eligibility を付与しない。managed Land は valid `iro.toml` identity、canonical relation / uniqueness、exact HEAD binding、merge policy を通常どおり検査し、unmanaged の shared-head 許可を適用しない。
+
 ## 13. Runtime state and logs
 
 runtime state は repository へ commit してはならない。
@@ -1422,7 +1454,7 @@ Codex thread/session ID は保存対象に含めない。
 
 ## 14. Behavior matrix
 
-以下の matrix は managed operation を対象とする。unmanaged Review は UNMANAGED-REVIEW-001 から UNMANAGED-REVIEW-004、unmanaged Revise は UNMANAGED-REVISE-001 から UNMANAGED-REVISE-006 に従う。unmanaged Run の条件と失敗時の保持・cleanup は UNMANAGED-RUN-001 から UNMANAGED-RUN-007 に定義する。
+以下の matrix は managed operation を対象とする。unmanaged Land は UNMANAGED-LAND-001 から UNMANAGED-LAND-003 に従う。unmanaged Review は UNMANAGED-REVIEW-001 から UNMANAGED-REVIEW-004、unmanaged Revise は UNMANAGED-REVISE-001 から UNMANAGED-REVISE-006 に従う。unmanaged Run の条件と失敗時の保持・cleanup は UNMANAGED-RUN-001 から UNMANAGED-RUN-007 に定義する。
 
 `revise` の local state matrix は REVISE-003、remote preconditions と failure behavior は REVISE-002 / REVISE-007 に定義する。
 
