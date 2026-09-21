@@ -9,7 +9,7 @@ import (
 // Execute dispatches the bootstrap MVP CLI commands and returns an exit status.
 func Execute(args []string, out, errOut io.Writer, service *Service) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--unmanaged] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], land <pr-number>, or cleanup [<issue-number>])")
+		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--unmanaged] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], review <pr-number> [--unmanaged --issue <issue-number>] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], land <pr-number>, or cleanup [<issue-number>])")
 		return 2
 	}
 
@@ -62,7 +62,11 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
-		err = service.reviewWithOptions(number, options, out)
+		if options.Unmanaged {
+			err = service.reviewUnmanaged(number, options.SpecificationIssue, options, out, errOut)
+		} else {
+			err = service.reviewWithOptions(number, options, out)
+		}
 	case "revise":
 		options, parseErr := parseWorkerOptions(args, "revise", "pr-number")
 		if parseErr != nil {
@@ -118,16 +122,20 @@ func parseModelOverride(args []string, command, operand string) (string, error) 
 }
 
 type workerOptions struct {
-	Unmanaged       bool
-	NoSandbox       bool
-	Model           string
-	ReasoningEffort string
+	SpecificationIssue int
+	Unmanaged          bool
+	NoSandbox          bool
+	Model              string
+	ReasoningEffort    string
 }
 
 func parseWorkerOptions(args []string, command, operand string) (workerOptions, error) {
 	usage := fmt.Sprintf("usage: iro %s <%s> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]", command, operand)
 	if command == "run" {
 		usage = strings.Replace(usage, "<"+operand+">", "<"+operand+"> [--unmanaged]", 1)
+	}
+	if command == "review" {
+		usage = strings.Replace(usage, "<"+operand+">", "<"+operand+"> [--unmanaged --issue <issue-number>]", 1)
 	}
 	if len(args) < 2 {
 		return workerOptions{}, fmt.Errorf("%s", usage)
@@ -139,13 +147,23 @@ func parseWorkerOptions(args []string, command, operand string) (workerOptions, 
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
 		case "--unmanaged":
-			if command != "run" {
+			if command != "run" && command != "review" {
 				return workerOptions{}, fmt.Errorf("%s", usage)
 			}
 			if options.Unmanaged {
 				return workerOptions{}, fmt.Errorf("unmanaged option may be specified only once")
 			}
 			options.Unmanaged = true
+		case "--issue":
+			if command != "review" || options.SpecificationIssue != 0 || i+1 >= len(args) {
+				return workerOptions{}, fmt.Errorf("%s", usage)
+			}
+			number, err := parseIssueNumber(args[i+1])
+			if err != nil {
+				return workerOptions{}, err
+			}
+			options.SpecificationIssue = number
+			i++
 		case "--no-sandbox":
 			if options.NoSandbox {
 				return workerOptions{}, fmt.Errorf("no-sandbox option may be specified only once")
@@ -174,6 +192,9 @@ func parseWorkerOptions(args []string, command, operand string) (workerOptions, 
 		default:
 			return workerOptions{}, fmt.Errorf("%s", usage)
 		}
+	}
+	if command == "review" && options.Unmanaged != (options.SpecificationIssue > 0) {
+		return workerOptions{}, fmt.Errorf("unmanaged review requires --unmanaged and exactly one --issue <issue-number>")
 	}
 	return options, nil
 }

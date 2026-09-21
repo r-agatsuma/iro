@@ -219,17 +219,21 @@ func (s *Service) revalidateUnmanagedRun(root string, identity RepositoryIdentit
 }
 
 func (s *Service) createUnmanagedWorktree(root string, identity RepositoryIdentity, number int, head string) (string, error) {
+	return s.createDetachedWorktree(root, identity, fmt.Sprintf("run-issue-%d-*", number), head)
+}
+
+func (s *Service) createDetachedWorktree(root string, identity RepositoryIdentity, pattern, head string) (string, error) {
 	parent := cleanAbsolutePath(filepath.Join(s.Dirs.DataRoot, "unmanaged-workspaces", identity.Key()))
 	if err := s.FileSystem.MkdirAll(parent, 0755); err != nil {
 		return "", fmt.Errorf("create unmanaged workspace parent: %w", err)
 	}
-	workspace, err := s.FileSystem.MkdirTemp(parent, fmt.Sprintf("run-issue-%d-*", number))
+	workspace, err := s.FileSystem.MkdirTemp(parent, pattern)
 	if err != nil {
 		return "", fmt.Errorf("reserve unique unmanaged workspace: %w", err)
 	}
 	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"worktree", "add", "--detach", workspace, head}, Dir: root})
 	if !commandSucceeded(result) {
-		return "", fmt.Errorf("could not create detached worktree; inspect possible partial state at %s", workspace)
+		return workspace, fmt.Errorf("could not create detached worktree; inspect possible partial state at %s", workspace)
 	}
 	return workspace, nil
 }
