@@ -24,6 +24,24 @@ type issueComment struct {
 	Body      string             `json:"body"`
 }
 
+func (c *issueComment) UnmarshalJSON(data []byte) error {
+	// A pointer distinguishes an explicit empty body from missing or null data.
+	type commentData issueComment
+	var decoded struct {
+		commentData
+		Body *string `json:"body"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.Body == nil {
+		return fmt.Errorf("comment body is missing or null")
+	}
+	decoded.commentData.Body = *decoded.Body
+	*c = issueComment(decoded.commentData)
+	return nil
+}
+
 type issueCommentAuthor struct {
 	Login string `json:"login"`
 }
@@ -66,6 +84,9 @@ func (s *Service) fetchIssue(root string, identity RepositoryIdentity, number in
 }
 
 func sortIssueComments(comments []issueComment) error {
+	if comments == nil {
+		return fmt.Errorf("comments array is missing or null")
+	}
 	type sortableComment struct {
 		comment   issueComment
 		createdAt time.Time

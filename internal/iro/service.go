@@ -238,6 +238,9 @@ func (s *Service) runWithModel(issueNumber int, model string, out, errOut io.Wri
 }
 
 func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, errOut io.Writer) error {
+	if options.Unmanaged {
+		return s.runUnmanaged(issueNumber, options, out, errOut)
+	}
 	if issueNumber <= 0 {
 		return fmt.Errorf("issue number must be a positive decimal integer")
 	}
@@ -504,10 +507,14 @@ Keep the final Author report focused on material changes actually made, validati
 
 func (s *Service) runCodex(workspace string, identity RepositoryIdentity, target issue, options workerOptions) CommandResult {
 	payload := buildIssuePayload(identity, target)
+	policy := developerInstructions
+	if options.Unmanaged {
+		policy = unmanagedDeveloperInstructions
+	}
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",
 		Args: withCodexOptions(append(codexWorkerArgs(workspace, options), []string{
-			"-c", "developer_instructions=" + strconv.Quote(developerInstructions),
+			"-c", "developer_instructions=" + strconv.Quote(policy),
 			"exec",
 			"--ephemeral",
 			"Implement the GitHub Issue supplied on stdin.",

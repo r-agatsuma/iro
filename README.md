@@ -63,7 +63,7 @@ repository の source root で install します。install 先は設定済みの
 iro version
 iro init
 iro doctor
-iro run <issue-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
+iro run <issue-number> [--unmanaged] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
 iro review <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
 iro revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]
 iro land <pr-number>
@@ -81,7 +81,7 @@ iro cleanup [<issue-number>]
 
 ## Remote delivery
 
-`run` / `review` / `revise` / `land` は `tracker.remote` から解決した repository と GitHub CLI environment の整合性を、Git / worktree 変更や worker 起動、GitHub access より前に検証します。`GH_HOST` は unset / empty または `github.com`、`GH_REPO` は unset / empty または一致する `OWNER/REPO` / `github.com/OWNER/REPO` を許可します。owner/repository は configured remote と同じ規則で比較し、大文字・小文字を区別せず、末尾の `.git` を除去します。不一致や malformed な値は修正方法を stderr に表示して拒否します。Human が `unset GH_HOST` / `unset GH_REPO` または configured value への設定を行ってください。iro 自身は environment を変更しません。
+managed `run` / `review` / `revise` / `land` は `tracker.remote` から解決した repository と GitHub CLI environment の整合性を、Git / worktree 変更や worker 起動、GitHub access より前に検証します。`GH_HOST` は unset / empty または `github.com`、`GH_REPO` は unset / empty または一致する `OWNER/REPO` / `github.com/OWNER/REPO` を許可します。owner/repository は configured remote と同じ規則で比較し、大文字・小文字を区別せず、末尾の `.git` を除去します。不一致や malformed な値は修正方法を stderr に表示して拒否します。Human が `unset GH_HOST` / `unset GH_REPO` または configured value への設定を行ってください。iro 自身は environment を変更しません。
 
 実際の `gh` operation も、認証確認・API の `--hostname github.com`、host を含む repository selector、configured owner/repository の API path / GraphQL variables で接続先を明示します。
 
@@ -90,6 +90,16 @@ iro cleanup [<issue-number>]
 `iro run <issue-number>` は configured repository の default branch を canonical delivery base とします。開始時の checkout は clean かつその default branch の named checkout でなければならず、non-default branch や detached HEAD からは開始しません。その検証済み local HEAD から `iro/issue-N` branch と canonical Issue worktree を作り、fresh Author worker を実行します。必要な場合は `--model <model>` / `-m <model>` と `--reasoning-effort <effort>` を独立して operation 単位の override として指定できます。
 
 worker 成功後は iro が変更を commit / push し、`iro/issue-N` を head、default branch を base、Issue `#N` を GitHub native closing relation とする通常の open PR を作成します。iro 自身は Draft PR を作りません。Author report は先に local log へ保存し、成功時は `iro land` の案内と同じ delivery PR comment に集約します。Issue へ成功 report は投稿しません。PR comment 投稿失敗は warning に留め、Run の成功を覆しません。Author failure または stage / commit / push / PR create 等の delivery failure 時は、origin Issue へ Author report と診断の投稿を試みます。その投稿失敗は元の operation failure を隠さず、追加 diagnostic として表示します。自動 retry / rollback / repair は行いません。delivery comment は Human 向け UX にすぎず、remote state、ownership、creator provenance、後続 operation の eligibility の正本ではありません。
+
+### Unmanaged Run
+
+`iro run N --unmanaged` は `iro.toml` / `WORKFLOW.md` を読まず、built-in の保守的な worker policy で実行します。`--unmanaged` は番号の後に一度だけ指定でき、既存の worker options と併用できます。repository は `origin` の唯一の configured fetch URL から決定し、effective push URL も一つで同じ GitHub repository を指す必要があります。`GH_REPO` / `GH_HOST` や branch upstream は target を選択せず、不一致を理由に拒否もしません。
+
+開始 checkout は clean な named branch `B` で、local HEAD `H0` が remote `origin/B` と一致している必要があります。non-default branch も利用できます。remote `iro/issue-N` が存在しないことを確認し、`H0` から毎回新しい detached linked worktree を作成します。canonical branch / ownership mapping は作成・採用しません。
+
+commit と push の直前に base と remote task ref を再検証し、`H0` だけを parent とする commit を通常 push します。作成する PR は base `B`、body は `Refs #N` です。native Issue close は保証せず、後続 managed Review / Revise / Land はそれぞれの通常の contract を満たす場合だけ利用できます。
+
+配送失敗では worktree と作業報告を保持し、push / PR の結果が不明ならその可能性を報告します。自動 retry / rollback は行いません。PR 作成確認後は通常の Git worktree 削除を試み、cleanup だけが失敗した場合は成功のまま warning と path を表示します。保持された unmanaged worktree は次回に再利用せず、managed status / cleanup の対象にもなりません。
 
 ### Review and Revise
 
