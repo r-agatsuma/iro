@@ -52,9 +52,18 @@ install 先は `GOBIN`、未設定なら通常 `$(go env GOPATH)/bin` です。`
 ```bash
 cd /path/to/target-repository
 iro init
+
+# 生成された project configuration と worker policy を確認・編集する
+git add iro.toml WORKFLOW.md
+git commit -m "Configure iro"
+git push
+
+# default branch 名が表示され、その後に変更が何も表示されないことを確認する
+git branch --show-current
+git status --short
 ```
 
-`iro init` は repository root に `iro.toml` と `WORKFLOW.md` を作ります。内容を確認し、通常の repository の手順で記録してください。`iro init` 自身は commit や push を行いません。後続の `iro run` は clean な default branch checkout から実行します。
+`iro init` は repository root に `iro.toml` と `WORKFLOW.md` を作ります。上記は default branch へ直接記録できる repository の例です。Pull Request など別の手順が必要な場合は repository のルールに従って両 file を記録し、default branch を同期してください。`iro init` 自身は commit や push を行いません。後続の `iro run` は、両 file が commit 済みで tracked / untracked の変更がない default branch checkout から実行します。
 
 準備を read-only で確認できます。
 
@@ -127,11 +136,16 @@ iro version
 - **いつ使うか:** 既存の Git repository を managed iro project として準備するとき。
 - **入力:** Git repository 内から、引数なしで実行します。
 - **出力:** repository root の `iro.toml` と `WORKFLOW.md`。既存 file は上書きしません。
-- **Human の次の操作:** 両 file を確認・調整し、repository の通常の手順で記録します。`iro doctor` で環境と認証を確認し、`run` の前に default branch checkout を clean にします。
+- **Human の次の操作:** 両 file を確認・調整し、repository の通常の手順で commit します。必要なら remote へ反映して default branch を同期し、`iro doctor` で環境と認証を確認します。`run` の前には両 file が commit 済みで、default branch checkout に tracked / untracked の変更がないことを確認します。
 - **主な option:** ありません。`--force` もありません。
 
 ```bash
 iro init
+git add iro.toml WORKFLOW.md
+git commit -m "Configure iro"
+git push
+git branch --show-current
+git status --short
 iro doctor
 ```
 
