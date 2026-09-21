@@ -269,7 +269,7 @@ func (s *Service) inspectPRTargetWithIssue(root string, identity RepositoryIdent
 		}
 		originNumber = origin.Number
 	} else if pr.HeadRepository == nil || !strings.EqualFold(pr.HeadRepository.NameWithOwner, identity.String()) {
-		return reviewPullRequest{}, fmt.Errorf("unmanaged review requires PR #%d head repository to be %s", number, identity.String())
+		return reviewPullRequest{}, fmt.Errorf("unmanaged %s requires PR #%d head repository to be %s", operation, number, identity.String())
 	}
 	if pr.HeadRefOID == "" {
 		return reviewPullRequest{}, fmt.Errorf("PR #%d HEAD commit is unavailable", number)
@@ -446,6 +446,10 @@ func buildReviewPayload(identity RepositoryIdentity, target reviewPullRequest, o
 }
 
 func buildPRPayload(identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, policyLabel string) string {
+	return buildPRPayloadWithIssueLabel(identity, target, origin, configData, workflowData, context, policyLabel, "Origin Issue")
+}
+
+func buildPRPayloadWithIssueLabel(identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, policyLabel, issueLabel string) string {
 	unknown := func(value string) string {
 		if strings.TrimSpace(value) == "" {
 			return "(unknown)"
@@ -458,7 +462,7 @@ func buildPRPayload(identity RepositoryIdentity, target reviewPullRequest, origi
 		fmt.Fprintf(&builder, "Project configuration (iro.toml):\n%s\n", configData)
 	}
 	fmt.Fprintf(&builder, "%s:\n%s\n", policyLabel, workflowData)
-	fmt.Fprintf(&builder, "Origin Issue:\nNumber: %d\nTitle: %s\nURL: %s\nBody:\n%s\n\nIssue comments (ordered by createdAt, then immutable ID):\n", origin.Number, origin.Title, origin.URL, origin.Body)
+	fmt.Fprintf(&builder, "%s:\nNumber: %d\nTitle: %s\nURL: %s\nBody:\n%s\n\nIssue comments (ordered by createdAt, then immutable ID):\n", issueLabel, origin.Number, origin.Title, origin.URL, origin.Body)
 	if len(origin.Comments) == 0 {
 		builder.WriteString("(none)\n")
 	} else {
@@ -466,7 +470,7 @@ func buildPRPayload(identity RepositoryIdentity, target reviewPullRequest, origi
 			fmt.Fprintf(&builder, "\nComment %d:\nID: %s\nAuthor: %s\nCreated at: %s\nBody:\n%s\n", i+1, comment.ID, normalizedCommentAuthor(comment), comment.CreatedAt, comment.Body)
 		}
 	}
-	fmt.Fprintf(&builder, "\nPull request metadata:\nNumber: %d\nTitle: %s\nURL: %s\nState: %s\nDraft: %t\nBase: %s\nHead: %s\nHead OID: %s\nHead repository: %s\nAuthor: %s\nMergeable: %s\nReview decision: %s\nChanged files: %d\nAdditions: %d\nDeletions: %d\nOrigin Issue: #%d\n\nPull request body:\n%s\n", target.Number, target.Title, target.URL, target.State, target.IsDraft, target.BaseRefName, target.HeadRefName, target.HeadRefOID, unknown(target.HeadRepository), unknown(target.Author), target.Mergeable, unknown(target.ReviewDecision), target.ChangedFiles, target.Additions, target.Deletions, target.OriginIssue, target.Body)
+	fmt.Fprintf(&builder, "\nPull request metadata:\nNumber: %d\nTitle: %s\nURL: %s\nState: %s\nDraft: %t\nBase: %s\nHead: %s\nHead OID: %s\nHead repository: %s\nAuthor: %s\nMergeable: %s\nReview decision: %s\nChanged files: %d\nAdditions: %d\nDeletions: %d\n%s: #%d\n\nPull request body:\n%s\n", target.Number, target.Title, target.URL, target.State, target.IsDraft, target.BaseRefName, target.HeadRefName, target.HeadRefOID, unknown(target.HeadRepository), unknown(target.Author), target.Mergeable, unknown(target.ReviewDecision), target.ChangedFiles, target.Additions, target.Deletions, issueLabel, target.OriginIssue, target.Body)
 	fmt.Fprintf(&builder, "\nChanged file names:\n%s\nPull request diff:\n%s\nPull request conversation comments (GitHub JSON):\n%s\nSubmitted reviews (GitHub JSON):\n%s\nInline review comments (GitHub JSON):\n%s\nChecks (GitHub JSON):\n%s\n", context.ChangedFiles, context.Diff, context.Conversation, context.Reviews, context.InlineReviewThread, context.Checks)
 	return builder.String()
 }

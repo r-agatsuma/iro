@@ -9,7 +9,7 @@ import (
 // Execute dispatches the bootstrap MVP CLI commands and returns an exit status.
 func Execute(args []string, out, errOut io.Writer, service *Service) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--unmanaged] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], review <pr-number> [--unmanaged --issue <issue-number>] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], revise <pr-number> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], land <pr-number>, or cleanup [<issue-number>])")
+		fmt.Fprintln(errOut, "error: command is required (version, init, doctor, status, run <issue-number> [--unmanaged] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], review <pr-number> [--unmanaged --issue <issue-number>] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], revise <pr-number> [--unmanaged --issue <issue-number>] [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox], land <pr-number>, or cleanup [<issue-number>])")
 		return 2
 	}
 
@@ -78,7 +78,11 @@ func Execute(args []string, out, errOut io.Writer, service *Service) int {
 			fmt.Fprintln(errOut, "error:", parseErr)
 			return 2
 		}
-		err = service.reviseWithOptions(number, options, out)
+		if options.Unmanaged {
+			err = service.reviseUnmanaged(number, options.SpecificationIssue, options, out, errOut)
+		} else {
+			err = service.reviseWithOptions(number, options, out)
+		}
 	case "land":
 		if len(args) != 2 {
 			fmt.Fprintln(errOut, "error: usage: iro land <pr-number>")
@@ -134,7 +138,7 @@ func parseWorkerOptions(args []string, command, operand string) (workerOptions, 
 	if command == "run" {
 		usage = strings.Replace(usage, "<"+operand+">", "<"+operand+"> [--unmanaged]", 1)
 	}
-	if command == "review" {
+	if command == "review" || command == "revise" {
 		usage = strings.Replace(usage, "<"+operand+">", "<"+operand+"> [--unmanaged --issue <issue-number>]", 1)
 	}
 	if len(args) < 2 {
@@ -147,7 +151,7 @@ func parseWorkerOptions(args []string, command, operand string) (workerOptions, 
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
 		case "--unmanaged":
-			if command != "run" && command != "review" {
+			if command != "run" && command != "review" && command != "revise" {
 				return workerOptions{}, fmt.Errorf("%s", usage)
 			}
 			if options.Unmanaged {
@@ -155,7 +159,7 @@ func parseWorkerOptions(args []string, command, operand string) (workerOptions, 
 			}
 			options.Unmanaged = true
 		case "--issue":
-			if command != "review" || options.SpecificationIssue != 0 || i+1 >= len(args) {
+			if (command != "review" && command != "revise") || options.SpecificationIssue != 0 || i+1 >= len(args) {
 				return workerOptions{}, fmt.Errorf("%s", usage)
 			}
 			number, err := parseIssueNumber(args[i+1])
@@ -193,8 +197,8 @@ func parseWorkerOptions(args []string, command, operand string) (workerOptions, 
 			return workerOptions{}, fmt.Errorf("%s", usage)
 		}
 	}
-	if command == "review" && options.Unmanaged != (options.SpecificationIssue > 0) {
-		return workerOptions{}, fmt.Errorf("unmanaged review requires --unmanaged and exactly one --issue <issue-number>")
+	if (command == "review" || command == "revise") && options.Unmanaged != (options.SpecificationIssue > 0) {
+		return workerOptions{}, fmt.Errorf("unmanaged %s requires --unmanaged and exactly one --issue <issue-number>", command)
 	}
 	return options, nil
 }
