@@ -404,7 +404,7 @@ func (s *Service) prepareWorktree(root string, identity RepositoryIdentity, issu
 	mappingFile := ownershipPath(s.Dirs, identity, issueNumber)
 	mapping, mappingPresent, err := s.readOwnership(mappingFile)
 	if err != nil {
-		return "", false, err
+		return "", false, fmt.Errorf("inspect ownership mapping %s: %w", mappingFile, err)
 	}
 	branchPresent, err := s.branchExists(root, branch)
 	if err != nil {
@@ -419,13 +419,12 @@ func (s *Service) prepareWorktree(root string, identity RepositoryIdentity, issu
 		return "", false, err
 	}
 
-	for _, item := range worktrees {
-		if item.Branch == "refs/heads/"+branch && cleanAbsolutePath(item.Path) != workspace {
-			return "", false, fmt.Errorf("Issue branch %q is checked out in another worktree; resolve the collision manually", branch)
-		}
+	registration, err := issueWorktreeRegistration(worktrees, branch, workspace)
+	if err != nil {
+		return "", false, err
 	}
 
-	if !branchPresent && !workspacePresent && !mappingPresent {
+	if !branchPresent && !workspacePresent && !mappingPresent && registration == "missing" {
 		if err := s.FileSystem.MkdirAll(filepath.Dir(workspace), 0755); err != nil {
 			return "", false, fmt.Errorf("create Issue workspace parent: %w", err)
 		}
@@ -451,28 +450,56 @@ func (s *Service) prepareWorktree(root string, identity RepositoryIdentity, issu
 		return workspace, true, nil
 	}
 
-	if !branchPresent || !workspacePresent || !mappingPresent {
-		return "", false, fmt.Errorf("Issue branch/worktree state is incomplete or collides; iro will not repair it")
+	if !branchPresent || !workspacePresent || !mappingPresent || registration != "present" {
+		return "", false, incompleteManagedStateError(issueNumber, branch, workspace, mappingFile, branchPresent, workspacePresent, registration, mappingPresent)
 	}
 	if mapping.Version != 1 || mapping.Repository != identity.Canonical() || mapping.IssueNumber != issueNumber || mapping.Branch != branch || cleanAbsolutePath(mapping.Worktree) != workspace {
-		return "", false, fmt.Errorf("Issue branch/worktree ownership is not verified; iro will not guess ownership")
-	}
-	foundExpected := false
-	for _, item := range worktrees {
-		if cleanAbsolutePath(item.Path) == workspace {
-			if item.Branch != "refs/heads/"+branch {
-				return "", false, fmt.Errorf("expected Issue worktree has the wrong branch; resolve it manually")
-			}
-			foundExpected = true
-		}
-	}
-	if !foundExpected {
-		return "", false, fmt.Errorf("expected Issue path is not a Git worktree; iro will not repair it")
+		return "", false, fmt.Errorf("Issue branch/worktree ownership is not verified; mapping %s; iro will not guess ownership", mappingFile)
 	}
 	if err := s.checkoutClean(workspace); err != nil {
 		return "", false, fmt.Errorf("issue worktree is dirty; review or clean it before retrying")
 	}
 	return workspace, false, nil
+}
+
+func issueWorktreeRegistration(worktrees []gitWorktree, branch, workspace string) (string, error) {
+	expectedBranch := "refs/heads/" + branch
+	for _, item := range worktrees {
+		if item.Branch == expectedBranch && cleanAbsolutePath(item.Path) != workspace {
+			return "", fmt.Errorf("Issue branch %q is checked out in another worktree; resolve the collision manually. Git worktree registration is conflicting at %s", branch, cleanAbsolutePath(item.Path))
+		}
+	}
+	for _, item := range worktrees {
+		if cleanAbsolutePath(item.Path) != workspace {
+			continue
+		}
+		if item.Branch != expectedBranch {
+			return "", fmt.Errorf("expected Issue worktree has the wrong branch; resolve it manually. Git worktree registration at %s has branch %q", workspace, item.Branch)
+		}
+		return "present", nil
+	}
+	return "missing", nil
+}
+
+func incompleteManagedStateError(issueNumber int, branch, workspace, mappingFile string, branchPresent, workspacePresent bool, registration string, mappingPresent bool) error {
+	return fmt.Errorf("Issue #%d local managed state is incomplete; iro will not repair it automatically\n\nObserved state:\n  branch %s: %s\n  worktree path %s: %s\n  Git worktree registration: %s\n  ownership mapping %s: %s\n\nInspect the reported resources and docs/cookbook.md before retrying `iro run %d`.",
+		issueNumber,
+		branch,
+		observedState(branchPresent),
+		workspace,
+		observedState(workspacePresent),
+		registration,
+		mappingFile,
+		observedState(mappingPresent),
+		issueNumber,
+	)
+}
+
+func observedState(present bool) string {
+	if present {
+		return "present"
+	}
+	return "missing"
 }
 
 func (s *Service) pathPresent(path string) (bool, error) {

@@ -573,6 +573,224 @@ func TestRunRejectsUnownedExistingWorkspace(t *testing.T) {
 	}
 }
 
+func TestPrepareWorktreeReportsObservedIncompleteManagedState(t *testing.T) {
+	tests := []struct {
+		name             string
+		branchPresent    bool
+		workspacePresent bool
+		wantBranch       string
+		wantWorkspace    string
+	}{
+		{
+			name:             "branch missing and worktree path missing",
+			branchPresent:    false,
+			workspacePresent: false,
+			wantBranch:       "missing",
+			wantWorkspace:    "missing",
+		},
+		{
+			name:             "branch present and worktree path missing",
+			branchPresent:    true,
+			workspacePresent: false,
+			wantBranch:       "present",
+			wantWorkspace:    "missing",
+		},
+		{
+			name:             "branch missing and worktree path present",
+			branchPresent:    false,
+			workspacePresent: true,
+			wantBranch:       "missing",
+			wantWorkspace:    "present",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			runner := &fakeCommandRunner{}
+			service := newTestService(t, runner, root)
+			identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
+			issueNumber := 123
+			branch := "iro/issue-123"
+			workspace := cleanAbsolutePath(worktreePath(service.Dirs, identity, issueNumber))
+			mappingPath := ownershipPath(service.Dirs, identity, issueNumber)
+			if tt.workspacePresent {
+				if err := os.MkdirAll(workspace, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mapping := ownershipMapping{
+				Version:     1,
+				Repository:  identity.Canonical(),
+				IssueNumber: issueNumber,
+				Branch:      branch,
+				Worktree:    workspace,
+			}
+			if err := service.writeOwnership(mappingPath, mapping); err != nil {
+				t.Fatal(err)
+			}
+			runner.fn = func(spec CommandSpec) CommandResult {
+				switch {
+				case spec.Name == "git" && len(spec.Args) >= 1 && spec.Args[0] == "show-ref":
+					if tt.branchPresent {
+						return CommandResult{ExitCode: 0}
+					}
+					return CommandResult{ExitCode: 1, Err: errors.New("not found")}
+				case spec.Name == "git" && len(spec.Args) >= 2 && spec.Args[0] == "worktree" && spec.Args[1] == "list":
+					return CommandResult{Stdout: "worktree " + root + "\nbranch refs/heads/main\n\n", ExitCode: 0}
+				}
+				return CommandResult{ExitCode: -1, Err: fmt.Errorf("unexpected command: %s %v", spec.Name, spec.Args)}
+			}
+
+			_, _, err := service.prepareWorktree(root, identity, issueNumber, branch, "head")
+			if err == nil {
+				t.Fatal("prepareWorktree() unexpectedly succeeded")
+			}
+			diagnostic := err.Error()
+			for _, want := range []string{
+				"Issue #123 local managed state is incomplete",
+				"branch iro/issue-123: " + tt.wantBranch,
+				"worktree path " + workspace + ": " + tt.wantWorkspace,
+				"Git worktree registration: missing",
+				"ownership mapping " + mappingPath + ": present",
+				"docs/cookbook.md",
+				"`iro run 123`",
+			} {
+				if !strings.Contains(diagnostic, want) {
+					t.Errorf("diagnostic does not contain %q: %s", want, diagnostic)
+				}
+			}
+			if strings.Contains(diagnostic, "incomplete or collides") {
+				t.Fatalf("diagnostic retained the generic partial-state message: %s", diagnostic)
+			}
+			for _, call := range runner.calls {
+				if call.Name == "git" && len(call.Args) >= 2 && call.Args[0] == "worktree" && call.Args[1] != "list" {
+					t.Fatalf("partial-state failure attempted a worktree mutation: %+v", call)
+				}
+			}
+			if _, err := os.Stat(mappingPath); err != nil {
+				t.Fatalf("ownership mapping was changed or removed: %v", err)
+			}
+		})
+	}
+}
+
+func TestPrepareWorktreeCreatesFreshStateWhenAllResourcesAreAbsent(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeCommandRunner{}
+	service := newTestService(t, runner, root)
+	identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
+	issueNumber := 123
+	branch := "iro/issue-123"
+	workspace := cleanAbsolutePath(worktreePath(service.Dirs, identity, issueNumber))
+	mappingPath := ownershipPath(service.Dirs, identity, issueNumber)
+	runner.fn = func(spec CommandSpec) CommandResult {
+		switch {
+		case spec.Name == "git" && len(spec.Args) >= 1 && spec.Args[0] == "show-ref":
+			return CommandResult{ExitCode: 1, Err: errors.New("not found")}
+		case spec.Name == "git" && len(spec.Args) >= 2 && spec.Args[0] == "worktree" && spec.Args[1] == "list":
+			return CommandResult{Stdout: "worktree " + root + "\nbranch refs/heads/main\n\n", ExitCode: 0}
+		case spec.Name == "git" && len(spec.Args) >= 2 && spec.Args[0] == "worktree" && spec.Args[1] == "add":
+			return CommandResult{ExitCode: 0}
+		}
+		return CommandResult{ExitCode: -1, Err: fmt.Errorf("unexpected command: %s %v", spec.Name, spec.Args)}
+	}
+
+	gotWorkspace, created, err := service.prepareWorktree(root, identity, issueNumber, branch, "head")
+	if err != nil {
+		t.Fatalf("prepareWorktree() error = %v", err)
+	}
+	if gotWorkspace != workspace || !created {
+		t.Fatalf("prepareWorktree() = (%q, %t), want (%q, true)", gotWorkspace, created, workspace)
+	}
+	if _, err := os.Stat(mappingPath); err != nil {
+		t.Fatalf("fresh ownership mapping was not created: %v", err)
+	}
+	for _, call := range runner.calls {
+		if call.Name == "git" && len(call.Args) >= 2 && call.Args[0] == "worktree" && call.Args[1] == "add" {
+			return
+		}
+	}
+	t.Fatal("fresh state did not create a Git worktree")
+}
+
+func TestPrepareWorktreeReportsBranchRegisteredAtAnotherWorktree(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeCommandRunner{}
+	service := newTestService(t, runner, root)
+	identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
+	issueNumber := 123
+	branch := "iro/issue-123"
+	workspace := cleanAbsolutePath(worktreePath(service.Dirs, identity, issueNumber))
+	otherWorkspace := cleanAbsolutePath(filepath.Join(t.TempDir(), "other-worktree"))
+	mappingPath := ownershipPath(service.Dirs, identity, issueNumber)
+	mapping := ownershipMapping{
+		Version:     1,
+		Repository:  identity.Canonical(),
+		IssueNumber: issueNumber,
+		Branch:      branch,
+		Worktree:    workspace,
+	}
+	if err := service.writeOwnership(mappingPath, mapping); err != nil {
+		t.Fatal(err)
+	}
+	runner.fn = func(spec CommandSpec) CommandResult {
+		switch {
+		case spec.Name == "git" && len(spec.Args) >= 1 && spec.Args[0] == "show-ref":
+			return CommandResult{ExitCode: 0}
+		case spec.Name == "git" && len(spec.Args) >= 2 && spec.Args[0] == "worktree" && spec.Args[1] == "list":
+			return CommandResult{Stdout: "worktree " + root + "\nbranch refs/heads/main\n\nworktree " + otherWorkspace + "\nbranch refs/heads/" + branch + "\n\n", ExitCode: 0}
+		}
+		return CommandResult{ExitCode: -1, Err: fmt.Errorf("unexpected command: %s %v", spec.Name, spec.Args)}
+	}
+
+	_, _, err := service.prepareWorktree(root, identity, issueNumber, branch, "head")
+	if err == nil {
+		t.Fatal("prepareWorktree() unexpectedly succeeded")
+	}
+	for _, want := range []string{
+		`Issue branch "iro/issue-123" is checked out in another worktree`,
+		otherWorkspace,
+		"Git worktree registration is conflicting",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("collision diagnostic does not contain %q: %s", want, err)
+		}
+	}
+	for _, call := range runner.calls {
+		if call.Name == "git" && len(call.Args) >= 2 && call.Args[0] == "worktree" && call.Args[1] != "list" {
+			t.Fatalf("collision failure attempted a worktree mutation: %+v", call)
+		}
+	}
+}
+
+func TestPrepareWorktreePreservesInvalidOwnershipMappingDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeCommandRunner{}
+	service := newTestService(t, runner, root)
+	identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
+	mappingPath := ownershipPath(service.Dirs, identity, 123)
+	if err := os.MkdirAll(filepath.Dir(mappingPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mappingPath, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := service.prepareWorktree(root, identity, 123, "iro/issue-123", "head")
+	if err == nil {
+		t.Fatal("prepareWorktree() unexpectedly succeeded")
+	}
+	for _, want := range []string{"inspect ownership mapping " + mappingPath, "ownership mapping is invalid"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("invalid mapping diagnostic does not contain %q: %s", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "ownership mapping "+mappingPath+": missing") {
+		t.Fatalf("invalid mapping was reported as missing: %s", err)
+	}
+}
+
 func TestRunRejectsDirtyOwnedWorkspaceWithoutCleanup(t *testing.T) {
 	root := t.TempDir()
 	writeProjectFiles(t, root)
