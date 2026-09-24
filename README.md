@@ -26,7 +26,7 @@ GitHub Issue
 
 iro 自体のビルドには Go 1.22 以上を使用する。Go が未導入であれば、公式の [Download and install Go](https://go.dev/doc/install) に従って導入する。
 
-通常の managed workflow では、Git、GitHub CLI（`gh`）、Codex CLI と各認証も必要である。Codex CLI の導入方法は [OpenAI の Codex CLI ドキュメント](https://developers.openai.com/docs/codex/cli) を参照する。
+通常の managed workflow では、Git、GitHub CLI（`gh`）、Codex CLI と各認証も必要である。Codex CLI の導入方法は [OpenAI の Codex CLI ドキュメント](https://learn.chatgpt.com/docs/codex/cli) を参照する。
 
 ```bash
 go version
@@ -39,7 +39,7 @@ codex login status
 
 現在、managed operation が対象とする tracker host は `github.com` である。
 
-なお、`iro init` だけは Git リポジトリと `git` executable があれば実行できる。GitHub remote、`gh`、Codex、network access は `iro init` 自体の前提ではない。これらは後続の `run` / `review` / `revise` / `land` で必要になる。
+なお、`iro init` だけは Git リポジトリと `git` executable があれば実行できる。GitHub remote、`gh`、Codex、network access は `iro init` 自体の前提ではない。`run` / `review` / `revise` では GitHub access に加えて Codex CLI と Codex authentication が必要である。`land` は GitHub access を必要とするが Codex は起動しない。
 
 ### 2. iro を install する
 
