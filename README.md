@@ -43,12 +43,10 @@ codex login status
 
 ### 2. iro を install する
 
-現在は、iro の source checkout からインストールする。
+次のコマンドで公開 module からインストールする。リポジトリの clone は不要で、利用者の Go toolchain が source から executable をビルドする。
 
 ```bash
-git clone https://github.com/r-agatsuma/iro.git
-cd iro
-go install ./cmd/iro
+go install github.com/r-agatsuma/iro/cmd/iro@latest
 ```
 
 `go install` が配置する binary は、Go の binary directory に入る。通常は system-wide な `/usr/local/bin` へ直接入るわけではない。
@@ -75,7 +73,13 @@ iro version
 
 恒久的に利用する場合は、利用している shell の設定ファイルへ同等の `PATH` 設定を追加する。iro は shell 設定を変更しない。
 
-現時点では公開 module path を前提とした `go install github.com/...@latest` ではなく、上記の source checkout からの導入を current procedure とする。
+開発時や source checkout から導入したい場合は、補助的な方法として次も利用できる。配置先と `PATH` の設定は上記と同じである。
+
+```bash
+git clone https://github.com/r-agatsuma/iro.git
+cd iro
+go install ./cmd/iro
+```
 
 ### 3. 対象リポジトリを初期化する
 

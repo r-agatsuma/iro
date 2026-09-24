@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"iro/internal/iro"
+	"github.com/r-agatsuma/iro/internal/iro"
 )
 
 func main() {
