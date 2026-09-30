@@ -117,6 +117,15 @@ func (s *Service) reviewWithOptions(prNumber int, options workerOptions, out io.
 	if err != nil {
 		return fmt.Errorf("WORKFLOW.md is missing or unreadable")
 	}
+	switch config.TrackerType {
+	case "github":
+		return s.reviewGitHub(root, config, prNumber, configData, workflowData, options, out)
+	default:
+		return fmt.Errorf("unsupported tracker.type %q; supported value is github", config.TrackerType)
+	}
+}
+
+func (s *Service) reviewGitHub(root string, config Config, prNumber int, configData, workflowData []byte, options workerOptions, out io.Writer) error {
 	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
 		return err
@@ -146,10 +155,7 @@ func (s *Service) reviewWithOptions(prNumber int, options workerOptions, out io.
 	if err != nil {
 		return err
 	}
-	if err := s.requireExecutable("codex"); err != nil {
-		return err
-	}
-	if err := s.checkAuth("codex", []string{"login", "status"}, root); err != nil {
+	if err := s.requireAgent(config.AgentType, root); err != nil {
 		return err
 	}
 
@@ -164,7 +170,7 @@ func (s *Service) reviewWithOptions(prNumber int, options workerOptions, out io.
 		}
 	}()
 
-	result := s.runReviewer(workspace, identity, target, origin, configData, workflowData, context, options)
+	result := s.runReviewer(config.AgentType, workspace, identity, target, origin, configData, workflowData, context, options)
 	if cleanupErr := s.FileSystem.RemoveAll(workspace); cleanupErr != nil {
 		return fmt.Errorf("could not remove disposable review workspace: %w", cleanupErr)
 	}
@@ -418,7 +424,7 @@ func (s *Service) materializeReviewWorkspace(root string, identity RepositoryIde
 	return workspace, nil
 }
 
-func (s *Service) runReviewer(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, options workerOptions) CommandResult {
+func (s *Service) runCodexReviewer(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, options workerOptions) CommandResult {
 	payload := buildReviewPayload(identity, target, origin, configData, workflowData, context)
 	if options.Unmanaged {
 		payload = buildPRPayload(identity, target, origin, nil, workflowData, context, "Built-in unmanaged Reviewer policy")

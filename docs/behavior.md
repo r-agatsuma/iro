@@ -223,6 +223,12 @@ workspace.strategy = git-worktree
 
 unsupported value を silently fallback してはならない。
 
+`tracker.type` は managed Run / Review / Revise / Land の operation boundary で既存 GitHub implementation を選択する。`agent.type` は worker の実行前 executable / authentication check と Author / Reviewer / Revision Author の入口で既存 Codex implementation を選択する。unmanaged は project config を読まず、既存の GitHub + Codex 選択と mode 固有 policy を維持する。
+
+Doctor は設定が有効ならその selector に従って診断する。path / version は設定解決前から現在 support する GitHub CLI / Codex を診断し、設定が不正・取得不能でもその診断と独立した executable / authentication check を継続・集約する。これは unsupported config の受理や operation 実行への fallback ではない。GitHub context が不正なら GitHub 認証を skip し、Codex の診断は継続する。
+
+selector 配線は command の依存条件を追加しない。Land は agent runtime / authentication と WORKFLOW.md を要求せず、Status / Cleanup は tracker authentication / network と agent runtime を要求しない。
+
 `tracker.remote` は GitHub repository identity を解決する唯一の remote である。
 `iro` は別 remote を推測してはならない。
 

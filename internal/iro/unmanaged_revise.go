@@ -65,10 +65,7 @@ func (s *Service) reviseUnmanaged(number, specificationIssue int, options worker
 	if err != nil {
 		return err
 	}
-	if err := s.requireExecutable("codex"); err != nil {
-		return err
-	}
-	if err := s.checkAuth("codex", []string{"login", "status"}, root); err != nil {
+	if err := s.requireAgent(unmanagedAgentType, root); err != nil {
 		return err
 	}
 	// Fetch the selected commit without moving any branch, tracking ref, or FETCH_HEAD.
@@ -118,7 +115,7 @@ func (s *Service) reviseUnmanaged(number, specificationIssue int, options worker
 		return err
 	}
 	stage = "Author"
-	result = s.runUnmanagedRevisionAuthor(workspace, identity, target, specification, context, options)
+	result = s.runUnmanagedRevisionAuthor(unmanagedAgentType, workspace, identity, target, specification, context, options)
 	logPath, logErr := s.writeUnmanagedReviseLog(identity, target, workspace, result)
 	if logErr != nil {
 		fmt.Fprintf(errOut, "warning: could not preserve Author log: %v\nAuthor stdout:\n%s\nAuthor stderr:\n%s\n", logErr, result.Stdout, result.Stderr)
@@ -259,7 +256,7 @@ func (s *Service) requireUnmanagedReviseWorktree(root, workspace, gitDir, head s
 	return nil
 }
 
-func (s *Service) runUnmanagedRevisionAuthor(workspace string, identity RepositoryIdentity, target reviewPullRequest, specification issue, context reviewContext, options workerOptions) CommandResult {
+func (s *Service) runCodexUnmanagedRevisionAuthor(workspace string, identity RepositoryIdentity, target reviewPullRequest, specification issue, context reviewContext, options workerOptions) CommandResult {
 	payload := buildPRPayloadWithIssueLabel(identity, target, specification, nil, []byte(unmanagedReviseDeveloperInstructions), context, "Built-in unmanaged Author policy", "Human-selected specification Issue")
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",

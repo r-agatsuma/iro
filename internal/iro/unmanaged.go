@@ -139,10 +139,7 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 	if err != nil {
 		return err
 	}
-	if err := s.requireExecutable("codex"); err != nil {
-		return err
-	}
-	if err := s.checkAuth("codex", []string{"login", "status"}, root); err != nil {
+	if err := s.requireAgent(unmanagedAgentType, root); err != nil {
 		return err
 	}
 	workspace, err := s.createUnmanagedWorktree(root, identity, number, head)
@@ -156,7 +153,7 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 	if err := s.checkoutClean(workspace); err != nil {
 		return fmt.Errorf("new unmanaged worktree is not clean; inspect %s: %w", workspace, err)
 	}
-	result = s.runCodex(workspace, identity, target, options)
+	result = s.runAuthor(unmanagedAgentType, workspace, identity, target, options)
 	logErr := s.writeUnmanagedRunLog(identity, number, base, head, workspace, result)
 	var operationErr error
 	if !commandSucceeded(result) {
