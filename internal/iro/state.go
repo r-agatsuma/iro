@@ -95,9 +95,16 @@ func (s *Service) writeRunLog(identity RepositoryIdentity, issueNumber int, star
 		return "", fmt.Errorf("create run log directory: %w", err)
 	}
 	logName := fmt.Sprintf("issue-%d-%d.log", issueNumber, started.UnixNano())
+	_, id, deliveryErr := parseDeliveryBranch(branch)
+	if deliveryErr == nil {
+		logName = deliveryLeaf(issueNumber, id) + ".log"
+	}
 	logPath := filepath.Join(logDir, logName)
 	content := fmt.Sprintf("repository: %s\nissue_number: %d\nbranch: %s\nworktree: %s\nstarted: %s\nfinished: %s\ncodex_exit_status: %d\ncodex_error: %v\nissue_comment: %s\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n",
 		identity.String(), issueNumber, branch, worktree, started.UTC().Format(time.RFC3339Nano), finished.UTC().Format(time.RFC3339Nano), codexResult.ExitCode, codexResult.Err, commentStatus, codexResult.Stdout, codexResult.Stderr)
+	if deliveryErr == nil {
+		content = fmt.Sprintf("delivery_id: %s\n", id) + content
+	}
 	// Keep the previous report intact until the replacement is fully written.
 	tempDir, err := s.FileSystem.MkdirTemp(logDir, ".run-log-*")
 	if err != nil {

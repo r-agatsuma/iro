@@ -46,6 +46,8 @@ type deliveryAllocation struct {
 	worktree  string
 	commonDir string
 	fixed     bool
+	pushURL   string
+	detached  bool
 }
 
 func (s *Service) allocateDelivery(root string, identity RepositoryIdentity, issueNumber int) (*deliveryAllocation, error) {
@@ -84,6 +86,9 @@ func (s *Service) selectDelivery(root string, identity RepositoryIdentity, alloc
 		allocation.id = id
 		allocation.branch = deliveryBranch(allocation.issue, id)
 		allocation.worktree = cleanAbsolutePath(deliveryWorktreePath(s.Dirs, identity, allocation.issue, id))
+		if allocation.detached {
+			allocation.worktree = cleanAbsolutePath(filepath.Join(runtimeWorkspaceParent(s.Dirs, identity, unmanagedWorkspace), detachedWorkspaceStem("run", allocation.issue)+string(id)))
+		}
 		collision, err := s.inspectDeliveryCollision(root, allocation)
 		if err != nil {
 			return err
@@ -92,7 +97,7 @@ func (s *Service) selectDelivery(root string, identity RepositoryIdentity, alloc
 			return nil
 		}
 	}
-	return fmt.Errorf("could not allocate delivery identity after 16 local collisions; no resources were changed")
+	return fmt.Errorf("could not allocate delivery identity after 16 delivery collisions; no resources were changed")
 }
 
 func (s *Service) inspectDeliveryCollision(root string, allocation *deliveryAllocation) (bool, error) {
@@ -138,6 +143,9 @@ func (s *Service) inspectDeliveryCollision(root string, allocation *deliveryAllo
 			return true, nil
 		}
 	}
+	if allocation.pushURL != "" {
+		return s.inspectRemoteDeliveryCollision(root, allocation)
+	}
 	return false, nil
 }
 
@@ -159,7 +167,7 @@ func (s *Service) beginDeliveryCreation(root string, allocation *deliveryAllocat
 	return nil
 }
 
-// createDeliveryWorktree creates only fresh local resources. It neither consults
+// createDeliveryWorktree creates only fresh attached or detached local resources. It neither consults
 // nor writes v1 ownership JSON. Failures retain the fixed identity and partial state.
 func (s *Service) createDeliveryWorktree(root string, allocation *deliveryAllocation, head string) error {
 	if !validGitOID(head) {
@@ -186,7 +194,11 @@ func (s *Service) createDeliveryWorktree(root string, allocation *deliveryAlloca
 	if err := s.FileSystem.Mkdir(allocation.worktree, 0755); err != nil {
 		return fmt.Errorf("reserve delivery worktree %s: %w", allocation.worktree, err)
 	}
-	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"worktree", "add", "-b", allocation.branch, allocation.worktree, head}, Dir: root})
+	args := []string{"worktree", "add", "-b", allocation.branch, allocation.worktree, head}
+	if allocation.detached {
+		args = []string{"worktree", "add", "--detach", allocation.worktree, head}
+	}
+	result := s.Runner.Run(CommandSpec{Name: "git", Args: args, Dir: root})
 	if !commandSucceeded(result) {
 		return fmt.Errorf("delivery %s worktree creation failed; inspect partial local state at %s: %s", allocation.id, allocation.worktree, strings.TrimSpace(result.Stderr))
 	}

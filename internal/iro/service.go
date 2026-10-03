@@ -12,10 +12,11 @@ import (
 
 // Service implements the bootstrap MVP commands.
 type Service struct {
-	Runner     CommandRunner
-	FileSystem FileSystem
-	Dirs       RuntimeDirs
-	Now        func() time.Time
+	Runner        CommandRunner
+	FileSystem    FileSystem
+	Dirs          RuntimeDirs
+	Now           func() time.Time
+	newDeliveryID func() (deliveryID, error)
 }
 
 func NewService(runner CommandRunner, fileSystem FileSystem) *Service {
@@ -237,7 +238,7 @@ func (s *Service) runWithModel(issueNumber int, model string, out, errOut io.Wri
 	return s.runWithOptions(issueNumber, workerOptions{Model: model}, out, errOut)
 }
 
-func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, errOut io.Writer) error {
+func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, errOut io.Writer) (runErr error) {
 	if options.Unmanaged {
 		return s.runUnmanaged(issueNumber, options, out, errOut)
 	}
@@ -280,15 +281,11 @@ func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, er
 	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
 		return err
 	}
-	branch := fmt.Sprintf("iro/issue-%d", issueNumber)
-	base, err := s.deliveryBase(root, identity, issueNumber, branch)
-	if err != nil {
-		return err
-	}
-	if err := s.verifyDeliveryCheckout(root, base); err != nil {
-		return err
-	}
 	if err := s.verifyPushRemote(root, config.TrackerRemote, identity); err != nil {
+		return err
+	}
+	base, head, err := s.runSource(root, config.TrackerRemote)
+	if err != nil {
 		return err
 	}
 	target, err := s.fetchIssue(root, identity, issueNumber)
@@ -301,25 +298,30 @@ func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, er
 	if err := s.checkAuth("codex", []string{"login", "status"}, root); err != nil {
 		return err
 	}
-	head, err := s.currentHead(root)
+	allocation, err := s.allocateRunDelivery(root, identity, issueNumber, config.TrackerRemote, false)
 	if err != nil {
 		return err
 	}
-	workspace, created, err := s.prepareWorktree(root, identity, issueNumber, branch, head)
-	if err != nil {
+	state := newRunDeliveryState(allocation)
+	defer func() { runErr = s.finishRunDelivery(identity, state, runErr, out, errOut) }()
+	if err := s.createDeliveryWorktree(root, allocation, head); err != nil {
 		return err
 	}
-	if created {
-		fmt.Fprintf(out, "created Issue worktree at %s\n", workspace)
-	} else {
-		fmt.Fprintf(out, "reusing Issue worktree at %s\n", workspace)
+	workspace, branch := allocation.worktree, allocation.branch
+	fmt.Fprintln(out, state.diagnostic())
+	if err := s.checkoutClean(workspace); err != nil {
+		return err
+	}
+	// WORKFLOW authority is the starting workspace file, not the invoking copy.
+	if _, err := s.FileSystem.ReadFile(filepath.Join(workspace, "WORKFLOW.md")); err != nil {
+		return err
 	}
 
 	started := s.Now().UTC()
 	codexResult := s.runCodex(workspace, identity, target, options)
 	finished := s.Now().UTC()
 	if !commandSucceeded(codexResult) {
-		operationErr := fmt.Errorf("Codex exited with status %d (%v); worktree was kept for human inspection", codexResult.ExitCode, codexResult.Err)
+		operationErr := state.failure(fmt.Errorf("Codex exited with status %d (%v); worktree was kept for human inspection", codexResult.ExitCode, codexResult.Err))
 		commentErr := s.postResult(root, identity, issueNumber, buildFailureComment(issueNumber, workspace, codexResult, operationErr))
 		_, logErr := s.writeRunLog(identity, issueNumber, started, finished, branch, workspace, codexResult, issueCommentStatus(commentErr))
 		if commentErr != nil {
@@ -333,9 +335,10 @@ func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, er
 	_, logErr := s.writeRunLog(identity, issueNumber, started, finished, branch, workspace, codexResult, "not attempted")
 	operationErr := logErr
 	if operationErr == nil {
-		operationErr = s.deliver(root, workspace, identity, issueNumber, config.TrackerRemote, branch, base, codexResult.Stdout, out, errOut)
+		operationErr = s.deliver(root, workspace, identity, issueNumber, config.TrackerRemote, branch, base, codexResult.Stdout, state, out, errOut)
 	}
 	if operationErr != nil {
+		operationErr = state.failure(operationErr)
 		commentErr := s.postResult(root, identity, issueNumber, buildFailureComment(issueNumber, workspace, codexResult, operationErr))
 		if commentErr != nil {
 			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", commentErr)

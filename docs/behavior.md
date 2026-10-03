@@ -44,8 +44,8 @@ managed `iro run` が行う GitHub operation は次とする。
 
 - target Issue の read
 - target Issue への Author / delivery failure report comment の create
-- configured repository の default branch と既存 PR relation の read
-- canonical branch から default branch を base とする通常の open PR の create
+- configured remote の現在の source branch tip と、今回の delivery ref の read
+- invocation ごとの delivery branch から現在の source branch を base とする通常の open PR の create
 - 作成した PR への Author report と Land hint を含む delivery comment の best-effort create
 
 `iro run --unmanaged` は origin-derived repository の Issue / comments を read し、invocation branch を base とする PR を create する。Author / delivery failure 時の Issue comment と、成功時の Author report の PR comment も同じ repository に限定する。default branch / native closing relation の取得や Land hint は要求しない。詳細は UNMANAGED-RUN-001 以降に従う。
@@ -133,7 +133,7 @@ managed `iro revise` も canonical Issue worktree の dirty state を同じ方�
 各 Codex run は fresh ephemeral session とする。
 Codex thread/session を保存、resume、再利用してはならない。
 
-manual cleanup 後に同じ `iro run <issue-number>` を再実行することは許可するが、これは resume ではなく fresh rerun である。
+同じ `iro run <issue-number>` の後続明示実行は新しい delivery ID を持つ fresh run とする。以前の delivery の cleanup、成功・失敗、PR の有無は新しい invocation の authority ではない。
 
 ### INV-009: external network boundary
 
@@ -550,7 +550,7 @@ clean とは、tracked と untracked の通常変更が存在しないことを�
 
 source checkout が dirty の場合、`iro` は failure とし、Git state を変更してはならない。
 
-configured repository の default branch `D` を remote API で解決する。current checkout は named branch `D` でなければならない。detached HEAD / non-default branch は branch 作成・worker 起動前に reject する。別の delivery base を推測しない。
+current checkout は Human の現在の named branch `B` でなければならない。configured remote を直接 read し、`refs/heads/B` が存在して local HEAD `H` と exact equal であることを要求する。detached HEAD、ahead、behind、diverged、remote branch の欠落を branch / workspace 作成・worker 起動前に reject する。local remote-tracking ref の古い値に依存しない。default branch の取得・fallback、source branch の push / fetch / pull / reset / rebase / merge / 自動同期を行わない。delivery は固定した `H` から開始し、PR の base は `B` とする。
 
 ### RUN-003: repository identity
 
@@ -600,90 +600,69 @@ Codex 起動前に次を満たさなければならない。
 
 Codex authentication failure 時に login を自動実行してはならない。
 
-### RUN-006: issue branch
+### RUN-006: per-invocation delivery identity
 
-Issue branch 名は厳密に次とする。
+managed / unmanaged の各 explicit Run は LOCAL-001 の新しい delivery ID `D` を割り当て、remote delivery ref を `iro/issue-N-D` とする。同じ Issue の既存 delivery / PR は、それだけで新しい Run を拒否する理由にしない。iro-produced mutable ref を delivery 間で共有せず、以前の failed delivery を resume / adopt しない。
 
-```text
-iro/issue-<issue-number>
-```
-
-初回 run で Issue branch と Issue worktree がともに存在しない場合、branch は default branch `D` の local checkout の検証済み `HEAD` commit から作成しなければならない。remote tip への fetch / pull や自動追従は行わない。
-
-初回 branch 作成後に invoking branch の moving target を追従してはならない。
-
-### RUN-007: issue worktree
-
-Issue ごとに deterministic な iro-owned worktree path を割り当てる。
-
-`iro` は Issue branch/worktree を自分が作成したことを示す ownership mapping を local runtime state に記録しなければならない。
-既存 branch/worktree を reuse できるのは、この ownership mapping と現在の Git state が一致する場合だけである。
-ownership mapping が missing または不整合なら、branch/path 名が期待値と一致していても ownership を推測せず collision として failure にする。
-
-conceptual path:
+conceptual stages は次とする。
 
 ```text
-~/.local/share/iro/workspaces/<repository-key>/issue-<issue-number>/
+allocate ID -> create local execution state -> worker -> commit -> push -> create PR -> report
 ```
 
-`repository-key` の encoding は implementation detail だが、repository collision を回避しなければならない。
+最初の local side effect より前に、local branch、intended workspace path（登録済み path、filesystem path、dangling symlink を含む）、configured remote / origin の effective push URL 上の同じ intended remote ref の衝突を確認する。allocation 中の衝突は新しい ID で再試行できる。観測失敗は retry せず error とする。最初の directory 作成の直前に再検査し、衝突した場合は resource を作らず停止する。作成開始以後の ID は固定し、local / worker / push / PR-create / report の失敗・結果不明を理由に ID を変えない。
 
-### RUN-008: branch/worktree state matrix
+### RUN-007: managed delivery workspace
 
-| Branch | Expected worktree | State | Behavior |
-|---|---|---|---|
-| absent | absent | initial | branch を default branch の local `HEAD` commit から作成し worktree を作成 |
-| present | present | ownership mapping matches; expected branch checked out there; clean | existing worktree を reuse して fresh Codex run |
-| present | present | ownership mapping matches; dirty | failure; no Git changes |
-| present | present | ownership mapping missing/mismatch or wrong branch | failure; no changes |
-| present | absent | incomplete/collision | failure; no automatic repair |
-| absent | present/path occupied | incomplete/collision | failure; no automatic repair |
-| present | checked out in another worktree | collision | failure; no automatic repair |
-
-`iro` は collision を `reset`、`clean`、`stash`、delete、move、branch recreation で自動解消してはならない。
-
-### RUN-009: manual fresh rerun
-
-failed Codex run が working tree changes を残した場合、その worktree は dirty のまま保持する。
-
-Human は必要に応じて Git 標準操作で状態を処理してよい。例:
+managed Run は検証済み source HEAD `H` から毎回 fresh な attached delivery worktree を排他的に作成する。
 
 ```text
-preserve changes:
-  git stash push -u
-
-discard tracked changes:
-  git reset --hard HEAD
-
-discard untracked files/directories as well:
-  git clean -fd
+branch: iro/issue-N-D
+workspace: <DataRoot>/workspaces/<repository-key>/issue-N-D
 ```
 
-これらの command を `iro` が自動実行してはならない。
+workspace-side の読み取り可能な `WORKFLOW.md` を applicable worker policy とし、Author に全文読込を要求する。invocation-side の project config / policy preflight は維持するが、invocation 側の WORKFLOW を workspace 側の代替としてコピーしない。worker 起動前に新しい workspace の cleanliness と WORKFLOW の可読性を確認する。
 
-Human が worktree を clean にした後も、remote relation precondition を満たす場合に限り RUN-008 の clean reuse path で fresh worker を起動する。active PR がある場合は `run` を reject する。既存 PR に対する追加実装は `iro revise <pr-number>` operation の責務とする。
+Run は v1 `issue-N.json` ownership mapping を読み書きしない。legacy branch / worktree / mapping を migration / adoption / repair authority として使わない。
+
+### RUN-008: fresh resource boundary
+
+| 今回の intended resource | Behavior |
+|---|---|
+| local ref / path / registration / remote ref が absent | fresh resource を作成 |
+| allocation 中に local / remote collision を検出 | side effect なしで新しい ID を選択可能 |
+| creation boundary の再検査で collision を検出 | resource を作成せず停止 |
+| creation boundary 後に collision / failure / unknown を検出 | ID と partial local state を保持して停止 |
+| 別 delivery の branch / workspace / PR が存在 | 今回の resource と衝突しない限り独立した Run を継続 |
+
+reset / clean / stash / delete / move / branch recreation による自動解消、resume / rollback / repair / replacement delivery を行わない。
+
+### RUN-009: later explicit Run and Cleanup handoff
+
+後続の `iro run N` は常に別 ID の新しい delivery である。以前の dirty / failed workspace を再利用せず、clean にしてからの reuse も行わない。今回の source checkout 自身の clean / exact-equal precondition は毎回要求する。
+
+失敗時は invocation が把握する concrete workspace path / branch ref を報告して保持する。F3 local inventory により発見可能な resource は、その Cleanup contract による best-effort purge の候補となる。登録も ref もない filesystem-only residue は local inventory で必ず発見できるとは限らず、Human の確認を要する。
+
+F3 Status / Cleanup（Issue #90）は current baseline で提供済みであり、新しい Run behavior の public foundation release gate を満たす。Review / Revise の新しい delivery contract への切り替えは別 Issue の責務とし、この Run producer 変更に暗黙に含めない。
 
 ### RUN-010: precondition order
 
 main side effect 前に、少なくとも以下を検証する。
 
 ```text
-argument
-worker option grammar and values
+argument / worker options
 Git executable / repository
+project files / config / configured repository identity
 source checkout cleanliness
-project files / config
-configured remote / GitHub repository identity
 gh executable / GitHub authentication
-remote default branch / existing PR relations
-current named branch == default branch
 configured push destination / Git remote access
+current named branch B / local HEAD H == actual configured remote B tip
 target Issue and comments fetch
 Codex executable / Codex authentication
-branch/worktree state
+new delivery allocation / local and remote collisions
 ```
 
-必要条件がすべて通過する前に branch/worktree を作成してはならない。
+必要条件がすべて通過する前に branch / workspace を作成してはならない。新しい workspace 内の worker policy / cleanliness も worker 起動前に検査する。
 
 ### RUN-011: Codex instruction layers
 
@@ -797,8 +776,8 @@ Codex exit status が 0 の場合、stdout の validation / 作業報告を回�
 1. owned worktree の変更を `git add --all` で stage する。
 2. staged diff が存在することを確認する。空の場合は failure とし、空 commit / push / PR を作らない。
 3. `Implement issue #N` という英語 message で commit する。
-4. configured remote へ canonical `refs/heads/iro/issue-N` を明示的な refspec で push する。force push は禁止する。
-5. 通常の open PR を作成する。head は `iro/issue-N`、base は `D`、body は `Closes #N` を含む固定文面とする。worker output を body に展開して追加の closing relation を導入してはならない。
+4. configured push destination を再検証し、今回の remote ref の不在を再確認して、`refs/heads/iro/issue-N-D` を明示的な refspec で一度だけ通常 push する。`--no-follow-tags` / `--no-recurse-submodules` を指定し、追加の tag / submodule remote mutation を行わない。force push は禁止する。
+5. 通常の open PR を一度だけ作成する。head は `iro/issue-N-D`、base は source branch `B`、body は `Closes #N` を含む固定文面とする。worker output を body に展開して追加の closing relation を導入してはならない。
 6. create response の PR number `M` を取得し、stdout に PR number と `iro land M` を表示する。
 7. PR に `## iro delivery` header、`Author report (pre-delivery):`、Author final stdout、`Land:`、コード表記の `iro land M` を順に含む単一 comment を best-effort で投稿する。これは delivery 前に capture した report であることを label で示す。Author final stdout は opaque に保持し、意味を解釈・parse・filter・rewrite・再生成せず、固定 header / footer の間にそのまま配置する。
 
@@ -806,13 +785,13 @@ PR create 成功と number の取得を required remote delivery の完了境界
 
 stage / commit failure 時は worktree と index を保持して failure とする。push failure 時は local commit の存在と remote 更新の可能性を明示する。push 後の PR creation / response decode failure 時は remote branch が publish 済みであり PR が存在する可能性を明示して failure とする。これらの failure と staged diff の検査失敗・空 diff では、origin Issue へ Author report と失敗 step を識別できる diagnostic を含む delivery failure report の投稿を試みる。取得済み Author report は local log に保持する。original operation failure を主原因として non-zero で終了し、自動 rollback / retry / repair は行わない。
 
-### RUN-016a: delivery relation
+### RUN-016a: independent delivery relation
 
-relation は `Issue #N ↔ iro/issue-N ↔ maximum 1 active PR` とする。1 PR の origin Issue は exactly 1 件とする。creator identity / provenance は判断に使用しない。
+Run は既存 PR / native closing relation の列挙や default branch の取得を precondition にしない。PR body は F1 の固定 writer を使い、managed は `Closes #N`、unmanaged は `Refs #N` とする。Author report は opaque な PR comment であり、body relation の authority に混入させない。
 
-run は repository の PR を全 state について pagination で取得し、canonical head branch または configured repository の Issue #N との native closing relation を持つ既存 PR があれば branch 作成・worker 起動前に reject する。closed / abandoned / merged PR がある場合も replacement を推測して生成しない。relation mismatch、取得失敗、不完全な relation は fail closed とし、自動 repair しない。各 PR の closing references が取得上限 100 件を超える場合も安全に検証できないため reject する。
+read と push / PR create は atomic ではない。検出できた collision は拒否し、remote mutation failure / unknown は自動再試行しない。排他 lock、remote repair、PR body の post-create update、結果不明の PR 探索による adoption を導入しない。
 
-local ownership mapping は local resource ownership だけを表し、PR number や provenance を保存しない。後続 operation は実行時の remote state で relation を検証し、delivery hint comment の有無を eligibility に利用してはならない。run の preflight と PR create は atomic ではなく、同時実行の排他制御はこの変更の scope 外である。
+stdout / stderr と local delivery log は delivery ID、Issue、branch、workspace、push / PR create / PR report の既知の結果を区別する。未試行は `not attempted`、成功は `confirmed success` とする。subprocess failure だけでは remote が未変更とは判断できないため、remote outcome が unknown であることを表示する。PR create response が invalid な場合も unknown とし、push の confirmed success と区別する。
 
 ### RUN-017: Codex failure
 
@@ -824,7 +803,7 @@ Codex exit status が non-zero の場合:
 - target Issue へ日本語 failure result comment の投稿を試みる
 - `iro run` は non-zero で終了する
 
-次回の `iro run <issue-number>` は worktree が dirty なら RUN-008 により Codex 起動前に failure となる。
+次回の明示 Run は新しい ID / workspace を使い、今回の failed delivery を再利用しない。
 
 ### RUN-018: Issue result comment failure
 
@@ -845,7 +824,7 @@ Issue comment の結果を local run log へ反映する際は、一時ファイ
 
 unmanaged Run は config-free な明示 operation とする。`iro.toml` / `WORKFLOW.md` を config / worker policy として read、validate、reconcile してはならない。存在、欠落、不正な内容、読取不能、non-regular のいずれも mode / policy selection を変えない。ただし、これらの file の通常の tracked / untracked 変更も checkout cleanliness の対象となる。
 
-mode は CLI invocation にのみ適用し、project setting、ownership mapping、adoption state として永続化しない。unmanaged Review / Revise / Land はそれぞれの節に定義する。汎用 adoption / status / cleanup command は提供しない。
+mode は CLI invocation にのみ適用し、project setting、ownership mapping、adoption state として永続化しない。unmanaged Review / Revise / Land はそれぞれの節に定義する。unmanaged state を managed authority へ採用する汎用 adoption command は提供しない。Status / Cleanup は STATUS-001〜006 / CLEANUP-001〜008 に従う current-local-repository lifecycle operation であり、registered unmanaged runtime workspace を local evidence に基づいて inventory / purge 対象にし得る。これは mode / policy / provenance の adoption ではない。
 
 ### UNMANAGED-RUN-002: origin identity and push destination
 
@@ -863,7 +842,7 @@ push を行う unmanaged operation は `origin` の effective push URL を検証
 
 invocation checkout は tracked / non-ignored untracked changes のない clean な named branch `B` でなければならない。detached HEAD は reject する。`B` は default branch でなくてもよい。
 
-local HEAD を full commit OID `H0` として固定する。remote `origin` を直接 read し、`refs/heads/B` が存在して `H0` と一致すること、および `refs/heads/iro/issue-N` が存在しないことを検証する。local remote-tracking ref の古い値を根拠にしない。自動 fetch / pull / reset や別の base への変更は行わない。
+local HEAD を full commit OID `H0` として固定する。remote `origin` を直接 read し、`refs/heads/B` が存在して `H0` と一致することを検証する。LOCAL-001 / RUN-006 により新しい ID を割り当て、effective origin push destination に今回の `refs/heads/iro/issue-N-D` が存在しないことを検証する。local remote-tracking ref の古い値を根拠にしない。自動 fetch / pull / reset や別の base への変更は行わない。
 
 Git / GitHub / Codex executable と認証、origin identity / push destination、source cleanliness / named HEAD / remote refs、origin repository の Issue N と comments の可読性を、worktree 作成と Author 起動より前に確認する。Issue payload と comments の検証・順序は RUN-004 と同じとする。GitHub default branch や native closing relation は Run の precondition にしない。
 
@@ -871,7 +850,7 @@ Git / GitHub / Codex executable と認証、origin identity / push destination�
 
 ### UNMANAGED-RUN-004: worker and detached workspace
 
-各 invocation は verified `H0` から fresh unique detached linked worktree を作成する。概念上の path は `~/.local/share/iro/unmanaged-workspaces/<repository-key>/run-issue-N-<unique>/` とする。Git worktree registration は作成するが、canonical Issue branch / ownership mapping は作成しない。以前の failed unmanaged workspace は再利用しない。
+各 invocation は verified `H0` から fresh unique detached linked worktree を作成する。概念上の path は `~/.local/share/iro/unmanaged-workspaces/<repository-key>/run-issue-N-D/` とする。Git worktree registration は作成するが、canonical Issue branch / ownership mapping は作成しない。以前の failed unmanaged workspace は再利用しない。
 
 Author 起動前に detached HEAD が exact `H0` であり worktree が clean なことを確認する。invocation checkout の dirty / ignored files をコピーしない。
 
@@ -887,7 +866,7 @@ fresh ephemeral session、既定の sandbox / network / approval policy と `--m
 
 ### UNMANAGED-RUN-005: revalidation and delivery
 
-worker 成功後に Author stdout / stderr と exit status、repository、Issue、base `B`、source `H0`、workspace path を `unmanaged-runs/<repository-key>/<unique-workspace-name>.log` に保存する。managed run log / ownership を更新しない。log 保存失敗は delivery 前に failure とする。
+worker 終了後に Author stdout / stderr と exit status、repository、delivery ID、Issue、delivery branch、base `B`、source `H0`、workspace path を `unmanaged-runs/<repository-key>/<unique-workspace-name>.log` に保存する。managed run log / ownership を更新しない。log 保存失敗は delivery 前に failure とする。
 
 iro は次を順に実施する。
 
@@ -895,8 +874,8 @@ iro は次を順に実施する。
 2. commit 直前に origin identity / effective push destination を再検証し、remote `origin/B == H0` と task ref の不在を再確認する。
 3. `Implement issue #N` の message で delivery commit `C1` を作成する。sole parent が `H0` であり、workspace が detached `C1` かつ clean なことを確認する。
 4. push 直前にも手順 2 の remote 条件を再検証する。base drift、競合する task ref、identity / destination の変更では non-zero failure とし、push / repair / target substitution を行わない。
-5. exact `C1` を explicit refspec `C1:refs/heads/iro/issue-N` で `origin` に通常 push する。`--no-follow-tags` と `--no-recurse-submodules` を明示し、`push.followTags=true` や `push.recurseSubmodules=on-demand` / `only` が設定されていても、到達可能な annotated tag の追加 push や submodule remote への再帰 push を行わない。ambient Git configuration による task ref 以外への追加 remote mutation を許可しない。force push は禁止する。
-6. head `iro/issue-N`、base `B`、固定 body に `Refs #N` を含む通常の open PR を作成する。worker text を body に展開しない。PR number の有効な create response を confirmed delivery の境界とする。
+5. exact `C1` を explicit refspec `C1:refs/heads/iro/issue-N-D` で `origin` に通常 push する。`--no-follow-tags` と `--no-recurse-submodules` を明示し、`push.followTags=true` や `push.recurseSubmodules=on-demand` / `only` が設定されていても、到達可能な annotated tag の追加 push や submodule remote への再帰 push を行わない。ambient Git configuration による task ref 以外への追加 remote mutation を許可しない。force push は禁止する。push 直前に effective push URL 上の今回の delivery ref の不在も再確認する。
+6. head `iro/issue-N-D`、base `B`、固定 body に `Refs #N` を含む通常の open PR を作成する。worker text を body に展開しない。PR number の有効な create response を confirmed delivery の境界とする。
 7. PR number / head / base を表示し、Author report を PR comment として best-effort で投稿する。comment failure は warning に留める。managed Land の eligibility を保証する案内はしない。
 
 `Refs #N` は textual traceability であり、native closing relation を保証・要求しない。closing relation の取得を目的に `B` を変更せず、Issue close API を呼ばない。
@@ -907,6 +886,8 @@ remote read と push / PR create は単一 transaction ではない。検証で�
 
 Author failure、stage / commit / revalidation failure、push failure、PR creation / response failure では useful な worktree / index / commit / report を保持し、path と診断を表示して non-zero とする。取得済み Author report と診断の Issue failure comment を best-effort で試み、その失敗は追加 warning とする。log 保存に失敗した場合も Author stdout / stderr を diagnostic に残す。
 
+RUN-006 / RUN-016a と同じ delivery identity と remote outcome の診断・ログを保持する。local 作成失敗にも fixed ID と把握している path / ref を表示する。F3 inventory の対象外となる filesystem-only residue の発見を Cleanup に保証させない。
+
 push failure は remote 更新の可能性を明示し、「remote unchanged」とみなさない。push success 後の PR failure / ambiguous response は remote branch を残し、partial / uncertain delivery と PR が既に存在する可能性を明示する。automatic retry / rollback / repair は行わず、Human に現在の local / remote state の確認を案内する。
 
 confirmed delivery の後だけ、今回作成した detached worktree を通常の `git worktree remove` で best-effort に削除し、path と registration の removal を確認する。force removal、recursive filesystem deletion による代用、branch 削除は行わない。cleanup failure / removal 確認不能でも delivery success と exit status 0 を維持し、warning と path を表示する。cleanup のために delivery を再実行しない。
@@ -915,7 +896,7 @@ confirmed delivery の後だけ、今回作成した detached worktree を通常
 
 unmanaged Run の成功・作成者・delivery comment・local log は後続 managed Review / Revise / Land の eligibility を付与しない。managed Review / Revise は現在の default base / native closing relation / remote delivery relation、および必要な local ownership / worker policy を通常どおり検証する。managed Land は configured repository の選択 PR / HEAD integrity と merge policy を検証し、origin relation や delivery topology を要求しない。一方、Human が現在の state をその contract に合わせた場合、unmanaged 由来という provenance だけを理由に永続的に reject しない（G2）。
 
-managed `tracker.remote` が R1、`origin` が別 repository R2 の場合、managed operation は R1、unmanaged Run は R2 を対象とする。identity の migration / fallback は行わない（G4）。managed status / cleanup は ownership mapping の対象だけを扱い、unmanaged workspace を推測で管理・削除しない。
+managed `tracker.remote` が R1、`origin` が別 repository R2 の場合、managed operation は R1、unmanaged Run は R2 を対象とする。identity の migration / fallback は行わない（G4）。Status / Cleanup は STATUS-003 / CLEANUP-002 の current-local-repository evidence に従い、v1 ownership mapping や remote provenance を authority としない。current repository に registered され、LOCAL-003 で iro runtime workspace path と認識できる unmanaged workspace は inventory 対象となり、Cleanup の selection rule を満たす場合は purge 対象になり得る。これは unmanaged state を managed authority へ adopt することを意味せず、registration / ref / known-candidate evidence を失った filesystem-only residue の完全発見は保証しない。
 
 ## 10. `iro review <pr-number>`
 
@@ -1425,16 +1406,16 @@ started / finished timestamp
 Codex exit status
 Codex stdout / stderr or equivalent run log
 Issue comment result
-workspace ownership mapping
+delivery ID / known remote outcomes
 ```
 
-上記 ownership mapping / timestamp / Issue comment result は managed `run` に適用し、comment を投稿していない場合は `not attempted` を記録する。unmanaged Run の log と mapping 非作成は UNMANAGED-RUN-005 に従う。managed `revise` は `revisions/<repository-key>/pr-<number>-<timestamp>.log` に PR number、origin Issue number、開始時 HEAD、worker exit status / stdout / stderr 等を保存する。
+managed `run` は `runs/<repository-key>/issue-N-D.log` に Author report / timestamp / Issue comment result を保存し、comment 未試行は `not attempted` とする。managed / unmanaged Run は outcome diagnostic を `deliveries/<repository-key>/issue-N-D.log` に best-effort で保存する。診断ログの保存失敗でも remote mutation を再試行せず、diagnostic を stderr に残す。Run は ownership JSON を保存しない。unmanaged Run の log と mapping 非作成は UNMANAGED-RUN-005 に従う。managed `revise` は `revisions/<repository-key>/pr-<number>-<timestamp>.log` に PR number、origin Issue number、開始時 HEAD、worker exit status / stdout / stderr 等を保存する。
 
 Codex thread/session ID は保存対象に含めない。
 
 ### LOCAL-001: per-Run delivery identity の基盤
 
-delivery allocation と Git inventory を提供する。Status / Cleanup は STATUS-001〜006 / CLEANUP-001〜008 に従ってこの local inventory を使用する。Run / Revise の既存 CLI の Issue 単位の branch / ownership mapping 契約は、この基盤だけでは切り替えない。
+Run はこの delivery allocation と Git inventory を使用する。Status / Cleanup は STATUS-001〜006 / CLEANUP-001〜008 に従って同じ local inventory を使用する。Revise の新しい delivery/workspace contract への切り替えは別 Issue の責務とする。
 
 新規 delivery allocation は cryptographically secure RNG から得た 16 bytes を lowercase hexadecimal に encode した、正確に 32 ASCII hex characters の delivery ID を持たなければならない。命名は次に従う。
 
@@ -1445,7 +1426,7 @@ managed worktree: <DataRoot>/workspaces/<repository-key>/issue-N-<delivery-id>
 
 Issue number は Human-readable hint と physical cleanup selector であり、PR origin の authority として使ってはならない。repository-key は既存の path grouping のための値であり、remote identity だけで local ownership を判断してはならない。
 
-allocation / collision inspection は local side effect を起こしてはならない。この段階では既存 ref、registered worktree path、filesystem path（dangling symlink を含む）との衝突時に新しい ID を生成してよい。`refs/heads/iro` および生成予定 ref の子 ref による namespace collision も拒否する。連続 16 回の衝突は error とする。不正な ID、entropy failure、inventory / filesystem observation failure は衝突として retry せず error とする。
+allocation / collision inspection は local side effect を起こしてはならない。この段階では既存 local ref、registered worktree path、filesystem path（dangling symlink を含む）、実際の push destination の intended remote ref との衝突時に新しい ID を生成してよい。`refs/heads/iro` および生成予定 ref の子 ref による namespace collision も local / remote の双方で拒否する。remote 検査は intended ref に加えて親 ref と全ての子 ref を取得する。`remote get-url --push` で展開済みの effective URL に `url.*.insteadOf` を再適用して別 endpoint を検査してはならない。command-local alias の一度の rewrite により exact endpoint を読み取り、事前の URL 解決確認に失敗した場合は remote read 前に停止する。連続 16 回の衝突は error とする。不正な ID、entropy failure、inventory / filesystem / remote observation failure は衝突として retry せず error とする。
 
 registered path との照合は LOCAL-003 と共通の path 解決処理を使い、祖先 symlink 経由でも同じ場所を衝突として扱う。対象 directory やその親が消失した detached 登録も検査対象とし、directory が存在しないことを理由に登録を無視してはならない。
 
@@ -1462,7 +1443,7 @@ inventory は invoking local Git repository の absolute common directory に bi
 
 ### LOCAL-003: runtime workspace namespace recognition
 
-managed delivery workspace の leaf は LOCAL-001 の命名、unmanaged detached workspace の leaf は既存 producer の `run-issue-N-<random-suffix>` / `review-pr-M-<random-suffix>` / `revise-pr-M-<random-suffix>` とする。DataRoot から `<workspace-kind>/<repository-key>/<leaf>` という深さの path だけを認識し、producer、unmanaged removal consumer、Status / Cleanup は共通の命名・認識 helper を使う。
+managed delivery workspace の leaf は LOCAL-001 の命名、unmanaged Run の detached workspace leaf は `run-issue-N-D`（`D` は delivery ID）、他の detached producer の leaf は `review-pr-M-<random-suffix>` / `revise-pr-M-<random-suffix>` とする。DataRoot から `<workspace-kind>/<repository-key>/<leaf>` という深さの path だけを認識し、producer、unmanaged removal consumer、Status / Cleanup は共通の命名・認識 helper を使う。
 
 認識時は DataRoot と入力 path の存在する祖先まで symlink を解決し、不在の末尾成分を結合して比較する。これにより、producer の path と Git inventory の実体側 registered path のどちらも、対象 directory やその親が消失した場合を含めて認識できる。解決した path は比較用に限定し、inventory の exact registered path を書き換えてはならない。権限不足、symlink loop、dangling ancestor symlink 等の解決失敗は、未認識や衝突なしとして扱わず error とする。
 
@@ -1507,18 +1488,18 @@ managed delivery workspace の leaf は LOCAL-001 の命名、unmanaged detached
 | GitHub auth missing | allowed | report | allowed; no authentication check | error | error | allowed; no authentication check |
 | Codex missing | allowed | report | allowed; no Codex access | error | error | allowed; no Codex access |
 | Codex auth missing | allowed | report | allowed; no authentication check | error | error | allowed; no authentication check |
-| source checkout dirty or non-default | N/A | report if inspected | local inventory; no cleanliness inspection | error; no changes | allowed; not inspected | allowed; selected invoking worktree also attempted |
+| source checkout dirty, detached, or not equal to remote tip | N/A | report if inspected | local inventory; no cleanliness inspection | error; no changes | allowed; not inspected | allowed; selected invoking worktree also attempted |
 | Issue or comments not found/unreadable | N/A | N/A | not applicable; no Issue lookup; read-only | error before workspace creation | origin Issue error before Reviewer | not applicable; no Issue lookup |
 | PR absent, closed, merged, or non-default base | N/A | N/A | not applicable | not applicable | error before Reviewer | not applicable |
 | Open Draft PR | N/A | N/A | not applicable | not applicable | allowed | not applicable |
 | PR origin closing relation count is not exactly 1 | N/A | N/A | not applicable | not applicable | error before Reviewer | not applicable |
 | target PR branch/worktree/ownership absent or unrelated | N/A | N/A | local refs / registered runtime worktrees only | not applicable | allowed; disposable workspace only | not applicable; no PR lookup |
-| Issue branch/worktree both absent | N/A | optional report | no row; v1 mapping ignored | create from default branch local HEAD commit | not inspected | success with no selected targets and no observation failure |
-| matching iro-owned Issue worktree clean | N/A | optional report | branch / registered path / HEAD; read-only | reuse; fresh ephemeral run | not inspected | force-remove worktree / branch; verify post-state |
-| matching iro-owned Issue worktree dirty | N/A | report if discoverable | same inventory; no dirty classification | error; no cleanup | not inspected | force removal attempted; no dirty gate |
-| expected branch/path exists without valid ownership mapping | N/A | report if discoverable | inventory by local ref / registration; mapping ignored | error; no ownership guessing | not inspected | local namespace selection; mapping ignored |
-| branch/worktree collision | N/A | report if discoverable | show all registered paths | error; no repair | not inspected | attempt every selected worktree; mechanism failure reported |
-| invalid or mismatched ownership mapping | N/A | report if discoverable | ignored; no v1 authority | error; no repair | not inspected | ignored; no v1 authority |
+| Issue branch/worktree both absent | N/A | optional report | no row; v1 mapping ignored | create fresh delivery from verified source H | not inspected | success with no selected targets and no observation failure |
+| matching iro-owned Issue worktree clean | N/A | optional report | branch / registered path / HEAD; read-only | independent new delivery; no reuse | not inspected | force-remove worktree / branch; verify post-state |
+| matching iro-owned Issue worktree dirty | N/A | report if discoverable | same inventory; no dirty classification | independent new delivery; keep earlier workspace | not inspected | force removal attempted; no dirty gate |
+| expected branch/path exists without valid ownership mapping | N/A | report if discoverable | inventory by local ref / registration; mapping ignored | independent new delivery; no adoption | not inspected | local namespace selection; mapping ignored |
+| branch/worktree collision | N/A | report if discoverable | show all registered paths | new ID before creation, or stop; no repair | not inspected | attempt every selected worktree; mechanism failure reported |
+| invalid or mismatched ownership mapping | N/A | report if discoverable | ignored; no v1 authority | independent new delivery; do not read mapping | not inspected | ignored; no v1 authority |
 | Issue branch tip not in invoking `HEAD` history | N/A | N/A | inventory; ancestry not inspected | not applicable | not inspected | allowed; force branch deletion |
 | worktree removal or force branch deletion failure | N/A | N/A | not applicable | not applicable | not applicable | non-zero; independent actions continue; no rollback |
 | successful full cleanup | N/A | N/A | selected resources no longer inventoried | not applicable | not applicable | selected refs / registrations / known paths confirmed absent; mappings untouched |

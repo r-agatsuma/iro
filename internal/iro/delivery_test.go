@@ -58,7 +58,7 @@ func TestRunDeliveryStages(t *testing.T) {
 						if err := json.Unmarshal(spec.Stdin, &body); err != nil {
 							t.Fatal(err)
 						}
-						if body["title"] != "Implement issue #123" || body["head"] != "iro/issue-123" || body["base"] != "main" || body["draft"] != false || body["body"] != "Issue #123 の実装です。\n\nCloses #123\n" {
+						if body["title"] != "Implement issue #123" || !validDeliveryHeadForTest(body["head"], 123) || body["base"] != "main" || body["draft"] != false || body["body"] != "Issue #123 の実装です。\n\nCloses #123\n" {
 							t.Fatalf("invalid PR: %s", spec.Stdin)
 						}
 						if tc.fail == "response" {
@@ -80,10 +80,10 @@ func TestRunDeliveryStages(t *testing.T) {
 						}
 						return CommandResult{ExitCode: 1}
 					}
-					if stage == "push" && strings.Join(spec.Args, " ") != "push -- origin refs/heads/iro/issue-123:refs/heads/iro/issue-123" {
+					if stage == "push" && strings.Join(spec.Args, " ") != "push --no-follow-tags --no-recurse-submodules -- origin "+spec.Args[len(spec.Args)-1] {
 						t.Fatal(spec.Args)
 					}
-					if spec.Name == "git" && len(spec.Args) > 1 && spec.Args[0] == "worktree" && spec.Args[1] == "add" && spec.Args[len(spec.Args)-1] != "0123456789abcdef" {
+					if spec.Name == "git" && len(spec.Args) > 1 && spec.Args[0] == "worktree" && spec.Args[1] == "add" && spec.Args[len(spec.Args)-1] != foundationHEAD {
 						t.Fatal("wrong base", spec.Args)
 					}
 					return standardFakeResult(spec, root, "", false, false)
@@ -140,41 +140,41 @@ func TestRunDeliveryStages(t *testing.T) {
 }
 
 func TestRunRejectsDeliveryPreconditionsBeforeWorker(t *testing.T) {
-	for _, kind := range []string{"detached", "non-default", "missing base", "graphql error", "existing canonical PR", "existing issue PR", "closed PR", "truncated relations", "push mismatch", "remote auth"} {
+	for _, kind := range []string{"detached", "ahead", "behind", "diverged", "missing remote", "push mismatch", "remote auth"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
 			writeProjectFiles(t, root)
 			runner := &fakeCommandRunner{}
 			runner.fn = func(spec CommandSpec) CommandResult {
-				if spec.Name == "git" && spec.Args[0] == "symbolic-ref" {
-					if kind == "detached" {
+				if spec.Name == "git" {
+					// Model A -> C for ahead/behind, and separate C / E tips
+					// for divergence. Equality alone must reject all three.
+					if spec.Args[0] == "rev-parse" && containsString(spec.Args, "HEAD") && (kind == "ahead" || kind == "diverged") {
+						return CommandResult{Stdout: revisionCommit}
+					}
+					if spec.Args[0] == "symbolic-ref" && kind == "detached" {
 						return CommandResult{ExitCode: 1}
 					}
-					if kind == "non-default" {
-						return CommandResult{Stdout: "refs/heads/feature\n"}
+					if spec.Args[0] == "remote" && kind == "push mismatch" {
+						return CommandResult{Stdout: "git@github.com:other/repo.git"}
 					}
-				}
-				if kind == "push mismatch" && spec.Name == "git" && spec.Args[0] == "remote" {
-					return CommandResult{Stdout: "git@github.com:other/repo.git\n"}
-				}
-				if kind == "remote auth" && spec.Name == "git" && spec.Args[0] == "ls-remote" {
-					return CommandResult{ExitCode: 1}
-				}
-				if spec.Name == "gh" && spec.Args[0] == "api" && spec.Args[1] == "graphql" {
-					response := deliveryResponseForTest
-					switch kind {
-					case "missing base":
-						response = strings.Replace(response, `{"name":"main"}`, `null`, 1)
-					case "graphql error":
-						response = `{"errors":[{"message":"denied"}]}`
-					case "existing canonical PR", "closed PR":
-						response = strings.Replace(response, `"nodes":[]`, `"nodes":[{"number":7,"headRefName":"iro/issue-123","headRepository":{"nameWithOwner":"ACME/IRO"},"closingIssuesReferences":{"totalCount":0,"nodes":[]}}]`, 1)
-					case "existing issue PR":
-						response = strings.Replace(response, `"nodes":[]`, `"nodes":[{"number":8,"headRefName":"human-branch","headRepository":{"nameWithOwner":"other/iro"},"closingIssuesReferences":{"totalCount":1,"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}}]}}]`, 1)
-					case "truncated relations":
-						response = strings.Replace(response, `"nodes":[]`, `"nodes":[{"number":8,"headRefName":"other","headRepository":{"nameWithOwner":"other/iro"},"closingIssuesReferences":{"totalCount":101,"nodes":[]}}]`, 1)
+					if spec.Args[0] == "ls-remote" {
+						if kind == "remote auth" {
+							return CommandResult{ExitCode: 1}
+						}
+						if containsString(spec.Args, "refs/heads/main") {
+							switch kind {
+							case "missing remote":
+								return CommandResult{}
+							case "ahead":
+								return CommandResult{Stdout: foundationHEAD + "\trefs/heads/main\n"}
+							case "behind":
+								return CommandResult{Stdout: revisionCommit + "\trefs/heads/main\n"}
+							case "diverged":
+								return CommandResult{Stdout: reviewBaseForTest + "\trefs/heads/main\n"}
+							}
+						}
 					}
-					return CommandResult{Stdout: response}
 				}
 				return standardFakeResult(spec, root, "", false, false)
 			}
@@ -183,38 +183,18 @@ func TestRunRejectsDeliveryPreconditionsBeforeWorker(t *testing.T) {
 				t.Fatal("unexpected success")
 			}
 			for _, call := range runner.calls {
-				if call.Name == "codex" && call.Args[0] == "--cd" || call.Name == "git" && containsArgs(call.Args, "worktree", "add") {
+				if call.Name == "codex" && containsString(call.Args, "--ephemeral") || call.Name == "git" && containsArgs(call.Args, "worktree", "add") {
 					t.Fatal("side effect before rejection", call)
+				}
+				if call.Name == "git" {
+					switch call.Args[0] {
+					case "add", "commit", "push", "fetch", "pull", "reset", "rebase", "merge", "checkout", "switch":
+						t.Fatal("source synchronization or mutation before rejection", call)
+					}
 				}
 			}
 		})
 	}
-}
-
-func TestRunAllowsForkPRWithCanonicalBranchBeforeWorker(t *testing.T) {
-	root := t.TempDir()
-	writeProjectFiles(t, root)
-	runner := &fakeCommandRunner{}
-	runner.fn = func(spec CommandSpec) CommandResult {
-		if spec.Name == "gh" && len(spec.Args) > 1 && spec.Args[0] == "api" && spec.Args[1] == "graphql" {
-			if !strings.Contains(strings.Join(spec.Args, " "), "headRepository{nameWithOwner}") {
-				t.Fatal("delivery query does not request the head repository identity")
-			}
-			response := strings.Replace(deliveryResponseForTest, `"nodes":[]`, `"nodes":[{"number":7,"headRefName":"iro/issue-123","headRepository":{"nameWithOwner":"other/iro"},"closingIssuesReferences":{"totalCount":0,"nodes":[]}}]`, 1)
-			return CommandResult{Stdout: response}
-		}
-		return standardFakeResult(spec, root, "", false, false)
-	}
-	service := newTestService(t, runner, root)
-	if err := service.Run(123, io.Discard); err != nil {
-		t.Fatalf("Run() rejected unrelated fork PR: %v", err)
-	}
-	for _, call := range runner.calls {
-		if call.Name == "codex" && len(call.Args) > 0 && call.Args[0] == "--cd" {
-			return
-		}
-	}
-	t.Fatal("worker was not started")
 }
 
 func TestDeliveryRelationPagination(t *testing.T) {

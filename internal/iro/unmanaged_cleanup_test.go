@@ -19,7 +19,7 @@ func unmanagedInventoryResult(spec CommandSpec, root, workspace, head string, re
 		return CommandResult{}, true
 	case "worktree list --porcelain -z":
 		output := worktreeRecord(root, "branch refs/heads/main")
-		if registered {
+		if registered && workspace != "" {
 			output += "worktree " + workspace + "\x00HEAD " + head + "\x00detached\x00\x00"
 		}
 		return CommandResult{Stdout: output}, true
