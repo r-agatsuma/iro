@@ -11,6 +11,8 @@ import (
 
 const reviewPreflightQuery = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name} pullRequest(number:$number){number title body url state isDraft baseRefName baseRefOid headRefName headRefOid headRepository{nameWithOwner} author{login} mergeable reviewDecision changedFiles additions deletions closingIssuesReferences(first:2){totalCount nodes{number repository{nameWithOwner}}}}}}`
 
+const managedReviewPreflightQuery = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){nameWithOwner pullRequest(number:$number){number title body url state isDraft baseRefName baseRefOid headRefName headRefOid headRepository{nameWithOwner} author{login} mergeable reviewDecision changedFiles additions deletions}}}`
+
 // The current codex exec invocation has no stable pre-invocation interface for
 // the resolved model identity. Do not infer it from config or scrape CLI output.
 const reviewerModelIdentity = "(unknown; not exposed by runtime)"
@@ -138,6 +140,9 @@ func (s *Service) reviewWithOptions(prNumber int, options workerOptions, out io.
 	if !validCommitOID(target.BaseRefOID) {
 		return fmt.Errorf("PR #%d base commit is invalid or unavailable; verify remote PR state and retry the review", prNumber)
 	}
+	if !validCommitOID(target.HeadRefOID) {
+		return fmt.Errorf("PR #%d HEAD commit is invalid or unavailable; verify remote PR state and retry the review", prNumber)
+	}
 	origin, err := s.fetchIssue(root, identity, target.OriginIssue)
 	if err != nil {
 		return err
@@ -187,8 +192,11 @@ func (s *Service) inspectPRTarget(root string, identity RepositoryIdentity, numb
 }
 
 func (s *Service) inspectPRTargetWithIssue(root string, identity RepositoryIdentity, number int, operation string, specificationIssue int) (reviewPullRequest, error) {
+	managedReview := operation == "review" && specificationIssue == 0
 	query := reviewPreflightQuery
-	if specificationIssue > 0 {
+	if managedReview {
+		query = managedReviewPreflightQuery
+	} else if specificationIssue > 0 {
 		query = strings.Replace(query, "defaultBranchRef{name} ", "", 1)
 		query = strings.Replace(query, " closingIssuesReferences(first:2){totalCount nodes{number repository{nameWithOwner}}}", "", 1)
 	}
@@ -207,11 +215,12 @@ func (s *Service) inspectPRTargetWithIssue(root string, identity RepositoryIdent
 		Errors []json.RawMessage
 		Data   struct {
 			Repository *struct {
+				NameWithOwner    string
 				DefaultBranchRef *struct{ Name string }
 				PullRequest      *struct {
 					Number                  int
 					Title                   string
-					Body                    string
+					Body                    *string
 					URL                     string
 					State                   string
 					IsDraft                 bool
@@ -241,7 +250,7 @@ func (s *Service) inspectPRTargetWithIssue(root string, identity RepositoryIdent
 		return reviewPullRequest{}, fmt.Errorf("could not inspect PR #%d metadata; verify GitHub access", number)
 	}
 	repository := response.Data.Repository
-	if specificationIssue == 0 && (repository.DefaultBranchRef == nil || repository.DefaultBranchRef.Name == "") {
+	if !managedReview && specificationIssue == 0 && (repository.DefaultBranchRef == nil || repository.DefaultBranchRef.Name == "") {
 		return reviewPullRequest{}, fmt.Errorf("configured repository default branch is unavailable")
 	}
 	pr := repository.PullRequest
@@ -255,7 +264,19 @@ func (s *Service) inspectPRTargetWithIssue(root string, identity RepositoryIdent
 		return reviewPullRequest{}, fmt.Errorf("PR #%d must be open for %s", number, operation)
 	}
 	originNumber := specificationIssue
-	if specificationIssue == 0 {
+	if managedReview {
+		if !strings.EqualFold(repository.NameWithOwner, identity.String()) || pr.Body == nil {
+			return reviewPullRequest{}, fmt.Errorf("PR #%d origin relation failed: current raw body is missing, unreadable or belongs to an unexpected repository", number)
+		}
+		relation, err := s.resolveGitHubOriginBody(root, identity, number, *pr.Body)
+		if err != nil {
+			return reviewPullRequest{}, err
+		}
+		if relation.State != githubOriginResolved {
+			return reviewPullRequest{}, fmt.Errorf("PR #%d origin relation is %s; require exactly one validated local Issue in the current PR body; inspect the PR body", number, relation.State)
+		}
+		originNumber = relation.Issues[0]
+	} else if specificationIssue == 0 {
 		if pr.BaseRefName != repository.DefaultBranchRef.Name {
 			return reviewPullRequest{}, fmt.Errorf("PR #%d targets %q, but %s requires default branch %q", number, pr.BaseRefName, operation, repository.DefaultBranchRef.Name)
 		}
@@ -278,7 +299,6 @@ func (s *Service) inspectPRTargetWithIssue(root string, identity RepositoryIdent
 	target := reviewPullRequest{
 		Number:         pr.Number,
 		Title:          pr.Title,
-		Body:           pr.Body,
 		URL:            pr.URL,
 		State:          pr.State,
 		IsDraft:        pr.IsDraft,
@@ -292,6 +312,9 @@ func (s *Service) inspectPRTargetWithIssue(root string, identity RepositoryIdent
 		Additions:      pr.Additions,
 		Deletions:      pr.Deletions,
 		OriginIssue:    originNumber,
+	}
+	if pr.Body != nil {
+		target.Body = *pr.Body
 	}
 	if pr.HeadRepository != nil {
 		target.HeadRepository = pr.HeadRepository.NameWithOwner
@@ -426,6 +449,8 @@ func (s *Service) runReviewer(workspace string, identity RepositoryIdentity, tar
 	policy := reviewerDeveloperInstructions
 	if options.Unmanaged {
 		policy = strings.Replace(policy, "Follow the AGENTS.md instruction chain loaded by Codex and the invoking repository's WORKFLOW.md supplied in the review input.", "Follow the AGENTS.md instruction chain loaded by Codex within the built-in unmanaged policy. Do not read iro.toml or WORKFLOW.md. Do not provision or repair missing environments, credentials, remotes, branches, or worktrees. If guidance conflicts or a new specification decision is required, stop and report it for human judgment. Review the verified workspace HEAD supplied in trusted provenance; fetched PR diff and feedback may reflect concurrent changes and must not replace that snapshot.", 1)
+	} else {
+		policy += "\n\nThe specification Issue is bound once from the starting PR body. Review the verified workspace HEAD supplied in trusted provenance; fetched PR diff and feedback may reflect concurrent changes and must not replace that snapshot. Later PR body edits do not change the supplied Issue binding."
 	}
 	instructions := fmt.Sprintf("%s\n\nTrusted review provenance (supplied by iro):\nModel: %s\nBase branch: %s\nBase OID: %s\nReviewed HEAD OID: %s\n", policy, reviewerModelIdentity, target.BaseRefName, target.BaseRefOID, target.HeadRefOID)
 	return s.Runner.Run(CommandSpec{

@@ -671,6 +671,7 @@ func TestUnmanagedG2ManagedEligibilityUsesCurrentRelationNotProvenance(t *testin
 				t.Fatal(err)
 			}
 			repo := response["data"].(map[string]any)["repository"].(map[string]any)
+			repo["nameWithOwner"] = "acme/iro"
 			pr := repo["pullRequest"].(map[string]any)
 			pr["url"] = "https://github.com/acme/iro/pull/42"
 			pr["baseRefOid"] = reviewBaseForTest
@@ -681,6 +682,9 @@ func TestUnmanagedG2ManagedEligibilityUsesCurrentRelationNotProvenance(t *testin
 			pr["closingIssuesReferences"] = map[string]any{"totalCount": 0, "nodes": []any{}}
 			f.runner.fn = func(spec CommandSpec) CommandResult {
 				if spec.Name == "gh" && containsArgs(spec.Args, "api", "graphql") {
+					if containsString(spec.Args, "query="+githubOriginCandidateQuery) {
+						return CommandResult{Stdout: strings.ReplaceAll(originCandidateResponse(123), "ACME/SELECTED", "acme/iro")}
+					}
 					if containsString(spec.Args, "query="+strings.Replace(deliveryQuery, "states:[OPEN,CLOSED,MERGED]", "states:[OPEN]", 1)) {
 						return CommandResult{Stdout: landDeliveryPage(landActivePRForTest, false, "")}
 					}
@@ -692,6 +696,21 @@ func TestUnmanagedG2ManagedEligibilityUsesCurrentRelationNotProvenance(t *testin
 				}
 				t.Fatalf("managed operation proceeded past invalid relation: %+v", spec)
 				return CommandResult{ExitCode: 1}
+			}
+			if operation == "review" {
+				identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
+				target, err := f.service.inspectPRTarget(f.root, identity, 42, operation)
+				if err != nil || target.OriginIssue != 123 {
+					t.Fatalf("managed Review rejected current raw-body relation: %+v %v", target, err)
+				}
+				// Native closing metadata and producer provenance cannot supply
+				// a binding when the current raw body has no local Issue token.
+				pr["body"] = "No local Issue token"
+				pr["closingIssuesReferences"] = closing
+				if _, err := f.service.inspectPRTarget(f.root, identity, 42, operation); err == nil || !strings.Contains(err.Error(), "unresolved") {
+					t.Fatalf("managed Review inferred origin outside current body: %v", err)
+				}
+				return
 			}
 			if operation == "land" {
 				// Managed Land uses the selected PR's merge integrity, independent

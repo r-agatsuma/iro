@@ -52,8 +52,8 @@ managed `iro run` が行う GitHub operation は次とする。
 
 managed `iro review` が行う GitHub operation は次とする。
 
-- configured repository の default branch と target PR metadata / closing relation の read
-- origin Issue とその comments の read
+- configured repository の target PR metadata / current raw body と raw-body origin relation 候補の read / typed validation
+- invocation 開始時に解決した specification Issue とその comments の read
 - target PR の body、diff、changed files、conversation、review feedback、inline review comments、checks の read
 - disposable review workspace を materialize するための repository / PR HEAD の read
 - target PR への Reviewer final response comment の create
@@ -174,11 +174,11 @@ local directory、GitHub CLI の default host、`GH_HOST` / `GH_REPO` による 
 
 ## 2a. GitHub raw-body origin relation primitive
 
-この節は GitHub 専用 resolver と Run body writer の contract を定義する（Issue #88 / F1）。Review / Revise の workflow、Land eligibility、Run の既存 delivery relation 検査はこの primitive へまだ移行しておらず、それぞれの command 節に記述した条件に従う。この節から command の新しい eligibility や invocation 内の再検証タイミングを推測してはならない。
+この節は GitHub 専用 resolver と Run body writer の contract を定義する（Issue #88 / F1）。managed Review は REVIEW-003 の開始時 binding にこの primitive を使用する。Revise はまだ移行しておらず、Land eligibility を含め各 command 節の条件に従う。invocation 内の解決・再検証タイミングは command 節を正とする。
 
 ### GH-ORIGIN-001: candidate source and lexical grammar
 
-resolver は指定 repository の選択 PR の **現在の raw body** を呼び出しごとに取得し、それだけを候補抽出元にしなければならない。
+resolver は指定 repository の選択 PR の **現在の raw body** を呼び出しごとに取得し、それだけを候補抽出元にしなければならない。PR metadata と同じ API response で取得した raw body を共通の候補抽出・typed validation に渡してよい。この場合も PR number / repository identity を検証し、body の missing / null を拒否する。
 
 local token は次のすべてを満たす `#N` とする。
 
@@ -894,7 +894,7 @@ confirmed delivery の後だけ、今回作成した detached worktree を通常
 
 ### UNMANAGED-RUN-007: cross-mode boundaries
 
-unmanaged Run の成功・作成者・delivery comment・local log は後続 managed Review / Revise / Land の eligibility を付与しない。managed Review / Revise は現在の default base / native closing relation / remote delivery relation、および必要な local ownership / worker policy を通常どおり検証する。managed Land は configured repository の選択 PR / HEAD integrity と merge policy を検証し、origin relation や delivery topology を要求しない。一方、Human が現在の state をその contract に合わせた場合、unmanaged 由来という provenance だけを理由に永続的に reject しない（G2）。
+unmanaged Run の成功・作成者・delivery comment・local log は後続 managed Review / Revise / Land の eligibility を付与しない。managed Review は開始時の current raw body から specification Issue を解決し、invocation-side worker policy と exact HEAD snapshot を検証する。default base / native closing relation / remote delivery topology / local ownership を要求しない。managed Revise は現在の default base / native closing relation / remote delivery relation、および必要な local ownership / worker policy を通常どおり検証する。managed Land は configured repository の選択 PR / HEAD integrity と merge policy を検証し、origin relation や delivery topology を要求しない。一方、Human が現在の state をその contract に合わせた場合、unmanaged 由来という provenance だけを理由に永続的に reject しない（G2）。
 
 managed `tracker.remote` が R1、`origin` が別 repository R2 の場合、managed operation は R1、unmanaged Run は R2 を対象とする。identity の migration / fallback は行わない（G4）。Status / Cleanup は STATUS-003 / CLEANUP-002 の current-local-repository evidence に従い、v1 ownership mapping や remote provenance を authority としない。current repository に registered され、LOCAL-003 で iro runtime workspace path と認識できる unmanaged workspace は inventory 対象となり、Cleanup の selection rule を満たす場合は purge 対象になり得る。これは unmanaged state を managed authority へ adopt することを意味せず、registration / ref / known-candidate evidence を失った filesystem-only residue の完全発見は保証しない。
 
@@ -931,13 +931,15 @@ Reviewer 起動と disposable workspace 作成より前に、次を検証する�
 - INV-010 の GitHub CLI context consistency
 - target PR が configured repository に存在し readable
 - target PR が `OPEN`（Draft を許可する）
-- configured repository の default branch が一意に取得でき、target PR の base と一致
 - remote PR metadata の `baseRefOid` が取得でき、40 桁または 64 桁の小文字 hexadecimal commit OID として valid（missing / empty / invalid は fail closed）
-- GitHub native `closingIssuesReferences` が exactly 1 件
-- closing relation の origin Issue が configured repository に属し、取得可能
+- current raw PR body が取得でき、GH-ORIGIN-001 / GH-ORIGIN-002 による relation が resolved singleton
+- 解決した specification Issue が configured repository で取得可能
+- remote PR HEAD OID が取得でき、40 桁または 64 桁の小文字 hexadecimal commit OID として valid
 - PR review context と Codex executable / authentication が取得・検証可能
 
-PR creator、head repository、head branch naming、PR provenance、delivery hint comment、local ownership mapping は eligibility に使用しない。したがって fork や Human が作成した PR も上記条件だけで review できる。
+current raw body と PR metadata は invocation 開始時に一度取得し、typed validation を通過した specification Issue N と PR HEAD H1 に bind する。unresolved / ambiguous / relation failure は fail closed とし、workspace や Reviewer を作成しない。後続の body relation 編集で実行中の Review を再解決・rebind しない。report は開始時の N と verified H1 のものとする。
+
+PR creator、head repository、head branch naming、PR provenance、delivery hint comment、local ownership mapping、default branch base、native closing relation、同一 Issue の他の active PR は eligibility に使用しない。したがって fork、任意の branch 名、非 default base、Human または iro が作成した PR も上記条件だけで review できる。Revise の same-repository mutation restriction を Review に適用しない。
 
 ```text
 review allowed
@@ -957,7 +959,7 @@ Reviewer へ少なくとも次を渡す。
 - verified PR HEAD 時点の repository contents
 - iro が supplied developer instruction として渡す trusted review provenance: model identity の明示値、preflight で観測した base branch / base OID、REVIEW-005 で workspace HEAD と一致検証した PR HEAD OID
 
-base branch と base OID は同じ preflight の remote PR metadata `baseRefName` / `baseRefOid` から取得し、invoking checkout の HEAD から推測しない。base branch は configured repository の default branch と一致検証する。report の `Base: <branch> @ <base OID>` と `Reviewed HEAD: <head OID>` は観測した endpoint を表し、`A..B` 等の厳密な Git diff range や merge-base を表さない。
+base branch と base OID は同じ preflight の remote PR metadata `baseRefName` / `baseRefOid` から取得し、invoking checkout の HEAD から推測しない。base branch は default branch と一致する必要はない。report の `Base: <branch> @ <base OID>` と `Reviewed HEAD: <head OID>` は観測した endpoint を表し、`A..B` 等の厳密な Git diff range や merge-base を表さない。
 
 現在の adapter は、model-option がなければ model 選択を、reasoning-effort-option がなければ reasoning effort 選択を、それぞれ Codex runtime に委ねる。指定時だけ各 requested configuration を Codex invocation に渡す。requested model / reasoning effort と resolved runtime configuration は別概念である。resolved model identity を runtime interface から確実に取得できない場合、trusted Model 値は `(unknown; not exposed by runtime)` として取得不能を明示しなければならない。requested reasoning effort も runtime が trusted metadata として公開しない限り Review provenance に resolved fact として記録してはならない。設定ファイルや環境変数から configuration を推測せず、stdout / stderr の header scraping、model / effort 取得用の Reviewer 二重起動、新しい remote side effect を導入しない。requested model / reasoning effort を Review provenance の resolved identity / configuration として置換してはならない。
 
@@ -969,7 +971,7 @@ PR conversation comments、submitted reviews、inline review comments は `gh ap
 
 target PR の local branch / worktree がなくても review できるよう、configured repository を temporary directory へ clone し、target PR を detached HEAD で checkout する。checkout 後の `HEAD` は preflight で取得した PR HEAD OID と一致しなければならない。一致しない場合は concurrent update として reject し、再実行を要求する。
 
-provenance の Reviewed HEAD OID はこの一致検証を通過した PR HEAD OID とする。HEAD mismatch 時は Reviewer を起動せず comment を投稿しない。base OID は review 開始時の観測値を保持し、取得後に base が変わっても再検証しない。Review 完了後の PR HEAD 再検証、strong transaction binding、review freshness の自動判定は行わない。
+provenance の Reviewed HEAD OID はこの一致検証を通過した PR HEAD OID とする。HEAD mismatch 時は Reviewer を起動せず comment を投稿しない。base OID は review 開始時の観測値を保持し、取得後に base が変わっても再検証しない。PR diff / feedback は取得時点の context であり、concurrent update を含み得る。Reviewer は verified H1 の repository contents を review target とし、diff / feedback でその snapshot を置き換えない。Reviewer 開始後に remote HEAD が H2 に進んでも N / H1 の report を投稿してよい。Review 完了後の PR HEAD 再検証、body relation の再解決、strong transaction binding、review freshness の自動判定は行わない。
 
 workspace は Review 専用の disposable resource であり、canonical Issue branch/worktree または delivery ownership state とみなさない。ownership mapping、persistent branch、persistent worktree を作成しない。Reviewer 終了後、PR comment 投稿前に disposable workspace を削除する。materialize / cleanup failure は command failure とする。
 
@@ -985,6 +987,7 @@ injected developer instructions は少なくとも次を要求する。
 - source file を編集せず implementation fix を行わない。disposable build / test artifact は Review workspace 内に限り許容する
 - Git metadata/history/remote、GitHub、その他の remote service を変更しない
 - Git command は read-only inspection に限定
+- specification Issue は開始時の body に bind した N、review target は verified workspace H1 とし、後続の body / diff / feedback で置き換えない
 - implementation を修正せず、concrete な correctness / safety / regression / specification / test coverage issue を評価
 - Human-facing final response は日本語で下記の convention に従う
 - provenance は iro が developer instruction 内で supplied した値をそのまま出力し、model / branch / commit を自分で推測・置換・省略しない。model の明示的な unknown 値もそのまま使用する
@@ -1490,9 +1493,10 @@ managed delivery workspace の leaf は LOCAL-001 の命名、unmanaged Run の 
 | Codex auth missing | allowed | report | allowed; no authentication check | error | error | allowed; no authentication check |
 | source checkout dirty, detached, or not equal to remote tip | N/A | report if inspected | local inventory; no cleanliness inspection | error; no changes | allowed; not inspected | allowed; selected invoking worktree also attempted |
 | Issue or comments not found/unreadable | N/A | N/A | not applicable; no Issue lookup; read-only | error before workspace creation | origin Issue error before Reviewer | not applicable; no Issue lookup |
-| PR absent, closed, merged, or non-default base | N/A | N/A | not applicable | not applicable | error before Reviewer | not applicable |
+| PR absent, closed, or merged | N/A | N/A | not applicable | not applicable | error before Reviewer | not applicable |
 | Open Draft PR | N/A | N/A | not applicable | not applicable | allowed | not applicable |
-| PR origin closing relation count is not exactly 1 | N/A | N/A | not applicable | not applicable | error before Reviewer | not applicable |
+| PR raw-body origin is unresolved / ambiguous / validation failure | N/A | N/A | not applicable | not applicable | error before workspace / Reviewer | not applicable |
+| PR non-default base / fork head / arbitrary head name / absent or multiple native closing relations / other active PRs | N/A | N/A | not applicable | not applicable | allowed; current raw-body origin binding only | not applicable |
 | target PR branch/worktree/ownership absent or unrelated | N/A | N/A | local refs / registered runtime worktrees only | not applicable | allowed; disposable workspace only | not applicable; no PR lookup |
 | Issue branch/worktree both absent | N/A | optional report | no row; v1 mapping ignored | create fresh delivery from verified source H | not inspected | success with no selected targets and no observation failure |
 | matching iro-owned Issue worktree clean | N/A | optional report | branch / registered path / HEAD; read-only | independent new delivery; no reuse | not inspected | force-remove worktree / branch; verify post-state |

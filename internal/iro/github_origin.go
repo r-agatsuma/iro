@@ -50,7 +50,13 @@ func (s *Service) resolveGitHubOrigin(root string, identity RepositoryIdentity, 
 	if !strings.EqualFold(repo.NameWithOwner, identity.String()) || repo.PullRequest == nil || repo.PullRequest.Number != prNumber || repo.PullRequest.Body == nil {
 		return githubOriginResolution{}, fmt.Errorf("PR #%d origin relation failed: current raw body is missing, unreadable or belongs to an unexpected PR/repository", prNumber)
 	}
-	numbers, err := extractGitHubOriginCandidates(*repo.PullRequest.Body)
+	return s.resolveGitHubOriginBody(root, identity, prNumber, *repo.PullRequest.Body)
+}
+
+// resolveGitHubOriginBody also accepts a current raw body read with PR metadata.
+// Callers must validate the PR/repository identity and reject missing/null bodies.
+func (s *Service) resolveGitHubOriginBody(root string, identity RepositoryIdentity, prNumber int, body string) (githubOriginResolution, error) {
+	numbers, err := extractGitHubOriginCandidates(body)
 	if err != nil {
 		return githubOriginResolution{}, fmt.Errorf("PR #%d origin relation failed: %w", prNumber, err)
 	}
