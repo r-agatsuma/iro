@@ -128,7 +128,7 @@ func TestLocalInventoryRejectsUnreadableAndChangingRepository(t *testing.T) {
 	root := t.TempDir()
 	common := filepath.Join(root, ".git")
 	refs, worktrees := "", worktreeRecord(root, "branch refs/heads/main")
-	for _, failure := range []string{"common", "relative_common", "refs", "broken_ref_warning", "worktrees", "common_changed"} {
+	for _, failure := range []string{"common", "relative_common", "initial_common_warning", "final_common_warning", "refs", "broken_ref_warning", "worktrees", "common_changed"} {
 		t.Run(failure, func(t *testing.T) {
 			runner := foundationRunner(root, common, &refs, &worktrees)
 			original := runner.fn
@@ -142,6 +142,8 @@ func TestLocalInventoryRejectsUnreadableAndChangingRepository(t *testing.T) {
 					return CommandResult{ExitCode: 1, Err: errors.New("unreadable"), Stderr: "unreadable"}
 				case failure == "relative_common" && spec.Args[0] == "rev-parse":
 					return CommandResult{Stdout: ".git\n"}
+				case failure == "initial_common_warning" && commonReads == 1, failure == "final_common_warning" && commonReads == 2:
+					return CommandResult{Stdout: common + "\n", Stderr: "warning: common directory observation is unreliable"}
 				case failure == "broken_ref_warning" && spec.Args[0] == "for-each-ref":
 					return CommandResult{Stderr: "warning: ignoring broken ref"}
 				case failure == "common_changed" && commonReads == 2:

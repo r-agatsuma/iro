@@ -1482,7 +1482,7 @@ inventory は invoking local Git repository の absolute common directory に bi
 
 managed delivery workspace の leaf は LOCAL-001 の命名、unmanaged detached workspace の leaf は既存 producer の `run-issue-N-<random-suffix>` / `review-pr-M-<random-suffix>` / `revise-pr-M-<random-suffix>` とする。DataRoot から `<workspace-kind>/<repository-key>/<leaf>` という深さの path だけを認識し、producer と unmanaged removal consumer は共通の命名・認識 helper を使う。
 
-この predicate は naming evidence であり、削除 authorization ではない。consumer は current local repository の登録と具体的な操作契約を確認しなければならない。通常の Human worktree は detached という理由だけで runtime workspace に分類してはならない。legacy managed `issue-N` path や v1 ownership JSON をこの新基盤で認識・adopt しない。既存 managed / unmanaged の保持・削除責務はそれぞれの command 契約に従う。
+この predicate は naming evidence であり、削除 authorization ではない。consumer は current local repository の登録と具体的な操作契約を確認しなければならない。unmanaged removal consumer は各 command の cleanup boundary に達した今回作成の workspace だけを対象とし、削除前に LOCAL-002 inventory で対象登録が一意な detached / non-bare / unlocked / non-prunable であることを検証する。対象 path は symlink ではない既存 directory で、invoking repository と common directory を共有し、現在の detached HEAD が inventory の HEAD と一致し、clean でなければならない。観測失敗や不一致時は削除せず保持する。通常の Human worktree は detached という理由だけで runtime workspace に分類してはならない。legacy managed `issue-N` path や v1 ownership JSON をこの新基盤で認識・adopt しない。既存 managed / unmanaged の保持・削除責務はそれぞれの command 契約に従う。
 
 ## 14. Behavior matrix
 

@@ -76,6 +76,9 @@ func (f *unmanagedReviseFixture) respond(spec CommandSpec) CommandResult {
 			return result
 		}
 	}
+	if result, ok := unmanagedInventoryResult(spec, f.root, f.workspace, f.head, f.registered); ok {
+		return result
+	}
 	switch spec.Name {
 	case "git":
 		switch args {

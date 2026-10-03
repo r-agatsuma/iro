@@ -254,6 +254,39 @@ func (s *Service) removeUnmanagedWorktree(root, workspace string) error {
 	if kind, ok := recognizeRuntimeWorkspace(s.Dirs, workspace); !ok || kind != unmanagedWorkspace {
 		return fmt.Errorf("path is not an iro unmanaged runtime workspace: %s", workspace)
 	}
+	// Callers supply only the fresh workspace created by this invocation after
+	// their operation's cleanup boundary. Naming alone is not authorization.
+	inventory, err := s.localInventory(root)
+	if err != nil {
+		return err
+	}
+	var target *registeredWorktree
+	for i := range inventory.Worktrees {
+		entry := &inventory.Worktrees[i]
+		if filepath.Clean(entry.Path) == filepath.Clean(workspace) {
+			target = entry
+		}
+	}
+	if target == nil || !target.Detached || target.Branch != "" || target.Bare || target.Locked || target.Prunable {
+		return fmt.Errorf("unmanaged cleanup requires a registered detached, unlocked, non-prunable worktree at %s", workspace)
+	}
+	info, err := s.FileSystem.Lstat(workspace)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("unmanaged cleanup requires an existing directory at %s", workspace)
+	}
+	common, err := s.gitCommonDir(workspace)
+	if err != nil {
+		return err
+	}
+	if common != inventory.CommonDir {
+		return fmt.Errorf("unmanaged worktree does not share the invoking Git common directory")
+	}
+	if err := s.verifyDetachedHead(workspace, target.HEAD); err != nil {
+		return err
+	}
+	if err := s.checkoutClean(workspace); err != nil {
+		return fmt.Errorf("unmanaged cleanup requires a clean worktree: %w", err)
+	}
 	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"worktree", "remove", "--", workspace}, Dir: root})
 	if !commandSucceeded(result) {
 		return fmt.Errorf("Git rejected normal worktree removal")

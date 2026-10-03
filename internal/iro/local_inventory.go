@@ -33,7 +33,7 @@ type localGitInventory struct {
 func (s *Service) gitCommonDir(root string) (string, error) {
 	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"rev-parse", "--path-format=absolute", "--git-common-dir"}, Dir: root})
 	value := strings.TrimSuffix(result.Stdout, "\n")
-	if !commandSucceeded(result) || !filepath.IsAbs(value) || strings.ContainsAny(value, "\x00\n") {
+	if !commandSucceeded(result) || result.Stderr != "" || !filepath.IsAbs(value) || strings.ContainsAny(value, "\x00\n") {
 		return "", fmt.Errorf("could not inspect local Git common directory: %s", strings.TrimSpace(result.Stderr))
 	}
 	return filepath.Clean(value), nil
