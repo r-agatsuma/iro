@@ -39,7 +39,9 @@ func (f *unmanagedFixture) run(spec CommandSpec) CommandResult {
 	if spec.Name == "git" {
 		switch spec.Args[0] {
 		case "ls-remote":
-			f.remoteChecks++
+			if len(spec.Args) > 3 && spec.Args[3] == "origin" {
+				f.remoteChecks++
+			}
 			stage = "remote-check"
 		case "add", "commit", "push":
 			stage = spec.Args[0]
@@ -81,7 +83,7 @@ func (f *unmanagedFixture) run(spec CommandSpec) CommandResult {
 				return CommandResult{Stdout: reviewBaseForTest}
 			}
 			return CommandResult{Stdout: f.head}
-		case "ls-remote --heads -- origin refs/heads/release/topic refs/heads/iro/issue-123":
+		case "ls-remote --heads -- origin refs/heads/release/topic":
 			return CommandResult{Stdout: reviewBaseForTest + "\trefs/heads/release/topic\n"}
 		case "status --porcelain --untracked-files=all", "add --all":
 			return CommandResult{}
@@ -92,11 +94,21 @@ func (f *unmanagedFixture) run(spec CommandSpec) CommandResult {
 			return CommandResult{}
 		case "rev-list --parents -n 1 HEAD":
 			return CommandResult{Stdout: reviewHeadForTest + " " + reviewBaseForTest}
-		// Require both overrides so ambient settings cannot push tags or submodules.
-		case "push --no-follow-tags --no-recurse-submodules -- origin " + reviewHeadForTest + ":refs/heads/iro/issue-123":
-			return CommandResult{}
 		case "worktree list --porcelain":
 			return CommandResult{Stdout: "worktree " + f.root + "\nbranch refs/heads/release/topic\n\n"}
+		}
+		if spec.Args[0] == "show-ref" {
+			return CommandResult{ExitCode: 1}
+		}
+		if spec.Args[0] == "ls-remote" && spec.Args[3] != "origin" {
+			return CommandResult{}
+		}
+		if spec.Args[0] == "ls-remote" && len(spec.Args) == 6 && strings.HasPrefix(spec.Args[5], "refs/heads/iro/issue-123-") {
+			return CommandResult{Stdout: reviewBaseForTest + "\trefs/heads/release/topic\n"}
+		}
+		// Require both overrides so ambient settings cannot push tags or submodules.
+		if spec.Args[0] == "push" && len(spec.Args) == 6 && spec.Args[1] == "--no-follow-tags" && spec.Args[2] == "--no-recurse-submodules" && strings.HasPrefix(spec.Args[5], reviewHeadForTest+":refs/heads/iro/issue-123-") {
+			return CommandResult{}
 		}
 		if containsArgs(spec.Args, "worktree", "add") && len(spec.Args) == 5 && spec.Args[2] == "--detach" && spec.Args[4] == reviewBaseForTest {
 			f.workspace = spec.Args[3]
@@ -121,7 +133,7 @@ func (f *unmanagedFixture) run(spec CommandSpec) CommandResult {
 			if err := json.Unmarshal(spec.Stdin, &body); err != nil {
 				f.t.Fatal(err)
 			}
-			if body["head"] != "iro/issue-123" || body["base"] != "release/topic" || body["body"] != "Issue #123 の実装です。\n\nRefs #123\n" || body["draft"] != false {
+			if !validDeliveryHeadForTest(body["head"], 123) || body["base"] != "release/topic" || body["body"] != "Issue #123 の実装です。\n\nRefs #123\n" || body["draft"] != false {
 				f.t.Fatalf("unexpected PR payload: %s", spec.Stdin)
 			}
 			return CommandResult{Stdout: `{"number":42}`}
@@ -156,7 +168,7 @@ func TestUnmanagedRunScenarioA(t *testing.T) {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, out, diagnostic)
 	}
 	want := []string{"remote-check", "worktree-add", "worker", "add", "remote-check", "commit", "remote-check", "push", "pr-create", "worktree-list", "worktree-remove", "worktree-list"}
-	if !reflect.DeepEqual(f.stages, want) {
+	if !reflect.DeepEqual(producerMutationStages(f.stages), producerMutationStages(want)) {
 		t.Fatalf("stages=%v want=%v", f.stages, want)
 	}
 	if _, err := os.Stat(f.workspace); !os.IsNotExist(err) {
@@ -314,7 +326,6 @@ func TestUnmanagedPreconditions(t *testing.T) {
 		{"invalid head", "rev-parse HEAD", CommandResult{Stdout: "invalid"}, "valid HEAD"},
 		{"missing base", "ls-remote", CommandResult{}, "base is missing"},
 		{"base mismatch", "ls-remote", CommandResult{Stdout: reviewHeadForTest + "\trefs/heads/release/topic\n"}, "base drift"},
-		{"collision", "ls-remote", CommandResult{Stdout: reviewBaseForTest + "\trefs/heads/release/topic\n" + reviewHeadForTest + "\trefs/heads/iro/issue-123\n"}, "already exists"},
 		{"remote failure", "ls-remote", CommandResult{ExitCode: 128}, "remote access"},
 		{"Issue unreadable", "issue view", CommandResult{ExitCode: 1}, "could not read GitHub Issue"},
 		{"GitHub auth", "auth status", CommandResult{ExitCode: 1}, "authentication check failed"},
@@ -439,7 +450,7 @@ func TestUnmanagedRevalidatesBeforeCommitAndPush(t *testing.T) {
 							return CommandResult{Stdout: reviewHeadForTest + "\trefs/heads/release/topic\n"}, true
 						}
 						if failure == "task collision" {
-							return CommandResult{Stdout: reviewBaseForTest + "\trefs/heads/release/topic\n" + reviewHeadForTest + "\trefs/heads/iro/issue-123\n"}, true
+							return CommandResult{Stdout: reviewBaseForTest + "\trefs/heads/release/topic\n" + reviewHeadForTest + "\t" + spec.Args[len(spec.Args)-1] + "\n"}, true
 						}
 					}
 					return CommandResult{}, false
@@ -622,8 +633,12 @@ func TestUnmanagedG4OriginAndManagedConfiguredRemoteRemainIndependent(t *testing
 	if code := Execute([]string{"run", "123"}, io.Discard, &diagnostic, f.service); code != 0 {
 		t.Fatal(diagnostic.String())
 	}
-	mapping := ownershipPath(f.service.Dirs, RepositoryIdentity{Owner: "managed", Name: "project"}, 123)
-	before, err := os.ReadFile(mapping)
+	logs, err := filepath.Glob(filepath.Join(f.service.Dirs.StateRoot, "runs", RepositoryIdentity{Owner: "managed", Name: "project"}.Key(), "*.log"))
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("managed report missing: %v %v", logs, err)
+	}
+	managedLog := logs[0]
+	before, err := os.ReadFile(managedLog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,9 +647,9 @@ func TestUnmanagedG4OriginAndManagedConfiguredRemoteRemainIndependent(t *testing
 	if code, _, diagnostic := f.execute(); code != 0 {
 		t.Fatal(diagnostic)
 	}
-	after, err := os.ReadFile(mapping)
+	after, err := os.ReadFile(managedLog)
 	if err != nil || string(before) != string(after) {
-		t.Fatalf("unmanaged Run changed managed ownership: %v", err)
+		t.Fatalf("unmanaged Run changed managed report: %v", err)
 	}
 }
 

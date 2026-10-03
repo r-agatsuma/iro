@@ -98,7 +98,7 @@ func (s *Service) validateOriginPushDestination(root string, identity Repository
 	return nil
 }
 
-func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io.Writer) error {
+func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io.Writer) (runErr error) {
 	if number <= 0 {
 		return fmt.Errorf("issue number must be a positive decimal integer")
 	}
@@ -126,8 +126,7 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 	if err != nil || !validCommitOID(head) {
 		return fmt.Errorf("source checkout has no valid HEAD commit")
 	}
-	branch := fmt.Sprintf("iro/issue-%d", number)
-	if err := s.revalidateUnmanagedRun(root, identity, base, head, branch); err != nil {
+	if err := s.revalidateUnmanagedRun(root, identity, base, head, ""); err != nil {
 		return err
 	}
 	if err := s.requireExecutable("gh"); err != nil {
@@ -146,8 +145,14 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 	if err := s.checkAuth("codex", []string{"login", "status"}, root); err != nil {
 		return err
 	}
-	workspace, err := s.createUnmanagedWorktree(root, identity, number, head)
+	allocation, err := s.allocateRunDelivery(root, identity, number, "origin", true)
 	if err != nil {
+		return err
+	}
+	state := newRunDeliveryState(allocation)
+	defer func() { runErr = s.finishRunDelivery(identity, state, runErr, out, errOut) }()
+	workspace, branch := allocation.worktree, allocation.branch
+	if err := s.createDeliveryWorktree(root, allocation, head); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Created unmanaged detached worktree at %s\n", workspace)
@@ -158,20 +163,20 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 		return fmt.Errorf("new unmanaged worktree is not clean; inspect %s: %w", workspace, err)
 	}
 	result = s.runCodex(workspace, identity, target, options)
-	logErr := s.writeUnmanagedRunLog(identity, number, base, head, workspace, result)
+	logErr := s.writeUnmanagedRunLog(identity, number, base, head, workspace, result, allocation)
 	var operationErr error
 	if !commandSucceeded(result) {
 		operationErr = fmt.Errorf("Author exited with status %d (%v)", result.ExitCode, result.Err)
 	} else if logErr != nil {
 		operationErr = logErr
 	} else {
-		operationErr = s.deliverUnmanaged(root, workspace, identity, number, base, head, branch, result.Stdout, out, errOut)
+		operationErr = s.deliverUnmanaged(root, workspace, identity, number, base, head, branch, result.Stdout, state, out, errOut)
 	}
 	if operationErr != nil {
 		if logErr != nil {
 			fmt.Fprintf(errOut, "warning: could not preserve Author log: %v\nAuthor stdout:\n%s\nAuthor stderr:\n%s\n", logErr, result.Stdout, result.Stderr)
 		}
-		operationErr = fmt.Errorf("%w; unmanaged worktree kept at %s; inspect local and remote state before any new invocation; no automatic retry or rollback", operationErr, workspace)
+		operationErr = state.failure(fmt.Errorf("%w; unmanaged worktree kept at %s; inspect local and remote state before any new invocation; no automatic retry or rollback", operationErr, workspace))
 		if err := s.postResult(root, identity, number, buildFailureComment(number, workspace, result, operationErr)); err != nil {
 			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", err)
 		}
@@ -195,7 +200,11 @@ func (s *Service) revalidateUnmanagedRun(root string, identity RepositoryIdentit
 		return err
 	}
 	baseRef, taskRef := "refs/heads/"+base, "refs/heads/"+branch
-	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"ls-remote", "--heads", "--", "origin", baseRef, taskRef}, Dir: root})
+	args := []string{"ls-remote", "--heads", "--", "origin", baseRef}
+	if branch != "" {
+		args = append(args, taskRef)
+	}
+	result := s.Runner.Run(CommandSpec{Name: "git", Args: args, Dir: root})
 	if !commandSucceeded(result) {
 		return fmt.Errorf("could not inspect origin base and task refs; verify remote access")
 	}
@@ -217,10 +226,6 @@ func (s *Service) revalidateUnmanagedRun(root string, identity RepositoryIdentit
 		return fmt.Errorf("origin/%s is missing", base)
 	}
 	return nil
-}
-
-func (s *Service) createUnmanagedWorktree(root string, identity RepositoryIdentity, number int, head string) (string, error) {
-	return s.createDetachedWorktree(root, identity, detachedWorkspacePattern("run", number), head)
 }
 
 func (s *Service) createDetachedWorktree(root string, identity RepositoryIdentity, pattern, head string) (string, error) {
@@ -325,12 +330,13 @@ func (s *Service) removeUnmanagedWorktree(root, workspace string) error {
 	return nil
 }
 
-func (s *Service) writeUnmanagedRunLog(identity RepositoryIdentity, number int, base, head, workspace string, result CommandResult) error {
+func (s *Service) writeUnmanagedRunLog(identity RepositoryIdentity, number int, base, head, workspace string, result CommandResult, allocation *deliveryAllocation) error {
 	dir := filepath.Join(s.Dirs.StateRoot, "unmanaged-runs", identity.Key())
 	if err := s.FileSystem.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 	content := fmt.Sprintf("repository: %s\nissue_number: %d\nbase: %s\nsource: %s\nworktree: %s\ncodex_exit_status: %d\ncodex_error: %v\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n", identity.String(), number, base, head, workspace, result.ExitCode, result.Err, result.Stdout, result.Stderr)
+	content = fmt.Sprintf("delivery_id: %s\nbranch: %s\n", allocation.id, allocation.branch) + content
 	file, err := s.FileSystem.CreateNew(filepath.Join(dir, filepath.Base(workspace)+".log"), 0600)
 	if err != nil {
 		return fmt.Errorf("create unmanaged Author log: %w", err)
@@ -342,7 +348,7 @@ func (s *Service) writeUnmanagedRunLog(identity RepositoryIdentity, number int, 
 	return file.Close()
 }
 
-func (s *Service) deliverUnmanaged(root, workspace string, identity RepositoryIdentity, number int, base, head, branch, authorReport string, out, errOut io.Writer) error {
+func (s *Service) deliverUnmanaged(root, workspace string, identity RepositoryIdentity, number int, base, head, branch, authorReport string, state *runDeliveryState, out, errOut io.Writer) error {
 	if err := s.verifyDetachedHead(workspace, head); err != nil {
 		return err
 	}
@@ -379,21 +385,32 @@ func (s *Service) deliverUnmanaged(root, workspace string, identity RepositoryId
 	if err := s.revalidateUnmanagedRun(workspace, identity, base, head, branch); err != nil {
 		return fmt.Errorf("local commit %s retained; no push attempted: %w", commit, err)
 	}
+	if collision, err := s.inspectRemoteDeliveryCollision(workspace, state.allocation); err != nil || collision {
+		return fmt.Errorf("fixed delivery stopped before push: collision=%t: %v", collision, err)
+	}
 	// An explicit refspec alone does not override push.followTags or push.recurseSubmodules.
 	result = s.Runner.Run(CommandSpec{Name: "git", Args: []string{"push", "--no-follow-tags", "--no-recurse-submodules", "--", "origin", commit + ":refs/heads/" + branch}, Dir: workspace})
+	state.push = mutationOutcome(result)
 	if !commandSucceeded(result) {
 		return fmt.Errorf("push failed or is uncertain; local commit %s retained; remote branch may have been updated", commit)
 	}
 	payload, _ := json.Marshal(map[string]any{"title": fmt.Sprintf("Implement issue #%d", number), "body": githubRunBody(number, true), "head": branch, "base": base, "draft": false})
 	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"api", "repos/" + identity.String() + "/pulls", "--hostname", identity.Host(), "--method", "POST", "--input", "-"}, Dir: root, Stdin: payload})
+	state.pr = mutationOutcome(result)
 	var pr struct{ Number int }
 	if !commandSucceeded(result) || json.Unmarshal([]byte(result.Stdout), &pr) != nil || pr.Number <= 0 {
+		if commandSucceeded(result) {
+			state.pr = "unknown"
+		}
 		return fmt.Errorf("partial or uncertain delivery: remote branch %s was pushed; PR creation failed or response was invalid; a PR may exist; local commit %s retained", branch, commit)
 	}
+	state.prNumber = pr.Number
 	fmt.Fprintf(out, "Created PR #%d (head %s, base %s; Refs #%d)\n", pr.Number, branch, base, number)
 	report := fmt.Sprintf("## iro delivery\n\nAuthor report (pre-delivery):\n\n%s\n", authorReport)
 	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"pr", "comment", strconv.Itoa(pr.Number), "--repo", identity.Selector(), "--body", report}, Dir: root})
+	state.report = mutationOutcome(result)
 	if !commandSucceeded(result) {
+		fmt.Fprintln(errOut, state.diagnostic())
 		fmt.Fprintf(errOut, "warning: PR #%d was created, but delivery report comment failed\n", pr.Number)
 	}
 	return nil

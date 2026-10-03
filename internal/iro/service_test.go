@@ -62,6 +62,18 @@ func writeProjectFiles(t *testing.T, root string) {
 func standardFakeResult(spec CommandSpec, root, workspace string, issueFailure bool, dirtyWorkspace bool) CommandResult {
 	if spec.Name == "git" {
 		switch {
+		case len(spec.Args) > 1 && spec.Args[0] == "rev-parse" && spec.Args[len(spec.Args)-1] == "--git-common-dir":
+			return CommandResult{Stdout: filepath.Join(root, ".git")}
+		case len(spec.Args) > 0 && spec.Args[0] == "for-each-ref":
+			return CommandResult{}
+		case len(spec.Args) > 0 && spec.Args[0] == "ls-remote":
+			if containsString(spec.Args, "refs/heads/main") {
+				return CommandResult{Stdout: foundationHEAD + "\trefs/heads/main\n"}
+			}
+			if containsString(spec.Args, "refs/heads/feature") {
+				return CommandResult{Stdout: foundationHEAD + "\trefs/heads/feature\n"}
+			}
+			return CommandResult{}
 		case len(spec.Args) > 0 && spec.Args[0] == "symbolic-ref":
 			return CommandResult{Stdout: "refs/heads/main\n"}
 		case len(spec.Args) > 0 && spec.Args[0] == "remote":
@@ -71,7 +83,7 @@ func standardFakeResult(spec CommandSpec, root, workspace string, issueFailure b
 		case len(spec.Args) >= 2 && spec.Args[0] == "rev-parse" && spec.Args[1] == "--show-toplevel":
 			return CommandResult{Stdout: root + "\n", ExitCode: 0}
 		case len(spec.Args) >= 2 && spec.Args[0] == "rev-parse" && spec.Args[1] == "HEAD":
-			return CommandResult{Stdout: "0123456789abcdef\n", ExitCode: 0}
+			return CommandResult{Stdout: foundationHEAD + "\n", ExitCode: 0}
 		case len(spec.Args) >= 1 && spec.Args[0] == "status":
 			if dirtyWorkspace && spec.Dir == workspace {
 				return CommandResult{Stdout: " M changed.txt\n", ExitCode: 0}
@@ -82,8 +94,15 @@ func standardFakeResult(spec CommandSpec, root, workspace string, issueFailure b
 		case len(spec.Args) >= 1 && spec.Args[0] == "show-ref":
 			return CommandResult{ExitCode: 1, Err: errors.New("not found")}
 		case len(spec.Args) >= 2 && spec.Args[0] == "worktree" && spec.Args[1] == "list":
-			return CommandResult{Stdout: "worktree " + root + "\nHEAD 0123456789abcdef\nbranch refs/heads/main\n\n", ExitCode: 0}
+			if containsString(spec.Args, "-z") {
+				return CommandResult{Stdout: worktreeRecord(root, "branch refs/heads/main")}
+			}
+			return CommandResult{Stdout: "worktree " + root + "\nHEAD " + foundationHEAD + "\nbranch refs/heads/main\n\n", ExitCode: 0}
 		case len(spec.Args) >= 2 && spec.Args[0] == "worktree" && spec.Args[1] == "add":
+			// Simulate materializing the workspace-side managed policy.
+			path := spec.Args[len(spec.Args)-2]
+			_ = os.MkdirAll(path, 0755)
+			_ = os.WriteFile(filepath.Join(path, "WORKFLOW.md"), []byte(workflowTemplate), 0644)
 			return CommandResult{ExitCode: 0}
 		}
 	}
@@ -461,7 +480,7 @@ func TestRunInvalidIssueCommentStopsBeforeWorktreeCreation(t *testing.T) {
 	}
 }
 
-func TestRunReusesMatchingCleanOwnedWorkspace(t *testing.T) {
+func TestLegacyPrepareWorktreeReusesMatchingCleanOwnedWorkspace(t *testing.T) {
 	root := t.TempDir()
 	writeProjectFiles(t, root)
 	runner := &fakeCommandRunner{}
@@ -484,7 +503,7 @@ func TestRunReusesMatchingCleanOwnedWorkspace(t *testing.T) {
 		}
 		return standardFakeResult(spec, root, workspace, false, false)
 	}
-	if err := service.Run(123, io.Discard); err != nil {
+	if _, _, err := service.prepareWorktree(root, identity, 123, "iro/issue-123", foundationHEAD); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	for _, call := range runner.calls {
@@ -543,7 +562,7 @@ func TestRunFailureKeepsWorktreeAndPostsFailureResult(t *testing.T) {
 	}
 }
 
-func TestRunRejectsUnownedExistingWorkspace(t *testing.T) {
+func TestLegacyPrepareWorktreeRejectsUnownedExistingWorkspace(t *testing.T) {
 	root := t.TempDir()
 	writeProjectFiles(t, root)
 	runner := &fakeCommandRunner{}
@@ -563,7 +582,7 @@ func TestRunRejectsUnownedExistingWorkspace(t *testing.T) {
 	if err := os.MkdirAll(path, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Run(123, io.Discard); err == nil {
+	if _, _, err := service.prepareWorktree(root, identity, 123, "iro/issue-123", foundationHEAD); err == nil {
 		t.Fatal("Run() unexpectedly guessed ownership")
 	}
 	for _, call := range runner.calls {

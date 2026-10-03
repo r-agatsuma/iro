@@ -117,14 +117,6 @@ func (s *Service) inspectDeliveryPRs(root string, identity RepositoryIdentity, n
 	}
 }
 
-func (s *Service) verifyDeliveryCheckout(root, base string) error {
-	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"symbolic-ref", "--quiet", "HEAD"}, Dir: root})
-	if !commandSucceeded(result) || strings.TrimSpace(result.Stdout) != "refs/heads/"+base {
-		return fmt.Errorf("run requires the repository default branch %q; switch to it manually (detached HEAD is not supported)", base)
-	}
-	return nil
-}
-
 func (s *Service) verifyPushRemote(root, remote string, identity RepositoryIdentity) error {
 	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"remote", "get-url", "--push", "--all", remote}, Dir: root})
 	urls := strings.Fields(result.Stdout)
@@ -142,7 +134,7 @@ func (s *Service) verifyPushRemote(root, remote string, identity RepositoryIdent
 	return nil
 }
 
-func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, number int, remote, branch, base, authorReport string, out, errOut io.Writer) error {
+func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, number int, remote, branch, base, authorReport string, state *runDeliveryState, out, errOut io.Writer) error {
 	// Stage only worker changes in the previously verified clean, owned worktree.
 	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"add", "--all"}, Dir: workspace})
 	if !commandSucceeded(result) {
@@ -159,23 +151,37 @@ func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, n
 	if !commandSucceeded(result) {
 		return fmt.Errorf("commit failed; worktree and index kept at %s; inspect Git identity and hooks before retrying", workspace)
 	}
-	result = s.Runner.Run(CommandSpec{Name: "git", Args: []string{"push", "--", remote, "refs/heads/" + branch + ":refs/heads/" + branch}, Dir: workspace})
+	if err := s.verifyPushRemote(workspace, remote, identity); err != nil {
+		return err
+	}
+	if collision, err := s.inspectRemoteDeliveryCollision(workspace, state.allocation); err != nil || collision {
+		return fmt.Errorf("fixed delivery stopped before push: collision=%t: %v", collision, err)
+	}
+	result = s.Runner.Run(CommandSpec{Name: "git", Args: []string{"push", "--no-follow-tags", "--no-recurse-submodules", "--", remote, "refs/heads/" + branch + ":refs/heads/" + branch}, Dir: workspace})
+	state.push = mutationOutcome(result)
 	if !commandSucceeded(result) {
 		return fmt.Errorf("push failed; local commit remains on %s at %s; remote branch may have been updated, inspect it before retrying", branch, workspace)
 	}
 	// Use a fixed body, so worker text cannot introduce additional origin candidates.
 	payload, _ := json.Marshal(map[string]any{"title": fmt.Sprintf("Implement issue #%d", number), "body": githubRunBody(number, false), "head": branch, "base": base, "draft": false})
 	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"api", "repos/" + identity.String() + "/pulls", "--hostname", identity.Host(), "--method", "POST", "--input", "-"}, Dir: root, Stdin: payload})
+	state.pr = mutationOutcome(result)
 	var pr struct {
 		Number int `json:"number"`
 	}
 	if !commandSucceeded(result) || json.Unmarshal([]byte(result.Stdout), &pr) != nil || pr.Number <= 0 {
+		if commandSucceeded(result) {
+			state.pr = "unknown"
+		}
 		return fmt.Errorf("PR creation failed or response was invalid; remote branch %s was pushed and local commit remains at %s; a PR may exist, inspect remote state before retrying", branch, workspace)
 	}
+	state.prNumber = pr.Number
 	fmt.Fprintf(out, "Created PR #%d\nLand: iro land %d\n", pr.Number, pr.Number)
 	report := fmt.Sprintf("## iro delivery\n\nAuthor report (pre-delivery):\n\n%s\n\nLand:\n\n`iro land %d`\n", authorReport, pr.Number)
 	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"pr", "comment", strconv.Itoa(pr.Number), "--repo", identity.Selector(), "--body", report}, Dir: root})
+	state.report = mutationOutcome(result)
 	if !commandSucceeded(result) {
+		fmt.Fprintln(errOut, state.diagnostic())
 		fmt.Fprintf(errOut, "warning: PR #%d was created, but delivery report comment failed; Land: iro land %d\n", pr.Number, pr.Number)
 	}
 	return nil
