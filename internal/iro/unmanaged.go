@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -260,19 +261,32 @@ func (s *Service) removeUnmanagedWorktree(root, workspace string) error {
 	if err != nil {
 		return err
 	}
+	info, err := s.FileSystem.Lstat(workspace)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("unmanaged cleanup requires an existing directory at %s", workspace)
+	}
 	var target *registeredWorktree
 	for i := range inventory.Worktrees {
 		entry := &inventory.Worktrees[i]
-		if filepath.Clean(entry.Path) == filepath.Clean(workspace) {
+		// Git registers a real path, while the producer may return a path through
+		// symlink ancestors. Compare directory identity without rewriting inventory.
+		registeredInfo, err := s.FileSystem.Stat(entry.Path)
+		if os.IsNotExist(err) {
+			// Unrelated stale registrations need not have an existing directory.
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect registered worktree path %s: %w", entry.Path, err)
+		}
+		if os.SameFile(info, registeredInfo) {
+			if target != nil {
+				return fmt.Errorf("unmanaged worktree registration is ambiguous at %s", workspace)
+			}
 			target = entry
 		}
 	}
 	if target == nil || !target.Detached || target.Branch != "" || target.Bare || target.Locked || target.Prunable {
 		return fmt.Errorf("unmanaged cleanup requires a registered detached, unlocked, non-prunable worktree at %s", workspace)
-	}
-	info, err := s.FileSystem.Lstat(workspace)
-	if err != nil || !info.IsDir() {
-		return fmt.Errorf("unmanaged cleanup requires an existing directory at %s", workspace)
 	}
 	common, err := s.gitCommonDir(workspace)
 	if err != nil {
@@ -300,7 +314,7 @@ func (s *Service) removeUnmanagedWorktree(root, workspace string) error {
 		return err
 	}
 	for _, worktree := range worktrees {
-		if cleanAbsolutePath(worktree.Path) == cleanAbsolutePath(workspace) {
+		if cleanAbsolutePath(worktree.Path) == cleanAbsolutePath(workspace) || cleanAbsolutePath(worktree.Path) == cleanAbsolutePath(target.Path) {
 			return fmt.Errorf("Git still registers the worktree")
 		}
 	}
