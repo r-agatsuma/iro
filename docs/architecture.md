@@ -101,8 +101,9 @@ flowchart TB
 
     subgraph FINISHPATH["Remote completion and local teardown"]
         LAND["Land<br/>remote-only relative to target Issue state"] --> REMOTEPR
-        CLEANUP["Cleanup<br/>local-only"] --> VERIFY["verify ownership + clean state"]
-        VERIFY --> ORDER["remove worktree<br/>then safe-delete branch<br/>then remove mapping last"]
+        STATUS["Status<br/>read-only local inventory"] --> INVENTORY["current-common-directory iro refs<br/>registered runtime worktrees"]
+        CLEANUP["Cleanup<br/>explicit destructive local purge"] --> INVENTORY
+        INVENTORY --> ORDER["Cleanup: force-remove worktrees / branches<br/>remove known exact runtime residue<br/>verify post-state; continue independent actions"]
     end
 
     LAND -.->|"does not run"| CLEANUP

@@ -18,14 +18,14 @@ iro revise 456 --model <model>
 
 ## Run failure で dirty worktree が残った
 
-まず initialized repository から確認します。
+まず対象の local Git repository から確認します。
 
 ```bash
 iro status
 git worktree list --porcelain
 ```
 
-`iro status` は local ownership mapping に対応する workspace の状態を表示します。`DIRTY` は変更の存在、`BROKEN` は対応関係の不整合です。PR の有無や作業の完了を意味しません。mapping がなければ行も表示されないため、失敗時の出力・local log にある worktree path も確認します。
+`iro status` は local `iro/*` refs と attached registered worktrees、および登録済み runtime workspace の branch / path / HEAD を表示します。project files や v1 ownership JSON は参照せず、dirty state、PR の有無、作業の完了を判定しません。Status は削除の安全性を保証しないため、必要な内容は Human が直接 inspect します。
 
 表示された対象 path を指定し、Human が直接 inspect します。以下の `/path/to/issue-worktree` は実際の path に置き換えてください。
 
@@ -37,7 +37,7 @@ git -C /path/to/issue-worktree ls-files --others --exclude-standard
 git -C /path/to/issue-worktree log -5 --oneline
 ```
 
-保存するなら次節の方法を選び、保存結果を確認してから clean state に戻します。破棄するなら「changes を破棄する」を参照してください。`BROKEN` の場合は dirty の解消だけで直るとは限りません。mapping / branch / worktree の不整合を調査し、所有が不明な resource を削除しないでください。
+保存するなら次節の方法を選び、保存結果を確認してから clean state に戻します。破棄するなら「changes を破棄する」を参照してください。Run / Revise の mapping / branch / worktree の不整合は cleanliness とは別に調査します。
 
 clean state と remote delivery の状況を確認した後、元の repository の clean な default branch checkout から明示的に再実行します。
 
@@ -57,7 +57,7 @@ Ctrl-C や worker の中断後に、Human が branch、worktree、または mapp
 - canonical filesystem worktree path
 - iro の canonical ownership mapping
 
-まず、失敗診断に表示された path を使って個別に確認します。`iro status` と targeted な `iro cleanup 123` を使い、別の Issue まで処理する `iro cleanup` は troubleshooting の最初の選択肢にしないでください。
+まず、失敗診断に表示された path を使って個別に確認します。`iro status` は read-only ですが、`iro cleanup 123` は未保存変更も破棄する操作です。必要な保存を確認してから対象を選び、別の Issue まで処理する bulk `iro cleanup` を状態確認だけの目的で呼び出さないでください。
 
 ```bash
 iro status
@@ -67,7 +67,7 @@ test -e /reported/issue-worktree-path && echo "worktree path exists"
 ls -l /reported/ownership-mapping-path
 ```
 
-通常の dirty worktree だけが残っている場合は、変更を inspect して保存または破棄した後、対象 Issue を指定して `iro cleanup 123` を実行します。cleanup は自動で reset、stash、clean、削除を行わないため、dirty worktree の扱いを Human が選びます。
+worktree が残っている場合は変更を inspect し、必要な保存を確認してから対象 Issue を指定して `iro cleanup 123` を実行します。cleanup は dirty / untracked / ignored files と unpublished commits を保護せず、Git force removal / force branch deletion を試行します。
 
 一方、手動削除後の `BROKEN` partial state では、branch、Git worktree registration、filesystem path、ownership mapping の対応関係を Human が確認する必要があります。linked worktree の directory を `rm -rf` で削除しても、Git の worktree registration や iro の ownership mapping は削除されません。iro は ownership が不明な状態を推測して repair、adopt、prune しません。
 
@@ -78,7 +78,7 @@ rm -- /reported/ownership-mapping-path
 iro run 123
 ```
 
-これは stale mapping だけが残った場合の限定的な手順であり、任意の `BROKEN` row に mapping 削除を適用する一般的な修正ではありません。branch、worktree registration、path のいずれかが残っている、内容を保存していない、または ownership が不明な場合は mapping を削除せず、表示された4つの resource を確認してから Human が次の操作を判断します。
+これは現在の managed Run / Revise に stale v1 mapping だけが残った場合の限定的な手順です。Status / Cleanup はその JSON を authority にせず、Cleanup 成功後も JSON は残ります。branch、worktree registration、path のいずれかが残っている、内容を保存していない、または ownership が不明な場合は mapping を削除せず、表示された4つの resource を確認してから Human が次の操作を判断します。
 
 ## partial changes を保存したい
 
@@ -127,16 +127,16 @@ Author failure と delivery failure を失敗出力・local log で区別しま�
 
 delivery PR がまだ存在しない場合、`iro revise <pr-number>` の対象はありません。partial changes を保存または破棄して Run の precondition を満たした後に、`iro run <issue-number>` を fresh rerun します。既存 remote branch との衝突や relation の不整合が残る場合は、その診断に従って Human が整理します。iro は自動 rollback しません。
 
-## cleanup が dirty state で reject された
+## destructive cleanup が一部失敗した
 
-`iro cleanup <issue-number>` は automatic discard を行いません。上の inspect と保存・破棄を行い、対象 worktree が clean になった後、対象自身とは別の checkout から再実行します。
+`iro cleanup <issue-number>` は dirty state や ancestor 関係で拒否しません。Git / filesystem mechanism の失敗でも独立した削除は進むため、non-zero の後も以前と同じ状態とは限りません。diagnostic の branch / exact path を確認します。
 
 ```bash
 iro status
 iro cleanup 123
 ```
 
-clean だけでは十分ではありません。ownership が整合し、Issue branch tip が実行元 checkout の HEAD の履歴に含まれている必要があります。含まれない場合は、その履歴を含む integration checkout から再実行します。保存用 branch を作っただけではこの ancestor 条件は満たしません。`cleanup --force` はありません。cleanup は remote PR / branch を確認も変更もしないため、remote merge 済みという推測では local 履歴の条件を回避できません。
+remaining / unknown registration や path は confirmed success ではありません。iro は automatic unlock / prune / repair を行わず、未知の filesystem path を scan しません。復元や残骸の手動処理は現在の local state と保存範囲を確認した Human が判断します。`cleanup --force` はなく、通常の invocation 自体が destructive purge です。remote PR / branch は確認も変更もしません。
 
 ## remote PR はあるが local state がない
 

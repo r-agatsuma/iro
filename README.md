@@ -195,7 +195,7 @@ iro status
 iro cleanup 123
 ```
 
-複数 Issue の安全に削除できる managed resource をまとめて処理する場合は operand を省略できる。
+現在の local repository で発見した iro resource をすべて破棄する場合は operand を省略できる。未保存変更や unpublished commits も削除対象となる。
 
 ```bash
 iro cleanup
@@ -412,11 +412,11 @@ git pull
 iro status
 ```
 
-現在の repository に対して、iro の ownership mapping で所有を確認できる managed Issue workspace のローカルな機械状態を read-only で表示する。
+現在の local repository の `iro/*` branch と attached registered worktrees、および登録済みの iro runtime workspace を read-only で表示する。branch、worktree path(s)、local HEAD OID を示し、detached residue も runtime path と認識できる場合に含める。
 
-状態は `CLEAN` / `DIRTY` / `BROKEN` で表す。GitHub Issue の open / closed、PR の進捗、作業完了などの semantic state は取得・推測しない。
+cleanliness や GitHub Issue / PR の semantic state は判定しない。Status は Cleanup の安全性や復元可能性を保証しない。
 
-`gh`、GitHub authentication、network access、Codex は要求しない。
+`iro.toml`、`WORKFLOW.md`、remote configuration、tracker / agent の認証・network・実行環境、v1 ownership JSON は要求・参照しない。
 
 ### `iro cleanup`
 
@@ -424,21 +424,21 @@ iro status
 iro cleanup [<issue-number>]
 ```
 
-特定 Issue の managed local resource を安全に削除する。
+特定 Issue の local iro resource を best-effort で破壊的に削除する。`iro/issue-N` と `iro/issue-N-*` の branch、その attached worktrees、一意に N を示す登録済み runtime workspace が対象となる。Issue 7 と 70 は区別する。
 
 ```bash
 iro cleanup 123
 ```
 
-operand を省略した場合は、現在の repository の ownership mappings を Issue number 順に処理する。
+operand を省略した場合は、現在の local repository で発見した iro resource をすべて処理する。Issue に結び付かない登録済み runtime detached residue も含める。
 
 ```bash
 iro cleanup
 ```
 
-対象は ownership を検証できる local worktree、local branch、ownership mapping に限る。remote branch、Issue、PR は確認・変更しない。
+Git worktree の force removal、local branch の force deletion、既知の正確な runtime workspace path に限った残骸削除を試行する。dirty / untracked / ignored state、unpushed commits、祖先関係、remote recoverability による保護は行わない。remote branch、Issue、PR は確認・変更せず、v1 ownership JSON も参照・削除しない。
 
-DIRTY / BROKEN state や ownership を検証できない resource を force delete しない。`--force` はなく、`git clean`、reset、stash、force branch deletion で安全条件を迂回しない。
+失敗しても独立した残りの処理を続け、成功済み削除を rollback しない。残存・観測不能な target や mechanism failure があれば non-zero となる。arbitrary filesystem scan / path resemblance による削除や自動 unlock / prune / repair は行わず、Git 登録を失った filesystem-only residue の発見は保証しない。
 
 ## Writing an Executable Issue
 
@@ -664,7 +664,7 @@ iro status
 iro version
 ```
 
-failed Run、partial managed state、retained worktree、dirty cleanup、manual filesystem deletion 後の Git worktree registration 等の recovery recipe は [operator cookbook](docs/cookbook.md) にまとめている。
+failed Run、partial managed state、retained worktree、destructive cleanup、manual filesystem deletion 後の Git worktree registration 等の recovery recipe は [operator cookbook](docs/cookbook.md) にまとめている。
 
 iro は Human 所有の state を「たぶん不要」と推測して自動修復しない。failure diagnostic を読んで resource state を確認してから、保存、手動修復、cleanup、fresh retry のどれを行うか Human が決める。
 
@@ -679,7 +679,7 @@ iro が担うもの:
 - worker result を検証後、必要な commit / push / PR update を行う
 - fresh Reviewer による advisory review を PR comment として残す
 - Human が明示的に選択した PR を repository policy の範囲で merge する
-- ownership を検証できる managed local resource を安全に cleanup する
+- current local repository で発見した iro resource を明示 invocation により破壊的に cleanup する
 - failure 時に自動修復せず診断可能な state を残す
 
 iro が担わないもの:

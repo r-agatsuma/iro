@@ -120,3 +120,23 @@ func (s *Service) writeRunLog(identity RepositoryIdentity, issueNumber int, star
 	}
 	return logPath, nil
 }
+
+func validateOwnershipMapping(mapping ownershipMapping, filenameIssue int, identity RepositoryIdentity, dirs RuntimeDirs) error {
+	if mapping.Version != 1 {
+		return fmt.Errorf("unsupported mapping version")
+	}
+	if mapping.Repository != identity.Canonical() {
+		return fmt.Errorf("mapping repository does not match current repository")
+	}
+	if mapping.IssueNumber <= 0 || mapping.IssueNumber != filenameIssue {
+		return fmt.Errorf("mapping Issue number does not match its path")
+	}
+	expectedBranch := fmt.Sprintf("iro/issue-%d", mapping.IssueNumber)
+	if mapping.Branch != expectedBranch {
+		return fmt.Errorf("mapping branch does not match the Issue number")
+	}
+	if strings.TrimSpace(mapping.Worktree) == "" || cleanAbsolutePath(mapping.Worktree) != cleanAbsolutePath(worktreePath(dirs, identity, mapping.IssueNumber)) {
+		return fmt.Errorf("mapping worktree does not match the repository and Issue number")
+	}
+	return nil
+}
