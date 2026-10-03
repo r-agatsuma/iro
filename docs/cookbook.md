@@ -1,6 +1,6 @@
 # Operator cookbook
 
-> Runtime requirements are defined by `docs/behavior.md`. This cookbook provides human-operated recovery and troubleshooting recipes for the current behavior.
+> 現行の #83 foundation baseline に対する Human 向け手順集。runtime requirement の正本は `docs/behavior.md` である。
 
 この文書は non-normative な Human 向けの手順集です。runtime requirement の正本は [behavior.md](behavior.md) です。以下の Git 操作は Human が対象と保存範囲を確認して選択するもので、worker の Git mutation 権限を拡張しません。iro は automatic repair、reset / stash / clean、自動 retry を行いません。
 
@@ -37,48 +37,40 @@ git -C /path/to/issue-worktree ls-files --others --exclude-standard
 git -C /path/to/issue-worktree log -5 --oneline
 ```
 
-保存するなら次節の方法を選び、保存結果を確認してから clean state に戻します。破棄するなら「changes を破棄する」を参照してください。Run / Revise の mapping / branch / worktree の不整合は cleanliness とは別に調査します。
+保存するなら次節の方法を選び、保存結果を確認します。破棄するなら「changes を破棄する」を参照してください。branch / worktree registration / HEAD の不整合は cleanliness とは別に調査します。
 
-clean state と remote delivery の状況を確認した後、元の repository の clean な default branch checkout から明示的に再実行します。
+remote delivery の状況を確認した後、元の repository の clean な named branch checkout から明示的に再実行できます。その local HEAD が configured remote の同名 branch tip と一致する必要があります。default branch は必須ではありません。
 
 ```bash
 iro status
 iro run 123
 ```
 
-`123` は対象 Issue number です。これは session resume ではなく fresh Author の rerun です。整合した既存 owned worktree は再利用され、その branch が default branch の新しい HEAD に自動追従することはありません。active delivery PR がある場合は Run を繰り返さず、relation を確認して `iro revise <pr-number>` を使います。
+`123` は対象 Issue number です。後続 Run は新しい delivery ID / branch / workspace の fresh Author です。以前の dirty / failed workspace は再利用せず、その保存や Cleanup は新しい Run の precondition ではありません。既存 PR を更新したい場合は、対象を確認して `iro revise <pr-number>` を選びます。同じ Issue の複数 delivery は許容されます。
 
 ## 中断した managed Run 後に partial state が残った
 
-Ctrl-C や worker の中断後に、Human が branch、worktree、または mapping の一部だけを手動で削除すると、次の `iro run 123` は local managed state を `BROKEN` として拒否することがあります。次の4つは別々の resource です。
+Ctrl-C や worker の中断後には、次の resource が部分的に残る可能性があります。失敗診断の delivery ID / exact path / ref を確認します。
 
-- local branch `iro/issue-123`
+- local branch `iro/issue-123-D`
 - Git の worktree registration
-- canonical filesystem worktree path
-- iro の canonical ownership mapping
+- filesystem worktree path `.../issue-123-D`
+- local Author report / delivery outcome log
 
 まず、失敗診断に表示された path を使って個別に確認します。`iro status` は read-only ですが、`iro cleanup 123` は未保存変更も破棄する操作です。必要な保存を確認してから対象を選び、別の Issue まで処理する bulk `iro cleanup` を状態確認だけの目的で呼び出さないでください。
 
 ```bash
 iro status
-git branch --list 'iro/issue-123'
+git branch --list 'iro/issue-123' 'iro/issue-123-*'
 git worktree list --porcelain
 test -e /reported/issue-worktree-path && echo "worktree path exists"
-ls -l /reported/ownership-mapping-path
 ```
 
 worktree が残っている場合は変更を inspect し、必要な保存を確認してから対象 Issue を指定して `iro cleanup 123` を実行します。cleanup は dirty / untracked / ignored files と unpublished commits を保護せず、Git force removal / force branch deletion を試行します。
 
-一方、手動削除後の `BROKEN` partial state では、branch、Git worktree registration、filesystem path、ownership mapping の対応関係を Human が確認する必要があります。linked worktree の directory を `rm -rf` で削除しても、Git の worktree registration や iro の ownership mapping は削除されません。iro は ownership が不明な状態を推測して repair、adopt、prune しません。
+linked worktree directory の手動削除だけでは Git registration が残る場合があります。Status は branch-only / missing-path registration も表示し、Cleanup は発見済み exact target に best-effort removal を試行します。登録も ref も失った filesystem-only residue は自動発見を保証しないため、失敗診断の既知 path を Human が確認します。iro は未知の path を scan せず、自動 repair / adopt / prune を行いません。
 
-Human が保存範囲と所有関係を確認したうえで、local branch、canonical worktree path、Git worktree registration のすべてが無く、残っているのがその Issue の stale ownership mapping だけだと独立に確認できた場合に限り、診断に表示された mapping path を対象に手動削除できます。
-
-```bash
-rm -- /reported/ownership-mapping-path
-iro run 123
-```
-
-これは現在の managed Run / Revise に stale v1 mapping だけが残った場合の限定的な手順です。Status / Cleanup はその JSON を authority にせず、Cleanup 成功後も JSON は残ります。branch、worktree registration、path のいずれかが残っている、内容を保存していない、または ownership が不明な場合は mapping を削除せず、表示された4つの resource を確認してから Human が次の操作を判断します。
+v1 ownership JSON は Run / Review / Revise / Land / Status / Cleanup の authority ではありません。JSON の削除・migration によって precondition を解消する手順はありません。後続 Run は新しい delivery を作り、Revise は選択 PR の exact head ref に対応する現在の local state を検証します。Cleanup は runtime log や旧 JSON を削除しません。
 
 ## partial changes を保存したい
 
@@ -125,7 +117,9 @@ git -C /path/to/issue-worktree status --short --untracked-files=all
 
 Author failure と delivery failure を失敗出力・local log で区別します。delivery failure では commit / push が完了している場合もあるため、GitHub の PR 一覧と branch、local HEAD を Human が確認します。通信失敗だけを根拠に PR がないと判断しません。
 
-delivery PR がまだ存在しない場合、`iro revise <pr-number>` の対象はありません。partial changes を保存または破棄して Run の precondition を満たした後に、`iro run <issue-number>` を fresh rerun します。既存 remote branch との衝突や relation の不整合が残る場合は、その診断に従って Human が整理します。iro は自動 rollback しません。
+delivery PR がまだ存在しない場合、`iro revise <pr-number>` の対象はありません。Run の source checkout precondition を満たした後に、`iro run <issue-number>` で別 delivery を作れます。以前の local changes / commit / remote branch は独立したままです。結果不明の PR create を再試行したり、既存 PR を自動探索して採用したりしません。
+
+push が不明なら remote branch が更新済み、PR-create response が不明なら PR が作成済みの可能性があります。report comment の失敗だけなら confirmed PR delivery は成功です。診断と outcome log はこの区別を保持します。明示 Cleanup は local purge だけであり、不明な remote outcome を確定・修復する手段ではありません。
 
 ## destructive cleanup が一部失敗した
 
@@ -140,12 +134,12 @@ remaining / unknown registration や path は confirmed success ではありま�
 
 ## remote PR はあるが local state がない
 
-現在の `iro revise <pr-number>` は、次の relation を検証でき、canonical local mapping / branch / worktree がすべて欠落していれば、remote PR HEAD から materialize できます。
+現在の managed `iro revise <pr-number>` は、次の条件を満たせば exact remote PR HEAD `H1` から materialize できます。
 
-- open PR の head が configured repository の `iro/issue-N`
-- base が configured repository の default branch
-- GitHub native closing Issues が同 repository の exactly `{N}`
-- その Issue / canonical branch の active delivery PR が対象だけ
+- configured repository の readable open PR で、head repository が同じ repository
+- current raw body 内の local token が、同 repository の readable Issue ちょうど1件へ解決できる
+- remote の exact head ref tip が H1 と一致し、push destination と required context が検証可能
+- H1 に regular な `WORKFLOW.md` があり、固定 starting policy として読める
 
 initialized repository から実行します。
 
@@ -154,15 +148,15 @@ iro doctor
 iro revise 456
 ```
 
-`456` は PR number です。creator が Human でも relation を満たせば対象です。Revise は fresh Author を実行し、成功すると同じ branch に commit / push して PR を更新します。
+`456` は PR number です。creator が Human / unmanaged producer でも自身の条件だけで判断します。default base、canonical naming、native closing relation、active PR / shared-head の一意性は要求しません。`iro/*` head は exact ref の clean / H1 に一致する registered worktree があれば再利用し、なければ新規作成します。Human branch は fresh detached workspace で扱い、既存 Human checkout / local branch を採用しません。
 
-一部だけ欠けた partial state、dirty state、remote HEAD と異なる divergent state は自動修復しません。全欠落に見せるために mapping だけを削除せず、保存と所有関係を確認して診断を解消してください。
+selected iro worktree の dirty / divergent / conflicting state は自動修復しません。local commit は H1 の child として作り、push 直前に一度だけ target を再検証します。remote drift / deletion / closed / unreadable / destination change では local commit を保持して push しません。body / base の編集は実行中の binding を変えず、次の invocation の managed specification はその時の body から解決します。Cleanup の Issue number は physical branch / workspace namespace のままです。
 
 ## Land 後に default branch を同期する
 
 `iro land <pr-number>` が成功すると、次の `iro run` 前に local default branch を remote と同期するための informational hint が表示されます。Land は remote merge だけを行い、local checkout を変更しません。
 
-同期方法の例は次のとおりです。対象の local default branch checkout と実行 location は Human が選びます。
+同期方法の例は次のとおりです。対象の local checkout と実行 location は Human が選びます。この hint は Run の source branch を default branch に限定せず、実際に選ぶ named branch の local HEAD と remote の同名 tip を一致させます。
 
 ```text
 Sync your local default branch with the remote before the next iro run.

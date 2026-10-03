@@ -6,8 +6,9 @@
 
 本文中の `MUST`、`MUST NOT`、`SHOULD`、`SHOULD NOT`、`MAY` は規範的要件を示す。
 
-`BOOTSTRAP.md` は実装 scope と Definition of Done を定義するが、runtime behavior を上書きしない。
-`docs/architecture.md` と `docs/cookbook.md` は non-normative である。
+`docs/architecture.md`、`docs/cookbook.md`、[foundation acceptance の検証索引](foundation-acceptance.md) は non-normative である。
+
+現在の GitHub + Codex baseline は #83 の foundation（#88〜#94 の各 slice と #95 の統合 acceptance）である。historical #72〜#81 の replacement selector / backend expansion は、この文書の現行 behavior を出発点として別の変更で設計する。PR #82 はこの baseline に含まれない。
 
 ## 2. Global invariants
 
@@ -219,6 +220,35 @@ Closes #N
 ```
 
 unmanaged では最終行だけを `Refs #N` とする。native closing の有無はこの origin resolver の identity や優先順位に影響しない。
+
+## 2b. Foundation の operation 間契約
+
+以下は各 command の詳細契約を横断する authority の整理である。producer の作成者、成功 report、local log、以前の operation の mode は、後続 operation の権限・eligibility を付与しない。managed consumer は自身の configured repository、policy、選択 PR の条件を検証し、unmanaged local state / config / worker authority を adopt / reconcile してはならない。
+
+| Operation | Managed authority / target | Unmanaged authority / target |
+|---|---|---|
+| Run | configured remote、clean named source B / exact remote tip H、fresh delivery D、workspace の WORKFLOW | origin、同じ source 条件、fresh detached delivery D、built-in policy |
+| Review | configured repository、開始時 raw body の singleton Issue N、verified PR H1、invocation WORKFLOW。fork head を許可 | origin、明示 `--issue N`、same-repository PR H1、built-in policy |
+| Revise | configured repository、開始時 raw body の singleton N、same-repository exact head ref F / H1、H1 の固定 WORKFLOW | origin、明示 `--issue N`、same-repository F / H1、built-in policy |
+| Land | configured repository の選択 OPEN non-Draft PR / exact HEAD / merge policy。fork head を許可 | origin の選択 PR / exact HEAD / merge policy。same-repository head を要求 |
+| Status / Cleanup | current local Git common directory の iro refs / registered runtime workspace。mode に依存しない | 左と同じ。remote / project / worker authority を参照しない |
+
+同一 Issue の複数 Run は別々の D / ref / delivery であり、Review / Revise / Land は Human が指定した PR を自身の条件だけで判断する。PR の body が後で N から K へ編集された場合、次の managed Review / Revise は K を解決する。実行中の N / H1 binding は変えない。branch / workspace 名の Issue number は physical Cleanup selector であり、その編集によって変更・移転しない。
+
+native closing relation による origin identity、default-base requirement、固定 `iro/issue-N` head、one-active-delivery gate、v1 ownership JSON authority / migration、global shared-head rejection を再導入してはならない。Cleanup に clean-only / ancestry-preservation gate を適用せず、managed Land に same-repository-head restriction を適用しない。
+
+### Foundation の結果不明と責務境界
+
+| Outcome | Observable result / retained state | 自動処理の境界 |
+|---|---|---|
+| Run push unknown | non-zero、local commit / workspace / report を保持。remote 更新の可能性を明示 | PR create は未試行。push retry / rollback / repair をしない |
+| Run PR-create / response unknown | non-zero、push confirmed と PR unknown を区別。PR が存在する可能性を明示 | PR 探索による adoption / replacement / retry をしない |
+| Run PR-report unknown | confirmed PR delivery の success を維持し warning / outcome log | report や worker / delivery を再試行しない。unmanaged の success teardown は通常どおり試行 |
+| Revise push unknown | non-zero、local C1 / workspace / report を保持。remote 更新の可能性を明示 | 一度の通常 push で停止。再試行 / reset / lease / lock / repair をしない |
+| Land merge response unknown | non-zero、merge を確認できないことと remote 確認の案内 | 一度の exact HEAD-bound merge で停止。再試行 / fallback / local cleanup をしない |
+| Cleanup partial failure / remaining / unknown | non-zero、独立 action / target は継続し、成功済み deletion は残る | retry / unlock / prune / repair / rollback をしない |
+
+Revise の final read と通常 push の間の race は REVISE-007 / UNMANAGED-REVISE-004 の制約として受け入れる。Land の merge API における atomic `sha` guard を Revise の push contract に流用せず、CAS / lease / lock を追加しない。remote completion と physical local purge は別の明示 operation であり、Cleanup は unknown remote outcome を確定・修復しない。
 
 ## 3. Output contract
 
@@ -539,7 +569,7 @@ no-sandbox-option       := "--no-sandbox"
 
 worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。省略した model / reasoning effort は Codex configuration / default selection に委譲する。model と reasoning effort は synthetic model name に結合せず、reasoning effort は modelごとの catalog なしに指定値を requested configuration としてそのまま Codex に渡す。空値、重複指定、unsupported extra arguments は usage error とし、main side effect 前に reject する。unsupported model / effort の fallback は行わず、Codex 側の reject は通常の worker failure とする。MVP では Issue URL、owner/repo#number、複数 Issue を受け付けない。
 
-`--unmanaged` は値を取らず、Issue operand の後に一度だけ指定できる。他の worker option との順序は意味を持たない。`--issue`、operand より前の option、`--unmanaged=true`、重複、余分な引数は Git / worker / remote side effect より前に usage error（exit status 2）とする。`review` / `revise` の unmanaged form はそれぞれの節に従う。`land` では `--unmanaged` を受け付けない。
+`--unmanaged` は値を取らず、Issue operand の後に一度だけ指定できる。他の worker option との順序は意味を持たない。`--issue`、operand より前の option、`--unmanaged=true`、重複、余分な引数は Git / worker / remote side effect より前に usage error（exit status 2）とする。`review` / `revise` / `land` の unmanaged form はそれぞれの節に従う。
 
 ### RUN-002: source repository
 
@@ -641,9 +671,9 @@ reset / clean / stash / delete / move / branch recreation による自動解消�
 
 後続の `iro run N` は常に別 ID の新しい delivery である。以前の dirty / failed workspace を再利用せず、clean にしてからの reuse も行わない。今回の source checkout 自身の clean / exact-equal precondition は毎回要求する。
 
-失敗時は invocation が把握する concrete workspace path / branch ref を報告して保持する。F3 local inventory により発見可能な resource は、その Cleanup contract による best-effort purge の候補となる。登録も ref もない filesystem-only residue は local inventory で必ず発見できるとは限らず、Human の確認を要する。
+失敗時は invocation が把握する concrete workspace path / branch ref を報告して保持する。local inventory により発見可能な resource は、その Cleanup contract による best-effort purge の候補となる。登録も ref もない filesystem-only residue は local inventory で必ず発見できるとは限らず、Human の確認を要する。
 
-F3 Status / Cleanup（Issue #90）は current baseline で提供済みであり、新しい Run behavior の public foundation release gate を満たす。Review / Revise の consumer contract は REVIEW-003 / REVISE-002 以降に定義し、Run producer の provenance に依存させない。
+Status / Cleanup は STATUS-001 / CLEANUP-001 以降に定義する。Review / Revise の consumer contract は REVIEW-003 / REVISE-002 以降に定義し、Run producer の provenance に依存させない。
 
 ### RUN-010: precondition order
 
@@ -1343,7 +1373,7 @@ Sync your local default branch with the remote before the next iro run.
 For example: git pull
 ```
 
-これは informational hint であり、iro は同期 command を実行せず、local checkout や branch の状態も変更・検証しない。同期対象の local default branch checkout と実行 location は Human が選択する。
+これは informational hint であり、iro は同期 command を実行せず、local checkout や branch の状態も変更・検証しない。同期対象の local checkout と実行 location は Human が選択する。次の Run が要求するのは RUN-002 の選択 named source branch と同名 remote tip の一致であり、default branch を source / base にする requirement ではない。
 
 Issue closure は存在する native relation 等に従う GitHub 自身の behavior に委ねる。iro は Issue close / reopen API を呼ばず、closure の有無や確認を Land の成功・失敗条件にしない。
 
@@ -1484,19 +1514,19 @@ managed delivery workspace の leaf は LOCAL-001 の命名、unmanaged Run の 
 | GitHub auth missing | allowed | report | allowed; no authentication check | error | error | allowed; no authentication check |
 | Codex missing | allowed | report | allowed; no Codex access | error | error | allowed; no Codex access |
 | Codex auth missing | allowed | report | allowed; no authentication check | error | error | allowed; no authentication check |
-| source checkout dirty, detached, or not equal to remote tip | N/A | report if inspected | local inventory; no cleanliness inspection | error; no changes | allowed; not inspected | allowed; selected invoking worktree also attempted |
+| source checkout dirty, detached, or not equal to remote tip | N/A | not inspected | local inventory; no cleanliness inspection | error; no changes | allowed; not inspected | allowed; selected invoking worktree also attempted |
 | Issue or comments not found/unreadable | N/A | N/A | not applicable; no Issue lookup; read-only | error before workspace creation | origin Issue error before Reviewer | not applicable; no Issue lookup |
 | PR absent, closed, or merged | N/A | N/A | not applicable | not applicable | error before Reviewer | not applicable |
 | Open Draft PR | N/A | N/A | not applicable | not applicable | allowed | not applicable |
 | PR raw-body origin is unresolved / ambiguous / validation failure | N/A | N/A | not applicable | not applicable | error before workspace / Reviewer | not applicable |
 | PR non-default base / fork head / arbitrary head name / absent or multiple native closing relations / other active PRs | N/A | N/A | not applicable | not applicable | allowed; current raw-body origin binding only | not applicable |
 | target PR branch/worktree/ownership absent or unrelated | N/A | N/A | local refs / registered runtime worktrees only | not applicable | allowed; disposable workspace only | not applicable; no PR lookup |
-| Issue branch/worktree both absent | N/A | optional report | no row; v1 mapping ignored | create fresh delivery from verified source H | not inspected | success with no selected targets and no observation failure |
-| matching iro-owned Issue worktree clean | N/A | optional report | branch / registered path / HEAD; read-only | independent new delivery; no reuse | not inspected | force-remove worktree / branch; verify post-state |
-| matching iro-owned Issue worktree dirty | N/A | report if discoverable | same inventory; no dirty classification | independent new delivery; keep earlier workspace | not inspected | force removal attempted; no dirty gate |
-| expected branch/path exists without valid ownership mapping | N/A | report if discoverable | inventory by local ref / registration; mapping ignored | independent new delivery; no adoption | not inspected | local namespace selection; mapping ignored |
-| branch/worktree collision | N/A | report if discoverable | show all registered paths | new ID before creation, or stop; no repair | not inspected | attempt every selected worktree; mechanism failure reported |
-| invalid or mismatched ownership mapping | N/A | report if discoverable | ignored; no v1 authority | independent new delivery; do not read mapping | not inspected | ignored; no v1 authority |
+| Issue branch/worktree both absent | N/A | not inspected | no row; v1 mapping ignored | create fresh delivery from verified source H | not inspected | success with no selected targets and no observation failure |
+| registered iro Issue worktree clean | N/A | not inspected | branch / registered path / HEAD; read-only | independent new delivery; no reuse | not inspected | force-remove worktree / branch; verify post-state |
+| registered iro Issue worktree dirty | N/A | not inspected | same inventory; no dirty classification | independent new delivery; keep earlier workspace | not inspected | force removal attempted; no dirty gate |
+| branch/path exists without ownership mapping | N/A | not inspected | inventory by local ref / registration; mapping ignored | independent new delivery; no adoption | not inspected | local namespace selection; mapping ignored |
+| branch/worktree collision | N/A | not inspected | show all registered paths | new ID before creation, or stop; no repair | not inspected | attempt every selected worktree; mechanism failure reported |
+| invalid or mismatched ownership mapping | N/A | not inspected | ignored; no v1 authority | independent new delivery; do not read mapping | not inspected | ignored; no v1 authority |
 | Issue branch tip not in invoking `HEAD` history | N/A | N/A | inventory; ancestry not inspected | not applicable | not inspected | allowed; force branch deletion |
 | worktree removal or force branch deletion failure | N/A | N/A | not applicable | not applicable | not applicable | non-zero; independent actions continue; no rollback |
 | successful full cleanup | N/A | N/A | selected resources no longer inventoried | not applicable | not applicable | selected refs / registrations / known paths confirmed absent; mappings untouched |
@@ -1515,7 +1545,7 @@ dirty worktree の remediation は destructive command を自動実行せず、�
 例:
 
 ```text
-error: issue worktree is dirty
+error: source checkout is dirty
 
 No files were changed by iro.
 Review the worktree and either preserve or discard the changes, then retry:
@@ -1532,7 +1562,7 @@ Review the worktree and either preserve or discard the changes, then retry:
 - partial init repair
 - `iro resume`
 - automatic retry scheduler / retry queue
-- automatic cleanup
+- command ごとに定義した disposable workspace teardown 以外の automatic cleanup
 - stale worktree repair
 - automatic or unrequested branch deletion
 - Human の explicit run / revise dispatch に基づかない automatic commit / push / PR、および automatic merge
