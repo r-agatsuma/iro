@@ -244,7 +244,7 @@ func TestDetachedWorkspaceProducerAndCleanupWithSymlinkAncestor(t *testing.T) {
 				if err != nil || path != workspace || workspace == registeredPath {
 					t.Fatalf("symlink producer paths = %q, %q, %q; err=%v", path, workspace, registeredPath, err)
 				}
-				if kind, ok := recognizeRuntimeWorkspace(service.Dirs, workspace); !ok || kind != unmanagedWorkspace {
+				if kind, ok, err := service.recognizeRuntimeWorkspace(workspace); err != nil || !ok || kind != unmanagedWorkspace {
 					t.Fatal("producer path was not recognized")
 				}
 				inventory, err := service.localInventory(root)
@@ -254,6 +254,11 @@ func TestDetachedWorkspaceProducerAndCleanupWithSymlinkAncestor(t *testing.T) {
 				found := false
 				for _, entry := range inventory.Worktrees {
 					found = found || entry.Path == registeredPath
+					if entry.Path == registeredPath {
+						if kind, ok, err := service.recognizeRuntimeWorkspace(entry.Path); err != nil || !ok || kind != unmanagedWorkspace {
+							t.Fatal("exact registered path was not recognized")
+						}
+					}
 				}
 				if !found {
 					t.Fatal("inventory did not preserve Git's exact registered path")

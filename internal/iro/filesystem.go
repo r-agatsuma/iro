@@ -3,6 +3,7 @@ package iro
 import (
 	"io"
 	"os"
+	"path/filepath"
 )
 
 // FileSystem is the testable boundary for filesystem operations used by iro.
@@ -16,6 +17,7 @@ type FileSystem interface {
 	RemoveAll(path string) error
 	Stat(name string) (os.FileInfo, error)
 	Lstat(name string) (os.FileInfo, error)
+	EvalSymlinks(path string) (string, error)
 	Mkdir(name string, perm os.FileMode) error
 	MkdirAll(path string, perm os.FileMode) error
 	MkdirTemp(dir, pattern string) (string, error)
@@ -62,6 +64,10 @@ func (OSFileSystem) Stat(name string) (os.FileInfo, error) {
 
 func (OSFileSystem) Lstat(name string) (os.FileInfo, error) {
 	return os.Lstat(name)
+}
+
+func (OSFileSystem) EvalSymlinks(path string) (string, error) {
+	return filepath.EvalSymlinks(path)
 }
 
 func (OSFileSystem) Mkdir(name string, perm os.FileMode) error {

@@ -58,6 +58,13 @@ func (fs *foundationFS) Lstat(path string) (os.FileInfo, error) {
 	return fs.FileSystem.Lstat(path)
 }
 
+func (fs *foundationFS) EvalSymlinks(path string) (string, error) {
+	if fs.failure == "resolution" {
+		return "", os.ErrPermission
+	}
+	return fs.FileSystem.EvalSymlinks(path)
+}
+
 func (fs *foundationFS) MkdirAll(path string, perm os.FileMode) error {
 	fs.mutations++
 	if fs.failure == "parent" {
@@ -275,6 +282,88 @@ func TestFixedDeliveryRechecksWithoutChangingIdentity(t *testing.T) {
 		err = service.createDeliveryWorktree(root, allocation, foundationHEAD)
 		if (err != nil) != collision || allocation.id != foundationID || !allocation.fixed || collision && fs.mutations != 0 {
 			t.Fatalf("fixed creation = %+v, %v; mutations=%d", allocation, err, fs.mutations)
+		}
+	}
+}
+
+func TestDeliveryCollisionWithMissingSymlinkedRegistration(t *testing.T) {
+	for _, stage := range []string{"allocation", "boundary", "fixed"} {
+		for _, missing := range []string{"leaf", "parent", "namespace"} {
+			t.Run(stage+"/"+missing, func(t *testing.T) {
+				service, runner, fs, root, _, worktrees := foundationService(t)
+				useSymlinkDataRoot(t, service)
+				identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
+				var allocation *deliveryAllocation
+				var err error
+				if stage != "allocation" {
+					allocation, err = service.allocateDeliveryWithGenerator(root, identity, 89, func() (deliveryID, error) { return foundationID, nil })
+					if err != nil {
+						t.Fatal(err)
+					}
+					if stage == "fixed" {
+						if err := service.beginDeliveryCreation(root, allocation); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				workspace := deliveryWorktreePath(service.Dirs, identity, 89, foundationID)
+				if err := os.MkdirAll(workspace, 0700); err != nil {
+					t.Fatal(err)
+				}
+				registered, err := filepath.EvalSymlinks(workspace)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Keep only Git's detached registration, with no branch or directory.
+				*worktrees += worktreeRecord(registered, "detached\x00prunable missing directory")
+				removed := workspace
+				if missing == "parent" || missing == "namespace" {
+					removed = filepath.Dir(removed)
+				}
+				if missing == "namespace" {
+					removed = filepath.Dir(removed)
+				}
+				if err := os.RemoveAll(removed); err != nil {
+					t.Fatal(err)
+				}
+				if stage == "allocation" {
+					calls := 0
+					allocation, err = service.allocateDeliveryWithGenerator(root, identity, 89, func() (deliveryID, error) {
+						calls++
+						if calls == 1 {
+							return foundationID, nil
+						}
+						return foundationOtherID, nil
+					})
+					if err != nil || calls != 2 || allocation.id != foundationOtherID || allocation.fixed {
+						t.Fatalf("pre-side-effect collision retry = %+v, %v; calls=%d", allocation, err, calls)
+					}
+				} else {
+					err = service.createDeliveryWorktree(root, allocation, foundationHEAD)
+					if err == nil || allocation.id != foundationID || allocation.fixed != (stage == "fixed") {
+						t.Fatalf("late collision changed identity/boundary: %+v, %v", allocation, err)
+					}
+				}
+				if fs.mutations != 0 {
+					t.Fatalf("collision inspection mutated filesystem: %d", fs.mutations)
+				}
+				for _, call := range runner.calls {
+					if containsArgs(call.Args, "worktree", "add") {
+						t.Fatal("collision caused Git resource creation")
+					}
+				}
+				inventory, err := service.localInventory(root)
+				if err != nil || len(inventory.Worktrees) != 2 {
+					t.Fatalf("registration changed: %+v, %v", inventory, err)
+				}
+				found := false
+				for _, entry := range inventory.Worktrees {
+					found = found || entry.Path == registered
+				}
+				if !found {
+					t.Fatal("inventory lost exact registered path")
+				}
+			})
 		}
 	}
 }

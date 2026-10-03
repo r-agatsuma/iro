@@ -73,7 +73,7 @@ func TestLocalInventoryFixtures(t *testing.T) {
 				if entry.Path == detached && (!entry.Detached || entry.Branch != "" || entry.HEAD != foundationHEAD) {
 					t.Fatalf("detached path/HEAD lost: %+v", entry)
 				}
-				if _, runtime := recognizeRuntimeWorkspace(service.Dirs, entry.Path); runtime {
+				if _, runtime, err := service.recognizeRuntimeWorkspace(entry.Path); err != nil || runtime {
 					t.Fatalf("Human worktree classified as runtime: %+v", entry)
 				}
 			}

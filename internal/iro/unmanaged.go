@@ -252,7 +252,11 @@ func (s *Service) verifyDetachedHead(workspace, expected string) error {
 }
 
 func (s *Service) removeUnmanagedWorktree(root, workspace string) error {
-	if kind, ok := recognizeRuntimeWorkspace(s.Dirs, workspace); !ok || kind != unmanagedWorkspace {
+	kind, ok, err := s.recognizeRuntimeWorkspace(workspace)
+	if err != nil {
+		return err
+	}
+	if !ok || kind != unmanagedWorkspace {
 		return fmt.Errorf("path is not an iro unmanaged runtime workspace: %s", workspace)
 	}
 	// Callers supply only the fresh workspace created by this invocation after

@@ -114,11 +114,6 @@ func (s *Service) inspectDeliveryCollision(root string, allocation *deliveryAllo
 	if err != nil || present {
 		return present, err
 	}
-	for _, worktree := range inventory.Worktrees {
-		if filepath.Clean(worktree.Path) == allocation.worktree || worktree.Branch == ref {
-			return true, nil
-		}
-	}
 	// Lstat includes dangling symlinks: a path is occupied even if its target is absent.
 	_, err = s.FileSystem.Lstat(allocation.worktree)
 	if err == nil {
@@ -126,6 +121,22 @@ func (s *Service) inspectDeliveryCollision(root string, allocation *deliveryAllo
 	}
 	if !os.IsNotExist(err) {
 		return false, fmt.Errorf("inspect delivery worktree path %s: %w", allocation.worktree, err)
+	}
+	location, err := s.resolveLocalPath(allocation.worktree)
+	if err != nil {
+		return false, err
+	}
+	for _, worktree := range inventory.Worktrees {
+		if filepath.Clean(worktree.Path) == allocation.worktree || worktree.Branch == ref {
+			return true, nil
+		}
+		registeredLocation, err := s.resolveLocalPath(worktree.Path)
+		if err != nil {
+			return false, err
+		}
+		if registeredLocation == location {
+			return true, nil
+		}
 	}
 	return false, nil
 }

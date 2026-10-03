@@ -1467,6 +1467,8 @@ Issue number は Human-readable hint と physical cleanup selector であり、P
 
 allocation / collision inspection は local side effect を起こしてはならない。この段階では既存 ref、registered worktree path、filesystem path（dangling symlink を含む）との衝突時に新しい ID を生成してよい。`refs/heads/iro` および生成予定 ref の子 ref による namespace collision も拒否する。連続 16 回の衝突は error とする。不正な ID、entropy failure、inventory / filesystem observation failure は衝突として retry せず error とする。
 
+registered path との照合は LOCAL-003 と共通の path 解決処理を使い、祖先 symlink 経由でも同じ場所を衝突として扱う。対象 directory やその親が消失した detached 登録も検査対象とし、directory が存在しないことを理由に登録を無視してはならない。
+
 producer は directory 作成や fetch を含む最初の local side effect の直前に creation boundary を通過し、以後 invocation の ID を変更してはならない。boundary の再検査で collision が見つかった場合は resource を作成しない。boundary 通過後の作成失敗でも ID と partial state を保持し、自動 retry / rollback / adoption を行わない。基盤の managed worktree producer は path を排他的に reserve してから `git worktree add -b` を行い、既存 path や mutable ref を再利用・上書きしてはならない。この基盤は v1 `issue-N.json` を読み書きせず、migration / adoption authority として使わない。
 
 ### LOCAL-002: current-local-repository inventory
@@ -1481,6 +1483,8 @@ inventory は invoking local Git repository の absolute common directory に bi
 ### LOCAL-003: runtime workspace namespace recognition
 
 managed delivery workspace の leaf は LOCAL-001 の命名、unmanaged detached workspace の leaf は既存 producer の `run-issue-N-<random-suffix>` / `review-pr-M-<random-suffix>` / `revise-pr-M-<random-suffix>` とする。DataRoot から `<workspace-kind>/<repository-key>/<leaf>` という深さの path だけを認識し、producer と unmanaged removal consumer は共通の命名・認識 helper を使う。
+
+認識時は DataRoot と入力 path の存在する祖先まで symlink を解決し、不在の末尾成分を結合して比較する。これにより、producer の path と Git inventory の実体側 registered path のどちらも、対象 directory やその親が消失した場合を含めて認識できる。解決した path は比較用に限定し、inventory の exact registered path を書き換えてはならない。権限不足、symlink loop、dangling ancestor symlink 等の解決失敗は、未認識や衝突なしとして扱わず error とする。
 
 この predicate は naming evidence であり、削除 authorization ではない。consumer は current local repository の登録と具体的な操作契約を確認しなければならない。unmanaged removal consumer は各 command の cleanup boundary に達した今回作成の workspace だけを対象とし、削除前に LOCAL-002 inventory で対象登録が一意な detached / non-bare / unlocked / non-prunable であることを検証する。inventory の exact registered path は保持したまま、producer が返した path と同じ directory を指すことを filesystem identity で照合する。DataRoot 等の祖先 symlink は許容するが、同じ directory に複数の登録が一致する場合は削除しない。削除後は producer の path に加え、照合した exact registered path の登録も消えていることを確認する。対象 path は symlink ではない既存 directory で、invoking repository と common directory を共有し、現在の detached HEAD が inventory の HEAD と一致し、clean でなければならない。観測失敗や不一致時は削除せず保持する。通常の Human worktree は detached という理由だけで runtime workspace に分類してはならない。legacy managed `issue-N` path や v1 ownership JSON をこの新基盤で認識・adopt しない。既存 managed / unmanaged の保持・削除責務はそれぞれの command 契約に従う。
 
