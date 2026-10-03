@@ -330,7 +330,7 @@ func (s *Service) deliverUnmanaged(root, workspace string, identity RepositoryId
 	if !commandSucceeded(result) {
 		return fmt.Errorf("push failed or is uncertain; local commit %s retained; remote branch may have been updated", commit)
 	}
-	payload, _ := json.Marshal(map[string]any{"title": fmt.Sprintf("Implement issue #%d", number), "body": fmt.Sprintf("Issue #%d の実装です。\n\nRefs #%d\n", number, number), "head": branch, "base": base, "draft": false})
+	payload, _ := json.Marshal(map[string]any{"title": fmt.Sprintf("Implement issue #%d", number), "body": githubRunBody(number, true), "head": branch, "base": base, "draft": false})
 	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"api", "repos/" + identity.String() + "/pulls", "--hostname", identity.Host(), "--method", "POST", "--input", "-"}, Dir: root, Stdin: payload})
 	var pr struct{ Number int }
 	if !commandSucceeded(result) || json.Unmarshal([]byte(result.Stdout), &pr) != nil || pr.Number <= 0 {
