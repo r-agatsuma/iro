@@ -102,7 +102,7 @@ WORKFLOW.md
 
 既存ファイルは上書きしない。
 
-managed `iro run` を使う場合、この2ファイルを確認・編集したうえでリポジトリの通常の手順で履歴へ記録し、ローカルの既定ブランチを clean な状態にする必要がある。
+managed `iro run` を使う場合、この2ファイルを確認・編集したうえでリポジトリの通常の手順で履歴へ記録し、利用する named source branch を clean にして、local HEAD を configured remote の同名 branch tip と一致させる。source は既定ブランチでなくてもよい。
 
 既定ブランチへ直接 commit / push できるリポジトリであれば、例えば次のように行う。
 
@@ -178,7 +178,7 @@ iro land 456
 
 ### 8. 次の作業に備えてローカルを同期する
 
-`iro land` はローカルの既定ブランチを更新しない。次の managed `iro run` の前に、利用する既定ブランチ checkout を remote と同期する。
+`iro land` はローカルの checkout を更新しない。次の managed `iro run` の前に、利用する named source branch checkout を configured remote の同名 branch と同期する。既定ブランチを使う場合も同じ条件である。
 
 例えば:
 
@@ -302,15 +302,15 @@ managed Run は概ね次を要求する。
 - valid な `iro.toml` と `WORKFLOW.md`
 - configured GitHub repository と認証
 - clean な invoking checkout
-- invoking checkout が configured repository の既定ブランチであること
+- invoking checkout が named branch `B` で、local HEAD が configured remote の実際の `B` tip と一致すること
 - 対象 Issue が readable であること
-- canonical delivery relation と競合する既存状態がないこと
+- 今回の delivery ref / workspace が local / remote で衝突しないこと
 
-iro は検証済みの既定ブランチ HEAD から Issue 用 branch / worktree を準備し、fresh な Codex Author を起動する。成功後、変更を commit / push し、`iro/issue-N` を head とする通常の open PR を作成する。
+iro は検証済みの source HEAD から fresh な delivery branch / worktree を作成し、workspace の `WORKFLOW.md` に従う Codex Author を起動する。成功後、変更を commit / push し、`iro/issue-N-D` を head、source branch `B` を base とする通常の open PR を作成する。`D` は invocation ごとの新しい delivery ID であり、同じ Issue の後続 Run も別 delivery になる。以前の branch / workspace / PR を再利用しない。
 
-PR body には GitHub native closing relation を構成する。merge 時の Issue closure は GitHub の動作に委ね、managed Land の eligibility には使わない。
+PR body は固定の `Closes #N` を含み、Author report は別の PR comment に残す。managed Review / Revise は現在の raw body 内の local Issue token を typed validation して specification Issue を解決する。native closing metadata や branch の Issue number はその authority にしない。merge 時の Issue closure は GitHub の動作に委ね、Land の成功条件に使わない。
 
-iro は開始前にローカル既定ブランチを自動 fetch / pull しない。利用者が同期する。
+source branch は既定ブランチでなくてもよい。iro は開始前に自動 fetch / pull / push で source checkout を同期しない。利用者が同期する。
 
 worker failure や delivery failure では、Human の変更を自動 reset / clean / stash / rebase して修復しない。診断と retained state を確認してから次の操作を選択する。
 
@@ -328,17 +328,19 @@ iro review 456
 
 open PR を fresh な Reviewer ワーカーで独立評価し、Reviewer の final response 全体を PR comment として投稿する advisory operation である。source branch や implementation を変更しない。
 
-managed Review は `iro run` が作成した PR に限定しない。次の relation を満たせば、Human が作成した PR や fork head の PR も対象になり得る。
+managed Review は `iro run` が作成した PR に限定しない。Human が作成した PR や fork head の PR も、次の条件を満たせば対象になり得る。
 
 - PR が open である
-- base が configured repository の既定ブランチである
-- 同じ repository の origin Issue への GitHub native closing relation が exactly 1 件である
+- 開始時の current raw body が、同じ repository の readable Issue ちょうど1件へ解決できる
+- PR の base / HEAD OID と必要な context が検証でき、workspace の HEAD が開始時の PR HEAD と一致する
 
 Draft PR も Review の対象にできる。
 
-target の local branch、Issue worktree、ownership mapping、PR creator identity は eligibility に要求しない。
+target の local branch、Issue worktree、ownership mapping、PR creator identity、default base、native closing relation、他の active delivery の一意性は eligibility に要求しない。worker policy は invocation 側の `WORKFLOW.md` を使う。
 
 Reviewer は開始時に検証した PR snapshot を disposable workspace で評価する。review comment は Human-facing text として扱い、iro は `PASS` / `FINDING` を runtime control signal として parse しない。`FINDING` が含まれていても command 自体は成功し得る。
+
+後から PR body を編集すると、次の managed Review / Revise は新しい specification Issue を解決する。実行中の Issue / HEAD binding は変更しない。
 
 ### `iro revise`
 
@@ -354,15 +356,17 @@ iro revise 456
 
 既存 PR の feedback を fresh な Author ワーカーへ渡し、同じ PR を更新するときに使う。
 
-managed Revise は canonical delivery relation を要求する。概ね、configured repository の既定ブランチを base、`iro/issue-N` を head とし、native closing Issue relation が exactly `{N}` で、active delivery PR が一意である必要がある。
+managed Revise は configured repository の open PR を選び、current raw body から specification Issue を解決する。head repository は同じ repository、remote head ref の tip は開始時の PR HEAD `H1` と一致する必要がある。default base、canonical head name、native closing relation、他の active PR / shared head の一意性を要求しない。fork の Revise は対象外である。
 
-PR creator identity や iro-created marker は要求しない。Human が canonical relation を満たす PR を作成した場合も対象になり得る。
+PR creator identity や iro-created marker は要求しない。Human-created / unmanaged-produced PR も自身の operation 条件だけで判断し、以前の producer の local state や policy を採用しない。
 
 Author は origin Issue と PR metadata / diff / comments / reviews / checks を読み、成功すると新しい commit を同じ branch へ通常 push して同じ PR を更新する。replacement PR は作らない。
 
+`iro/*` head は exact ref の clean / H1 と一致する registered worktree を再利用でき、なければ H1 から新規 materialize する。Human branch は毎回 fresh detached workspace で扱い、Human checkout / local branch を変更しない。v1 ownership JSON は参照・作成・移行しない。
+
 managed Revise の worker policy は、検証済み starting PR HEAD に含まれる `WORKFLOW.md` をその invocation の固定 policy として使う。invoking checkout の `WORKFLOW.md` は Revise の worker policy ではない。
 
-concurrent HEAD drift や relation mismatch を検出した場合、自動 rebase / reset / repair / retry は行わず停止する。
+H1 を sole parent とする local commit の検証後、push 直前に一度だけ OPEN / same head repository・ref / remote tip / push destination を再検証する。drift、削除、closed、読取不能、destination change は commit を保持して push せず停止する。body-only / base-only の変更は実行中の rebind / abort 条件にしない。final read と通常 push の間の race は残り、force / lease / lock / 自動 repair / retry は行わない。
 
 ### `iro land`
 
@@ -398,7 +402,7 @@ validation で得た exact PR HEAD を merge request に bind し、HEAD drift �
 
 ### Local sync
 
-`iro land` 成功後、次の managed `iro run` を行う前に、利用する local default branch を remote と同期する。
+`iro land` 成功後、次の managed `iro run` の source branch は clean かつ local HEAD が remote の同名 branch tip と一致する必要がある。成功出力の default branch 同期 hint は典型例であり、Run の source / PR base を既定ブランチに限定しない。
 
 ```bash
 git pull
@@ -638,9 +642,9 @@ iro land <pr-number> --unmanaged
 
 unmanaged operation は `iro.toml` を読まず、`WORKFLOW.md` を iro policy として読まない。repository identity は Git remote `origin` から解決し、worker operation は built-in の保守的な policy を使う。
 
-managed ownership mapping / canonical worktree を要求・採用せず、unmanaged operation 自身も durable な adoption / ownership state を作らない。
+managed branch / worktree を要求・採用せず、unmanaged operation 自身も durable な adoption / ownership state を作らない。Run の body は `Refs #N` とし、後続 managed consumer は自身の current relation / policy / integrity を独立に検証する。
 
-主な用途は、iro project file を導入していない既存リポジトリや、managed mode の canonical delivery relation に合わせたくない Human-managed PR へ、一回の operation 単位で iro を適用することである。
+主な用途は、iro project file を導入していない既存リポジトリや、Human が specification Issue を明示したい PR へ、一回の operation 単位で iro を適用することである。
 
 unmanaged は unsafe / force mode ではない。force push、automatic reset / clean / stash / rebase / repair、automatic retry、repository policy bypass を許可しない。
 
