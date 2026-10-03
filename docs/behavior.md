@@ -8,7 +8,7 @@
 
 `docs/architecture.md`、`docs/cookbook.md`、[foundation acceptance の検証索引](foundation-acceptance.md) は non-normative である。
 
-現在の GitHub + Codex baseline は #83 の foundation（#88〜#94 の各 slice と #95 の統合 acceptance）であり、#105 の selector dispatch はその behavior を維持する。backend support の拡張は別の変更で扱う。PR #82 はこの baseline に含まれない。
+現在の GitHub + Codex baseline は #83 の foundation（#88〜#94 の各 slice と #95 の統合 acceptance）であり、#105 の selector dispatch はその behavior を維持する。Copilot の experimental managed Run slice は RUN-COPILOT-001〜005 に定義する。PR #82 はこの baseline に含まれない。
 
 ## 2. Global invariants
 
@@ -21,7 +21,7 @@ Git は implementation artifact とその履歴の durable record とする。
 source code、configuration、documentation、repository に属するその他の成果物、および commit history は Git に残す。
 
 iro の runtime / orchestration state を durable state の代わりとして repository へ commit してはならない。
-Codex session/thread は durable state に含めてはならない。
+Codex session/thread および Copilot session/history/checkpoint は durable state や Git lifecycle authority に含めてはならない。
 
 ### INV-002: preconditions first
 
@@ -80,17 +80,17 @@ unmanaged `iro land` は origin-derived repository の選択 PR metadata / merge
 
 `iro` は Issue create、close、reopen、label、assignee、milestone、Project state を API で自動変更してはならない。PR 作成時点では Issue を close しない。`land` に伴う Issue closure は GitHub native behavior に委ね、closure の有無を Land の成功・失敗条件にしない。
 
-Codex は `gh` を実行してはならず、GitHub Issue を直接 fetch / create / modify / close / comment してはならない。
+Codex および experimental Copilot Run Author は `gh` を実行してはならず、GitHub Issue を直接 fetch / create / modify / close / comment してはならない。
 
 `iro` が `gh` を使うときは、INV-010 に従って選択した identity を明示しなければならない。`gh` の current-repository 推測に依存してはならない。
 
 ### INV-005: Git authority
 
 Git branch/worktree の準備は `iro` が行う。
-Codex は working tree file を編集してよいが、Git metadata、index、refs/history、remote state を変更してはならない。
+Codex および experimental Copilot Run Author は working tree file を編集してよいが、Git metadata、index、refs/history、remote state を変更してはならない。
 Git command は read-only inspection に限る。
 
-Codex は少なくとも次を行ってはならない。
+Codex および experimental Copilot Run Author は少なくとも次を行ってはならない。
 
 ```text
 git add
@@ -297,9 +297,11 @@ MVP では次のみを support する。
 version = 1
 tracker.type = github
 tracker.remote = non-empty Git remote name
-agent.type = codex
+agent.type = codex | copilot (experimental managed GitHub Run / Author only)
 workspace.strategy = git-worktree
 ```
+
+`iro init` は引き続き `agent.type = "codex"` を生成する。Copilot を既定にしてはならない。
 
 unsupported value を silently fallback してはならない。
 
@@ -336,9 +338,9 @@ Codex に `WORKFLOW.md` を読ませる責任は `iro` の Codex developer instr
 
 managed Run / Review / Revise / Land は各 command が定める既存の project config 読み込みを行い、`tracker.type` で concrete operation を選択する。`github` は既存の GitHub implementation を選ぶ。selector dispatch は provider-specific な repository identity 解決、API / remote access より前に行い、未対応の値を worker 起動、新規 workspace 作成、remote mutation より前に拒否する。Issue / PR / merge semantics を共通化する Tracker interface は設けない。
 
-Run / Review / Revise の全 worker caller は選択した concrete Codex runtime を経由する。managed は `agent.type`、unmanaged は既存の built-in `codex` 選択を用いる。未対応の agent は worker 起動およびその worker に依存する operation の side effect より前に拒否する。Agent の共通 semantic interface / universal runtime contract は設けない。Codex の CLI 引数、policy / payload、認証、report / log、成功・失敗時の保持・削除責務は各 command の既存 contract に従う。
+Codex を選択する Run / Review / Revise の worker caller は concrete Codex runtime を経由する。experimental managed GitHub Run の Copilot 選択は operation-local な concrete Copilot connector 分岐を使う。managed は `agent.type`、unmanaged は既存の built-in `codex` 選択を用いる。未対応の agent は worker 起動およびその worker に依存する operation の side effect より前に拒否する。Agent の共通 semantic interface / universal runtime contract は設けない。Codex の CLI 引数、policy / payload、認証、report / log、成功・失敗時の保持・削除責務は各 command の既存 contract に従う。
 
-選択した GitHub operation は worker boundary で選択した Codex runtime を呼び出してよい。Land は agent runtime / 認証 / executable を要求せず、Status / Cleanup は tracker / agent selection を行わない。unmanaged は backend / policy authority のために project config / WORKFLOW を読み込まない。config schema と public value set は CFG-001 のままとし、`gitea` / `copilot` を support しない。
+選択した GitHub operation は worker boundary で対応する concrete runtime を呼び出してよい。Land は agent runtime / 認証 / executable を要求せず、Status / Cleanup は tracker / agent selection を行わない。unmanaged は backend / policy authority のために project config / WORKFLOW を読み込まない。config schema と public value set は CFG-001 に従う。`gitea` は support しない。Copilot は RUN-COPILOT-001 の matrix に限る。
 
 ### CFG-004: tracker input / iro policy / concrete Codex connector
 
@@ -348,11 +350,11 @@ worker boundary は次の責務を分離する。
 - iro worker policy は operation / mode ごとの control instructions と、入力に含める policy section を外部 task/context から区別して構築する。managed Run は starting workspace の `WORKFLOW.md` を worker に読ませ、managed Review は invoking checkout から読み取った全文、managed Revise は verified starting H1 の固定 blob を使用する。unmanaged は built-in policy のみを使用する。AGENTS guidance、外部 Issue / PR / comment / diff は既存の safety boundary を拡張できない。
 - concrete Codex connector は rendered control instructions、operation の起動文、rendered stdin、Codex requested options と workspace を受け取る。GitHub identity、Issue / PR 型や relation resolver を要求しない。executable / auth、model / reasoning override、sandbox / network / approval、developer-instruction transport、ephemeral execution と raw result の返却を所有する。これらは Codex 固有の contract であり、共通 Agent interface ではない。
 
-現在の transport は control instructions を `developer_instructions`、task/context を stdin に渡す。Review / Revise の WORKFLOW または built-in policy section は既存どおり stdin 内に明示したままとし、外部本文を developer instructions へ取り込まない。Review の observed base / verified head は tracker operation から policy builder へ渡し、resolved model identity の取得不能は Codex connector が明示する。requested model / effort を resolved provenance として扱わない。
+Codex の transport は control instructions を `developer_instructions`、task/context を stdin に渡す。Review / Revise の WORKFLOW または built-in policy section は既存どおり stdin 内に明示したままとし、外部本文を developer instructions へ取り込まない。Review の observed base / verified head は tracker operation から policy builder へ渡し、resolved model identity の取得不能は Codex connector が明示する。requested model / effort を resolved provenance として扱わない。
 
-connector は stdout（現在の final response）、stderr、exit status と command error を変更せず caller に返す。opaque report forwarding、operation ごとに異なる empty-report rule、comment / cleanup の順序、log path / content、failure / retention は各 operation が引き続き所有する。Land / Status / Cleanup は worker-free のままとする。
+Codex connector は stdout（現在の final response）、stderr、exit status と command error を変更せず caller に返す。opaque report forwarding、operation ごとに異なる empty-report rule、comment / cleanup の順序、log path / content、failure / retention は各 operation が引き続き所有する。Land / Status / Cleanup は worker-free のままとする。
 
-将来の concrete tracker operation は独自の domain data から task/context を render してこの Codex connector を呼べる。将来の別 agent は iro policy を使用して独自 connector を構成できるが、Codex の argv / auth / provenance / result transport を universal Agent semantics として継承する必要はない。この境界の分離は Gitea / 別 agent の support や policy の自動変換を導入しない。
+将来の concrete tracker operation は独自の domain data から task/context を render してこの Codex connector を呼べる。将来の別 agent は iro policy を使用して独自 connector を構成できるが、Codex の argv / auth / provenance / result transport を universal Agent semantics として継承する必要はない。この境界の分離は Gitea の support や policy の自動変換を導入しない。Copilot 固有の transport は RUN-COPILOT-002 に定義し、Codex の developer-instruction precedence を継承しない。
 
 Doctor は valid config の selector に従って configured GitHub identity と supported combination の認証・executable check を接続する。config が利用不能・invalid な場合も、既存の Git / gh / Codex tool health inventory は独立した診断として継続する。これは operation の backend fallback を許可するものではない。
 
@@ -429,30 +431,32 @@ MVP では automatic repair と `--force` を実装しない。
 - configured identity と `GH_HOST` / `GH_REPO` の整合性（INV-010）
 - `gh` executable
 - GitHub authentication
-- Codex executable
-- Codex authentication via `codex login status`
+- `agent.type = "codex"`（config unavailable / invalid 時の inventory も同じ）: 既存の Codex executable / `codex login status`
+- `agent.type = "copilot"`: selected Copilot executable、`--no-auto-update --version`、required invocation flags の read-only `--no-auto-update --help`
 
 configured identity の解決または context validation が失敗した場合、GitHub authentication check を実行せず、その理由を failure として表示する。他の独立した診断は継続する。認証確認を実行するときは configured host を明示する。
 
 ### DOC-003: read-only
 
-`iro doctor` は file、Git、GitHub、Codex authentication state を変更してはならない。
+`iro doctor` は file、Git、GitHub、Codex / Copilot credential・provider state を変更してはならない。Copilot login / logout、provider request、credential / alternate account probe を行ってはならない。
 
 ### DOC-004: exit status
 
 DOC-002 の診断対象がすべて healthy なら 0、そうでなければ non-zero とする。
 診断一覧は可能な限り最後まで表示する。
 
+Copilot の runtime/provider readiness は reliable な zero-side-effect auth / entitlement probe がないため `UNKNOWN` として表示し、それ自体を failure に数えない。Doctor success は Copilot の hosted entitlement / provider readiness を保証しない。BYOK/custom-provider は許可され、paid GitHub-hosted subscription を Doctor の precondition にしない。
+
 ### DOC-005: operator diagnostics
 
 既存 health check に加えて、次を可能な範囲で表示しなければならない。
 
 - iro 自身の executable path と VERSION-001 の build 情報
-- git / gh / codex の PATH 上の executable path と `--version` の version 情報
+- git / gh と selected agent（Codex または experimental Copilot）の PATH 上の executable path と version 情報。Copilot は auto-update を disabled にして取得する
 - repository root、`iro.toml`、`WORKFLOW.md` の path
 - configured remote 名、解決した GitHub host、owner/repository
 
-付加情報が取得不能なら `unknown` 等で明示し、それだけを理由に health check を failure にしてはならない。remote URL の credential を表示してはならない。
+付加情報が取得不能なら `unknown` 等で明示し、それだけを理由に health check を failure にしてはならない。Copilot の executable / invocation preflight に含まれる version command failure / empty output は DOC-002 の health failure として区別する。remote URL の credential を表示してはならない。
 
 context 検証結果を診断一覧の stdout に `OK: GitHub CLI context` または `FAIL: GitHub CLI context: ...` と表示する。不整合時は configured value、observed value、remediation を含める。これは付加 metadata ではなく health check であり、failure は non-zero とする。例えば configured repository が `github.com/acme/iro`、`GH_HOST=github.example.com` なら、configured host と observed `GH_HOST` に加えて `unset GH_HOST or set GH_HOST=github.com` を案内する。
 
@@ -645,6 +649,8 @@ Issue comments
 
 Issue body は Issue comments より先に配置しなければならない。各 comment は worker が author、created time、body、および順序決定に使った identifier を識別できる形式で配置しなければならない。comments が 0 件の場合も正常な payload とする。
 
+Copilot selection の option / transport / preflight は RUN-COPILOT-001〜005 に従う。RUN-005 / RUN-011〜015 の Codex 固有 contract を Copilot へ適用してはならない。
+
 ### RUN-005: Codex preconditions
 
 Codex 起動前に次を満たさなければならない。
@@ -712,7 +718,7 @@ gh executable / GitHub authentication
 configured push destination / Git remote access
 current named branch B / local HEAD H == actual configured remote B tip
 target Issue and comments fetch
-Codex executable / Codex authentication
+selected Codex executable / authentication または Copilot executable / invocation flags (RUN-COPILOT-004)
 new delivery allocation / local and remote collisions
 ```
 
@@ -871,6 +877,56 @@ Author / delivery failure の Issue comment 投稿に失敗した場合:
 Issue comment failure を理由に Codex を再実行してはならない。
 
 Issue comment の結果を local run log へ反映する際は、一時ファイルへの書き込み完了後にログを置き換える。書き込みまたは置き換えが失敗しても、保存済み Author report を含む既存ログを保持し、更新失敗を追加 diagnostic として表示する。
+
+### RUN-COPILOT-001: experimental selection and option matrix
+
+managed GitHub の `[agent] type = "copilot"` は experimental な Run / Author のみを選択する。production support / Codex parity を主張しない。
+
+| Mode / operation | Codex | Copilot |
+|---|---|---|
+| managed GitHub Run / Author | 既存どおり | experimental supported |
+| managed GitHub Review / Revise | 既存どおり | unsupported |
+| managed GitHub Land | agent-independent | agent-independent |
+| unmanaged GitHub Run / Review / Revise | built-in Codex | selector なし |
+| Status / Cleanup | local-only; agent dependency なし | local-only; agent dependency なし |
+
+Copilot の Review / Revise と Run の `--no-sandbox` は worker、new workspace、remote mutation より前に明示的な error にしなければならない。Codex への fallback をしてはならない。Land は valid Copilot config を理由に拒否せず、agent executable / auth を要求しない。
+
+managed Copilot Run の `--model` / `-m` は native `--model <value>`、`--reasoning-effort` は native `--reasoning-effort <value>` として独立に渡す。Codex catalog / configuration に変換しない。effort の local value set は `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` とし、その他は worker-dependent side effect 前に拒否する。省略時は Human Copilot configuration / runtime default に委ねる。requested model / effort を resolved provenance として記録しない。model / effort pair の runtime rejection 時に値を置換してはならない。
+
+`--no-sandbox` を `--allow-all`、permission flag、Copilot sandbox bypass へ変換してはならない。新しい public privilege option は設けない。
+
+### RUN-COPILOT-002: concrete policy and task transport
+
+GitHub operation は Issue / ordered comments を含む一つの complete user task/context payload を render する。Copilot はこれを piped-only stdin から非対話 prompt として受け取る。`-p` / `--prompt` を追加し、stdin が additional task context になると仮定してはならない。
+
+controlling policy は repository / worktree の外の private native custom-agent profile（`agents/<unique-id>.agent.md`）へ書き、`--agent <unique-id>` で明示選択する。profile は Issue text を含めず、task/context は policy authority にしない。profile は durable project authority ではなく、その invocation の disposable state とする。repository instruction files は Copilot 自身の concrete semantics で見えるままとし、Codex developer-instruction precedence を主張しない。
+
+policy は starting worktree の WORKFLOW 全文読取、material conflict の報告、scope discipline、iro の tracker / Git lifecycle ownership、uncommitted file edits、feasible な relevant tests、実施変更・検証結果・material limitations に絞った日本語 Author report を要求する。iro core boundary を project guidance / external task が拡張してはならない。
+
+private state は外部 temporary directory に排他的に作成する。TMPDIR が invoking repository / delivery worktree / shared Git common directory、またはその `.git` を持つ main checkout 内（symlink 経由を含む）なら拒否する。Human の `COPILOT_HOME`（省略時 `~/.copilot`）の native `config.json` があれば private copy に読み込み、credential / model / provider 設定を勝手に置換しない。malformed / unreadable config は failure とする。copy の `autoUpdate` / `continueOnAutoMode` / `memory` / `experimental` を false、`disableAllHooks` / `customAgents.defaultLocalOnly` を true、`enabledPlugins` / `enabledFeatureFlags` を空にする。Human home の MCP / plugin / session state は copy しない。private home を child process の `COPILOT_HOME` で選択し、Human の config / credential に書き戻さない。通常終了時に private state を破棄し、resume / adopt / retry authority に使わない。
+
+### RUN-COPILOT-003: noninteractive permissions
+
+invocation は `--no-auto-update`, `--allow-all-tools`, `--allow-all-urls`, `--no-ask-user`, `--no-experimental`, `--disable-builtin-mcps`, `--no-remote`, `--no-remote-export`, `--output-format json`, `--stream off` を使用する。auto-update は preflight も含めて disabled とする。child environment の `COPILOT_ALLOW_ALL` と `COPILOT_ASSISTED_APPROVAL` を false にして、継承した auto trust / assisted approval の設定が対話 loop を追加しないようにする。
+
+native tool availability と profile tools は shell（bash / powershell と list / read / stop）、file view / create / edit / apply_patch / glob / grep に制限する。subagent、ask-user、MCP tools を公開しない。`--allow-all-paths` / `--allow-all` / `--yolo` は使用しない。worktree と runtime の通常 temporary path 許可を使用する。gh、Git lifecycle mutating subcommands、`.git` / private profile への file write には native deny patterns を追加する。環境の provider / GitHub token と provider headers の secret values は native redaction と connector の既知 environment secret redaction の対象とし、診断へ出力しない。
+
+これらは defense in depth であり、hard Git / filesystem / remote security boundary または OS sandbox ではない。allowed shell は pattern / path heuristics を回避できる。trust boundary は Human-authorized development VM と behavioral worker policy のままである。permission / sandbox failure 時に設定を緩めて再実行してはならない。
+
+### RUN-COPILOT-004: executable and provider preflight
+
+研究・実 CLI acceptance baseline は GitHub Copilot CLI 1.0.91 とする。exact patch pin や根拠のない minimum version を導入しない。`copilot` の存在、non-empty successful `--no-auto-update --version`、successful `--no-auto-update --help` 内の required invocation flags を workspace 作成前に確認し、missing / unusable executable と必要 flag の欠落を actionable error にする。probe timeout はそれぞれ 10 秒とする。実行後の output contract は RUN-COPILOT-005 で別途検証する。
+
+Human environment の公式 BYOK/custom-provider path を許可する。GitHub-hosted Copilot service / subscription entitlement はこの project environment では未 acceptance である。pure read-only login status の共通 probe を発明せず、auth / entitlement の事前成功を主張しない。login / logout、account / credential / provider の探索や補完をしない。provider rejection は worker failure とし、別 backend / account / provider / model へ自動 fallback しない。iro は worker invocation を一度だけ行う。CLI 内部の同一 request の transport retry は CLI の concrete behavior であり、iro の retry / fallback ではない。
+
+### RUN-COPILOT-005: deterministic result and delivery
+
+worker deadline は 30 分とする。iro-owned timeout / cancellation、process non-success、malformed / unknown JSONL event schema、session / model / permission / tool failure、empty final response、ambiguous / incomplete termination を success にしてはならない。
+
+1.0.91 で確認した JSONL の `assistant.message.data.content` のうち、tool requests を伴わない final turn の非空 response を抽出する。`assistant.turn_end` と `assistant.idle`、最後の `result`（non-empty sessionId と exitCode 0）を要求する。未完了 tool、success false の tool、nonzero または不明な shell exitCode を拒否し、既知 informational events は completion evidence に使わない。未知 event は推測で成功へ変換しない。process exit code 0 単独では success を立証しない。raw JSONL を final report として転送しない。
+
+connector success 後も既存 Run delivery validation が authoritative である。GitHub operation が log、Git add / commit、delivery branch push、通常 PR create、Author report comment と failure-report を引き続き所有する。log path は既存 per-delivery Run path、status / error key は `copilot_exit_status` / `copilot_error` とし、抽出 response と redacted stderr を保存する。session ID は保存しない。worker failure では既存 Run 同様に worktree を保持して Issue failure comment を試み、non-zero で終了する。Copilot、provider、comment failure を理由に自動 retry / fallback しない。
 
 ## 9a. `iro run <issue-number> --unmanaged`
 
@@ -1511,7 +1567,7 @@ namespace key は provider 側から一つの安全な path component として�
 
 ## 14. Behavior matrix
 
-以下の matrix は managed operation を対象とする。unmanaged Land は UNMANAGED-LAND-001 から UNMANAGED-LAND-003 に従う。unmanaged Review は UNMANAGED-REVIEW-001 から UNMANAGED-REVIEW-004、unmanaged Revise は UNMANAGED-REVISE-001 から UNMANAGED-REVISE-006 に従う。unmanaged Run の条件と失敗時の保持・cleanup は UNMANAGED-RUN-001 から UNMANAGED-RUN-007 に定義する。
+以下の matrix は managed operation を対象とする。worker health / Run behavior の Codex 記述は Codex selection を対象とし、experimental Copilot の support / failure matrix は RUN-COPILOT-001〜005 に従う。unmanaged Land は UNMANAGED-LAND-001 から UNMANAGED-LAND-003 に従う。unmanaged Review は UNMANAGED-REVIEW-001 から UNMANAGED-REVIEW-004、unmanaged Revise は UNMANAGED-REVISE-001 から UNMANAGED-REVISE-006 に従う。unmanaged Run の条件と失敗時の保持・cleanup は UNMANAGED-RUN-001 から UNMANAGED-RUN-007 に定義する。
 
 `revise` の local state matrix は REVISE-003、remote preconditions と failure behavior は REVISE-002 / REVISE-007 に定義する。
 
@@ -1600,7 +1656,7 @@ Review the worktree and either preserve or discard the changes, then retry:
 - Human の explicit run / revise dispatch に基づかない automatic commit / push / PR、および automatic merge
 - automatic Issue create / close / label / assignment
 - multiple trackers
-- multiple agents
+- Copilot の Review / Revise / unmanaged support と、その他の agent
 - Codex App Server
 - Codex session/thread persistence
 - structured Codex JSONL event parsing

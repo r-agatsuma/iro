@@ -97,6 +97,9 @@ func (s *Service) reviewTracker(root string, config Config, prNumber int, config
 }
 
 func (s *Service) reviewGitHub(root string, config Config, prNumber int, configData, workflowData []byte, options workerOptions, out io.Writer) error {
+	if err := requireCodexOperation(config.AgentType, "Review"); err != nil {
+		return err
+	}
 	agent, err := s.selectAgent(config.AgentType)
 	if err != nil {
 		return err

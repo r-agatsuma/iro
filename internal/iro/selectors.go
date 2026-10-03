@@ -10,7 +10,14 @@ func unsupportedTracker(value string) error {
 }
 
 func unsupportedAgent(value string) error {
-	return fmt.Errorf("unsupported agent.type %q; supported value is codex", value)
+	return fmt.Errorf("unsupported agent.type %q; supported values are codex and copilot (experimental managed GitHub Run only)", value)
+}
+
+func requireCodexOperation(agentType, operation string) error {
+	if agentType == "copilot" {
+		return fmt.Errorf("agent.type copilot does not support managed %s; experimental support is limited to managed GitHub Run / Author", operation)
+	}
+	return nil
 }
 
 func (s *Service) selectAgent(agentType string) (codexRuntime, error) {

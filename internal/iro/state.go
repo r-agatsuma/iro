@@ -90,6 +90,10 @@ func (s *Service) writeOwnership(path string, mapping ownershipMapping) error {
 }
 
 func (s *Service) writeRunLog(identity RepositoryIdentity, issueNumber int, started, finished time.Time, branch, worktree string, codexResult CommandResult, commentStatus string) (string, error) {
+	return s.writeAgentRunLog("codex", identity, issueNumber, started, finished, branch, worktree, codexResult, commentStatus)
+}
+
+func (s *Service) writeAgentRunLog(agentType string, identity RepositoryIdentity, issueNumber int, started, finished time.Time, branch, worktree string, codexResult CommandResult, commentStatus string) (string, error) {
 	logDir := runtimeLogDir(s.Dirs, githubRuntimeNamespace(identity), "runs")
 	if err := s.FileSystem.MkdirAll(logDir, 0755); err != nil {
 		return "", fmt.Errorf("create run log directory: %w", err)
@@ -102,6 +106,10 @@ func (s *Service) writeRunLog(identity RepositoryIdentity, issueNumber int, star
 	logPath := filepath.Join(logDir, logName)
 	content := fmt.Sprintf("repository: %s\nissue_number: %d\nbranch: %s\nworktree: %s\nstarted: %s\nfinished: %s\ncodex_exit_status: %d\ncodex_error: %v\nissue_comment: %s\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n",
 		identity.String(), issueNumber, branch, worktree, started.UTC().Format(time.RFC3339Nano), finished.UTC().Format(time.RFC3339Nano), codexResult.ExitCode, codexResult.Err, commentStatus, codexResult.Stdout, codexResult.Stderr)
+	if agentType == "copilot" {
+		content = strings.Replace(content, "codex_exit_status:", "copilot_exit_status:", 1)
+		content = strings.Replace(content, "codex_error:", "copilot_error:", 1)
+	}
 	if deliveryErr == nil {
 		content = fmt.Sprintf("delivery_id: %s\n", id) + content
 	}

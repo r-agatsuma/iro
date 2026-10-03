@@ -47,7 +47,7 @@ func TestAgentDispatchRejectsUnsupportedBeforeWorkerDependentOperations(t *testi
 		if name == "land" {
 			continue
 		}
-		for _, value := range []string{"copilot", "future", "", "Codex"} {
+		for _, value := range []string{"future", "", "Codex"} {
 			t.Run(name+"/"+value, func(t *testing.T) {
 				err := operation(&Service{}, Config{TrackerType: "github", AgentType: value})
 				if err == nil || err.Error() != unsupportedAgent(value).Error() {
@@ -62,7 +62,7 @@ func TestManagedCommandsRejectFutureSelectorsBeforeRemoteOrWorkspaceAccess(t *te
 	for _, command := range []string{"run", "review", "revise", "land"} {
 		for _, selector := range []struct{ current, future, key string }{
 			{"github", "gitea", "tracker.type"},
-			{"codex", "copilot", "agent.type"},
+			{"codex", "future", "agent.type"},
 		} {
 			t.Run(command+"/"+selector.key, func(t *testing.T) {
 				root := t.TempDir()

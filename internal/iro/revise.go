@@ -52,6 +52,9 @@ func (s *Service) reviseTracker(root string, config Config, prNumber int, config
 }
 
 func (s *Service) reviseGitHub(root string, config Config, prNumber int, configData []byte, options workerOptions, out io.Writer) (operationErr error) {
+	if err := requireCodexOperation(config.AgentType, "Revise"); err != nil {
+		return err
+	}
 	agent, err := s.selectAgent(config.AgentType)
 	if err != nil {
 		return err
