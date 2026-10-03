@@ -80,7 +80,7 @@ func (s *Service) reviseUnmanaged(number, specificationIssue int, options worker
 	if !commandSucceeded(result) || strings.TrimSpace(result.Stdout) != "commit" {
 		return fmt.Errorf("selected PR HEAD commit was not obtained; no worktree created")
 	}
-	workspace, err := s.createDetachedWorktree(root, identity, fmt.Sprintf("revise-pr-%d-*", number), target.HeadRefOID)
+	workspace, err := s.createDetachedWorktree(root, identity, detachedWorkspacePattern("revise", number), target.HeadRefOID)
 	if workspace == "" {
 		return err
 	}

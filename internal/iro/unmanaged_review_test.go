@@ -305,8 +305,7 @@ func TestUnmanagedReviewCleanupConfirmsDirectoryAndRegistration(t *testing.T) {
 	for _, state := range []string{"removed", "directory remains", "registration remains"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
-			workspace := filepath.Join(root, "review-workspace")
-			os.Mkdir(workspace, 0700)
+			workspace := ""
 			runner := &fakeCommandRunner{}
 			runner.fn = func(spec CommandSpec) CommandResult {
 				if containsArgs(spec.Args, "worktree", "remove") {
@@ -321,7 +320,12 @@ func TestUnmanagedReviewCleanupConfirmsDirectoryAndRegistration(t *testing.T) {
 				return CommandResult{}
 			}
 			service := newTestService(t, runner, root)
-			err := service.removeUnmanagedWorktree(root, workspace)
+			var err error
+			workspace, err = service.createDetachedWorktree(root, RepositoryIdentity{Owner: "acme", Name: "iro"}, detachedWorkspacePattern("review", 42), reviewHeadForTest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = service.removeUnmanagedWorktree(root, workspace)
 			if (err == nil) != (state == "removed") {
 				t.Fatalf("%s: %v", state, err)
 			}

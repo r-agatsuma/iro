@@ -219,11 +219,11 @@ func (s *Service) revalidateUnmanagedRun(root string, identity RepositoryIdentit
 }
 
 func (s *Service) createUnmanagedWorktree(root string, identity RepositoryIdentity, number int, head string) (string, error) {
-	return s.createDetachedWorktree(root, identity, fmt.Sprintf("run-issue-%d-*", number), head)
+	return s.createDetachedWorktree(root, identity, detachedWorkspacePattern("run", number), head)
 }
 
 func (s *Service) createDetachedWorktree(root string, identity RepositoryIdentity, pattern, head string) (string, error) {
-	parent := cleanAbsolutePath(filepath.Join(s.Dirs.DataRoot, "unmanaged-workspaces", identity.Key()))
+	parent := cleanAbsolutePath(runtimeWorkspaceParent(s.Dirs, identity, unmanagedWorkspace))
 	if err := s.FileSystem.MkdirAll(parent, 0755); err != nil {
 		return "", fmt.Errorf("create unmanaged workspace parent: %w", err)
 	}
@@ -251,6 +251,9 @@ func (s *Service) verifyDetachedHead(workspace, expected string) error {
 }
 
 func (s *Service) removeUnmanagedWorktree(root, workspace string) error {
+	if kind, ok := recognizeRuntimeWorkspace(s.Dirs, workspace); !ok || kind != unmanagedWorkspace {
+		return fmt.Errorf("path is not an iro unmanaged runtime workspace: %s", workspace)
+	}
 	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"worktree", "remove", "--", workspace}, Dir: root})
 	if !commandSucceeded(result) {
 		return fmt.Errorf("Git rejected normal worktree removal")

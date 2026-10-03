@@ -1452,6 +1452,38 @@ workspace ownership mapping
 
 Codex thread/session ID は保存対象に含めない。
 
+### LOCAL-001: per-Run delivery identity の基盤
+
+後続の Run / Revise / Status / Cleanup への組み込みに使う local mechanism として、delivery allocation と Git inventory を提供する。この基盤追加だけでは、上記の既存 CLI の Issue 単位の branch / ownership mapping 契約を切り替えない。
+
+新規 delivery allocation は cryptographically secure RNG から得た 16 bytes を lowercase hexadecimal に encode した、正確に 32 ASCII hex characters の delivery ID を持たなければならない。命名は次に従う。
+
+```text
+branch: iro/issue-N-<delivery-id>
+managed worktree: <DataRoot>/workspaces/<repository-key>/issue-N-<delivery-id>
+```
+
+Issue number は Human-readable hint と physical cleanup selector であり、PR origin の authority として使ってはならない。repository-key は既存の path grouping のための値であり、remote identity だけで local ownership を判断してはならない。
+
+allocation / collision inspection は local side effect を起こしてはならない。この段階では既存 ref、registered worktree path、filesystem path（dangling symlink を含む）との衝突時に新しい ID を生成してよい。`refs/heads/iro` および生成予定 ref の子 ref による namespace collision も拒否する。連続 16 回の衝突は error とする。不正な ID、entropy failure、inventory / filesystem observation failure は衝突として retry せず error とする。
+
+producer は directory 作成や fetch を含む最初の local side effect の直前に creation boundary を通過し、以後 invocation の ID を変更してはならない。boundary の再検査で collision が見つかった場合は resource を作成しない。boundary 通過後の作成失敗でも ID と partial state を保持し、自動 retry / rollback / adoption を行わない。基盤の managed worktree producer は path を排他的に reserve してから `git worktree add -b` を行い、既存 path や mutable ref を再利用・上書きしてはならない。この基盤は v1 `issue-N.json` を読み書きせず、migration / adoption authority として使わない。
+
+### LOCAL-002: current-local-repository inventory
+
+inventory は invoking local Git repository の absolute common directory に bind し、次を deterministic order で返す。
+
+- `refs/heads/iro/*` の完全な ref name と object ID。branch-only な ref も含む。
+- `git worktree list --porcelain -z` の registered path（Git が返した文字列を保持）、HEAD、attached branch ref / detached / bare、locked / prunable の区別。
+
+全 observation command は同じ invoking repository で実行する。読み取り前後の common directory が異なる場合、command failure / broken-ref warning / malformed observation がある場合は、成功した部分だけの inventory を返さず error とする。inventory は filesystem scan や remote repository lookup を行わない。registered path が存在すること、HEAD が現在読み取れること、clean であることをこの一覧だけから推測してはならず、変更する consumer は対象を別途検証する。
+
+### LOCAL-003: runtime workspace namespace recognition
+
+managed delivery workspace の leaf は LOCAL-001 の命名、unmanaged detached workspace の leaf は既存 producer の `run-issue-N-<random-suffix>` / `review-pr-M-<random-suffix>` / `revise-pr-M-<random-suffix>` とする。DataRoot から `<workspace-kind>/<repository-key>/<leaf>` という深さの path だけを認識し、producer と unmanaged removal consumer は共通の命名・認識 helper を使う。
+
+この predicate は naming evidence であり、削除 authorization ではない。consumer は current local repository の登録と具体的な操作契約を確認しなければならない。通常の Human worktree は detached という理由だけで runtime workspace に分類してはならない。legacy managed `issue-N` path や v1 ownership JSON をこの新基盤で認識・adopt しない。既存 managed / unmanaged の保持・削除責務はそれぞれの command 契約に従う。
+
 ## 14. Behavior matrix
 
 以下の matrix は managed operation を対象とする。unmanaged Land は UNMANAGED-LAND-001 から UNMANAGED-LAND-003 に従う。unmanaged Review は UNMANAGED-REVIEW-001 から UNMANAGED-REVIEW-004、unmanaged Revise は UNMANAGED-REVISE-001 から UNMANAGED-REVISE-006 に従う。unmanaged Run の条件と失敗時の保持・cleanup は UNMANAGED-RUN-001 から UNMANAGED-RUN-007 に定義する。

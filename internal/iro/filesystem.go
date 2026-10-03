@@ -15,6 +15,8 @@ type FileSystem interface {
 	Remove(name string) error
 	RemoveAll(path string) error
 	Stat(name string) (os.FileInfo, error)
+	Lstat(name string) (os.FileInfo, error)
+	Mkdir(name string, perm os.FileMode) error
 	MkdirAll(path string, perm os.FileMode) error
 	MkdirTemp(dir, pattern string) (string, error)
 }
@@ -56,6 +58,14 @@ func (OSFileSystem) RemoveAll(path string) error {
 
 func (OSFileSystem) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
+}
+
+func (OSFileSystem) Lstat(name string) (os.FileInfo, error) {
+	return os.Lstat(name)
+}
+
+func (OSFileSystem) Mkdir(name string, perm os.FileMode) error {
+	return os.Mkdir(name, perm)
 }
 
 func (OSFileSystem) MkdirAll(path string, perm os.FileMode) error {
