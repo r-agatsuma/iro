@@ -32,6 +32,8 @@ precondition failure 時に不足環境を自動 provisioning してはならな
 破壊的な local resource 操作では、`iro` は ownership を確認できる resource だけを変更してよい。
 ownership が不明な branch、worktree、file を iro-owned と推測してはならない。
 
+Status / explicit Cleanup の local scope evidence は STATUS-003 / CLEANUP-002 に定義する current-local-repository の `iro/*` ref と registered runtime workspace naming とする。v1 ownership JSON や remote provenance をこの scope の authority にしない。
+
 managed `land` の remote eligibility は LAND-003 の選択 PR / HEAD integrity、unmanaged `land` は UNMANAGED-LAND-002 に従う。local ownership mapping や remote PR の creator identity を要求しない。
 
 ### INV-004: tracker authority
@@ -120,11 +122,11 @@ Human による `iro land <pr-number>` の明示実行自体を、その PR の 
 
 ### INV-007: dirty state is human-owned
 
-`iro` は開始時に存在する dirty worktree を自動で reset、clean、stash、commit、delete してはならない。検証済みの clean な owned worktree で今回の worker が生成した変更だけを RUN-016 / REVISE-006 / UNMANAGED-REVISE-004 に従って commit する。
+`iro` は開始時に存在する dirty worktree を自動で reset、clean、stash、commit、delete してはならない。Human が明示する destructive `iro cleanup` は CLEANUP-001〜008 に従い、selected dirty worktree の削除を許す。検証済みの clean な owned worktree で今回の worker が生成した変更だけを RUN-016 / REVISE-006 / UNMANAGED-REVISE-004 に従って commit する。
 
 `iro run` で dirty state を検出した場合は変更せず failure とし、cleanup / stash の方法は Human に委ねる。
 managed `iro revise` も canonical Issue worktree の dirty state を同じ方針で拒否する。
-`iro status` は dirty state を `DIRTY` として観測し、これだけを理由に failure としてはならない。
+`iro status` は local inventory を表示し、dirty state を検査・分類しない。
 
 ### INV-008: Codex is disposable
 
@@ -412,174 +414,111 @@ Go 標準 library の `runtime/debug.ReadBuildInfo()` から module/build versio
 
 ### STATUS-001: purpose
 
-現在の repository に対して、iro が ownership mapping で所有を確認できる Issue workspace のローカルな機械状態だけを read-only で表示する。
-GitHub Issue の open / closed、進捗、完了、review 状態などの semantic state を取得・推測・表示してはならない。
+現在の local Git repository の iro resource inventory を read-only / local-only で表示する。remote の安全性、復元可能性、Issue / PR の semantic state を取得・推測してはならず、Cleanup の safety oracle として扱ってはならない。
 
 ### STATUS-002: preconditions
 
-`iro status` は次を要求する。
+必要な precondition は `git` executable と、current directory または parent が Git repository であることだけとする。invoking checkout が dirty でもよい。
 
-- `git` executable が利用可能
-- current directory または parent が Git repository
-- `WORKFLOW.md` が存在する regular file
-- `iro.toml` が存在する regular file で、supported configuration として valid
-- `iro.toml` の configured `tracker.remote` が存在する
-- configured remote URL から GitHub repository identity をローカルに一意に解決できる
+`iro.toml`、`WORKFLOW.md`、remote configuration、tracker API / authentication / network、agent executable / authentication、v1 ownership JSON を要求・参照してはならない。
 
-invoking checkout が dirty でもよい。
-`gh`、GitHub authentication、network access、Codex executable、Codex authentication は要求してはならない。
+### STATUS-003: local inventory discovery
 
-### STATUS-003: ownership mapping discovery
+観測元は LOCAL-002 の current-local-repository inventory に限定する。
 
-列挙起点は、現在の repository identity に対応する local ownership mapping directory とする。
-その directory に保存された、filename が `issue-<positive-decimal-integer>.json` に厳密に一致する ownership mapping だけを対象とする。その他の filename の file は無視し、mapping のない branch、worktree、directory を名前や配置だけで iro-owned と推測してはならない。
+```text
+local refs/heads/iro/*
++
+git worktree list --porcelain -z
+```
 
-ownership mapping が invalid、読み取り不能、または解釈不能な場合も、その mapping に対応する row を `BROKEN` として表示する。
-mapping directory が存在せず mapping が 0 件の場合は、`No iro-managed Issue workspaces.` を表示して success とする。
+primary row identity は local `iro/*` branch ref とする。branch-only な ref と、その branch を checkout しているすべての registered worktree を含める。
 
-### STATUS-004: state classification
+加えて、current repository に登録され、LOCAL-003 で iro runtime workspace path と認識できる worktree を表示する。detached residue も含めるが、detached という理由だけで ordinary Human worktree を分類してはならない。同じ remote identity / runtime directory grouping を使う別の local common directory の ref / worktree を列挙してはならない。
 
-各 ownership mapping は次のいずれかとして表示する。
+filesystem scan、runtime log、v1 ownership JSON、remote lookup、LLM inference から未知の path を発見してはならない。Git の登録を失った filesystem-only residue は発見を保証しない。
 
-`CLEAN` は次のすべてが成立する状態である。
+### STATUS-004: inventory representation
 
-- mapping が valid で、repository identity、Issue number、expected branch、expected worktree path が整合する
-- expected branch が存在する
-- expected worktree path が存在し、Git worktree として登録されている
-- expected worktree で expected branch が checkout されている
-- `git --no-optional-locks status --porcelain --untracked-files=all` が tracked / untracked の通常変更を示さない
+各 row は branch（detached は `none`）、registered worktree path(s)（branch-only は `none`）、観測できた local HEAD OID（なければ `none`）を表示する。local repository identity として absolute Git common directory を表示する。特殊文字を含む path は quote / escape し、Git が返した exact registered path を保持する。
 
-`DIRTY` は ownership relationship と Git worktree / branch の対応を検証できるが、expected worktree に tracked または untracked の通常変更がある状態である。
-ignored file だけの存在は dirty とみなさない。
-
-`BROKEN` は mapping が存在するが、mapping 自体または mapping と Git / filesystem state の整合性を検証できない状態である。
-expected branch の欠落、expected path の欠落、Git worktree でない path、wrong branch checkout、mapping の field mismatch などを含む。
-`iro status` は `BROKEN` を自動修復してはならない。
+HEAD は local ref / worktree inventory の観測値であり、現在の filesystem readability や remote recoverability を保証しない。v1 の `CLEAN` / `DIRTY` / `BROKEN` ownership-state semantics を復活させてはならず、cleanliness inspection を行わない。
 
 ### STATUS-005: output and exit status
 
-出力には少なくとも repository identity、Issue number、state、branch、worktree path を含める。
-mapping が 0 件である場合、および `CLEAN` / `DIRTY` のみの場合は success とする。
-`BROKEN` が 1 件以上ある場合は non-zero とする。
-`DIRTY` の存在だけを理由に failure としてはならない。
+対象が 0 件なら `No local iro resources.` を表示して success とする。branch-only、複数登録、detached residue、missing workspace directory 自体は failure としない。
+
+LOCAL-002 inventory の failure は non-zero とする。registered path の namespace recognition が不明な場合、観測可能な row は表示してよいが invocation は non-zero とし、不明な範囲を診断する。
 
 ### STATUS-006: side effects
 
-`iro status` は repository files、Git index、refs、branches、worktrees、ownership mappings、runtime logs、GitHub Issues、Codex state を変更してはならない。
-GitHub にアクセスしてはならず、Codex を起動してはならない。
+repository files、Git index / refs / branches / worktrees、ownership mappings、runtime logs、remote state、agent state を変更してはならない。tracker にアクセスせず、agent を起動しない。
 
 ## 8. `iro cleanup [<issue-number>]`
 
 ### CLEANUP-001: explicit destructive intent
 
-`iro cleanup` は Human の明示的な呼び出しで実行する。Issue number 指定時の既存の single-Issue behavior は変更しない。operand 省略時は current repository の bulk cleanup とする。複数 operand は main side effect 前に usage error とする。`--all`、`--force`、interactive confirmation は追加しない。
-Issue close、PR merge、branch name、directory name、Issue / PR の semantic state を理由に cleanup を開始してはならない。
-`iro cleanup` は Issue の完了状態を判断する command ではない。
+Human の明示的な invocation による best-effort destructive purge とする。operand 省略時は current local repository の bulk cleanup、指定時は Issue-scoped cleanup とする。複数 operand / unsupported flag は mutation 前に usage error とする。`--all`、`--force`、interactive confirmation は追加しない。
 
-### CLEANUP-002: local-only ownership scope
+remote safety / recoverability、Issue completion を証明する command ではない。dirty / untracked / ignored files、unpushed commits を保存する契約は持たない。branch name や Issue / PR state を理由に自動で invocation を開始してはならない。
 
-各 Issue の cleanup 対象は、その Issue の canonical ownership mapping によって ownership を検証できる次の local resource だけである。
+### CLEANUP-002: local-only discovery and selection
 
-```text
-verified iro-owned worktree
-verified iro-owned local branch
-verified ownership mapping
-```
+STATUS-003 と同じ discovery snapshot を対象とする。current repository の `iro/*` local refs、その attached registered worktrees、および LOCAL-003 で認識できる current-repository registered runtime worktrees が bulk target となる。v1 ownership JSON を authority として使用・削除しない。
 
-ownership の列挙・証拠起点は、現在の repository identity に対応する
-`issue-<canonical-positive-decimal-integer>.json` mapping である。
-branch name、workspace path、Git worktree 登録、Issue number の偶然の一致だけから ownership を推測してはならない。
-
-### CLEANUP-003: preconditions before mutation
-
-destructive operation の前に、次の precondition をすべて検証しなければならない。
-
-- Git executable と Git repository
-- `WORKFLOW.md` および valid supported `iro.toml` による initialized iro project
-- configured `tracker.remote` の存在と、そこからの repository identity の一意なローカル解決
-- canonical ownership mapping の存在、regular file 性、supported version
-- mapping の repository、Issue number、filename、branch、deterministic worktree path の整合性
-- expected local branch、worktree path、Git worktree 登録、expected branch checkout の整合性
-- `git worktree list --porcelain` の inspection により、expected Issue branch が expected worktree 以外の path でも checkout されていないこと
-- invoking checkout が cleanup target 自身ではないこと
-- target worktree に tracked changes または non-ignored untracked files がないこと
-- Issue branch tip が invoking checkout の `HEAD` の ancestor であること
-
-invoking checkout 自身の cleanliness は要求しない。
-target worktree が dirty または broken なら cleanup を拒否し、local state を変更してはならない。
-同じ Issue branch が別の worktree にも checkout されている場合は branch/worktree collision として cleanup を拒否し、worktree、local branch、ownership mapping を変更してはならない。
-
-ancestor 検証は概念的に次と同等である。
+`iro cleanup N` は少なくとも次の local refs と attached worktrees を選択する。
 
 ```text
-git merge-base --is-ancestor iro/issue-<issue-number> HEAD
+refs/heads/iro/issue-N
+refs/heads/iro/issue-N-*
 ```
 
-ancestor でない場合、Human は Issue branch の履歴を含む integration checkout から cleanup を再実行する。
-iro は invoking checkout が正式な integration branch かどうかを推測・検証しない。
+複数 delivery と旧 unsuffixed branch を含め、N=7 は Issue 70 や非 canonical な 07 を match してはならない。別の `iro/*` branch を workspace hint だけで選択してはならない。
 
-### CLEANUP-004: disposable ignored state
+branch から選択されない runtime worktree は、managed `issue-N-<delivery-id>` または unmanaged `run-issue-N-<random-suffix>` の naming が一意に N を示す場合に選択してよい。ordinary branch が attached な場合、その branch 自体は削除しない。`review-pr-M-*` / `revise-pr-M-*` の M は PR number であり、Issue selector に使ってはならない。N に結び付かない detached residue は Issue-scoped cleanup で推測して選択せず、bulk cleanup の対象として残す。
 
-target worktree の ignored file / directory は disposable workspace state として扱う。
-ignored state だけでは cleanup を拒否せず、worktree removal とともに削除され得る。
-tracked changes と non-ignored untracked files は Human の未保存作業である可能性があるため、cleanup を拒否する。
-workspace teardown 後も必要な durable data は ignored file として worktree 内だけに保存してはならない。
+remote API、v1 ownership JSON、runtime logs、LLM inference、arbitrary filesystem scan から未知の path を発見してはならない。ref / registration / known-candidate information をすべて失った filesystem-only residue の発見は保証しない。
 
-### CLEANUP-005: mutation ordering and safe deletion
+### CLEANUP-003: observation before mutation
 
-すべての precondition が成立した場合だけ、次の順序で mutation を開始する。
+必要な precondition は Git executable、Git repository、LOCAL-002 discovery snapshot とする。`iro.toml`、`WORKFLOW.md`、remote configuration、tracker / agent authentication を検査しない。
 
-```text
-validate all preconditions
-        ↓
-git worktree remove <verified-worktree>
-        ↓
-git branch -d iro/issue-<issue-number>
-        ↓
-remove ownership mapping LAST
-```
+invoking worktree、dirty state、unpublished commits、ancestry、PR merge state、Issue state、remote recoverability に新しい semantic safety gate を追加してはならない。Git / filesystem mechanism の拒否・失敗は failure として報告する。namespace recognition が不明でも独立に発見済みの target / action の処理は可能な範囲で続け、不明な path を推測して filesystem removal しない。
 
-worktree removal は通常の安全な Git operation だけを使う。
-`--force`、`git clean`、`reset`、`stash`、force checkout などで安全条件を回避してはならない。
-worktree removal 後は path と Git worktree registration の removal を確認する。
+### CLEANUP-004: destructive workspace state
 
-local branch は normal safe deletion (`git branch -d`) だけで削除する。
-`git branch -D`、force deletion、history equivalence inference、remote merge inference を使ってはならない。
-branch deletion 後は branch removal を確認する。
+selected target の tracked / untracked / ignored state と unpublished history は destructive cleanup の対象となり得る。dirty state による skip や履歴の保全は行わない。
 
-ownership mapping は worktree removal と branch deletion が安全に完了するまで保持する。
-どちらかが失敗した場合、または destructive operation 後の state を安全に確認できない場合、cleanup は non-zero とし mapping を保持する。
-automatic repair、rollback、partial cleanup の success 扱いは実装しない。
+### CLEANUP-005: best-effort mutation ordering
 
-### CLEANUP-006: success and failure state
+discovery snapshot の target ごとに次を順に試行する。
 
-各 Issue の cleanup success は次の一状態だけである。
+1. registered worktree に対する標準の Git force removal（`git worktree remove --force -- <exact-registered-path>`）。
+2. 発見した `iro/*` local branch が存在する場合、`git branch -D -- <branch>` と同等の force deletion。
+3. invocation が既知の exact candidate path に residue が残り、その path を LOCAL-003 の runtime path と検証できる場合、その exact path だけを filesystem removal。
+4. ref / worktree registration / known path の post-state を再観測。
 
-```text
-worktree removed
-local branch safely deleted
-ownership mapping removed
-```
+一つの action / target が失敗しても、独立して valid な branch deletion、known-path removal、他 target の処理を止めない。成功済み deletion を rollback しない。invoking linked worktree 自体が削除された場合も独立 action を続けられるよう、Git common directory を command anchor として使う。
 
-成功時の output には少なくとも Issue number、removed worktree path、removed local branch、mapping removal を含める。
-precondition failure、unsafe work、broken ownership/resource state、Git operation failure、post-operation verification failure は non-zero である。
-mutation 後の failure では Human が resource state を理解できる diagnostic を表示し、mapping を保持する。
+filesystem removal は今回 Git registration から既知となった exact candidate path に限定する。path の解決結果は比較 / namespace verification 用であり、removal path に置き換えない。parent / sibling scan、path resemblance に基づく arbitrary `rm -rf`、automatic unlock / prune / repair / retry protocol を追加してはならない。
+
+### CLEANUP-006: confirmed absence and failure
+
+confirmed absence は invocation が要求した discovery-snapshot target の local ref、worktree registration、既知の exact candidate path がすべて absent と確認できた状態とする。dangling symlink も remaining path として扱う。post-state の registration は exact path と symlink を解決した location の両方で照合する。
+
+remaining / unknown target、discovery / post-state observation failure があれば non-zero とする。mechanism が失敗した invocation も non-zero とし、後続 action により absent となった resource はその結果を表示してよい。途中の成功だけを invocation の confirmed success としてはならない。
+
+output は local common directory、対象 branch / path、action failure、remaining / unknown post-state、confirmed absence、および summary を示す。対象 0 件で観測 failure がなければ success とする。失敗後の deletion は完了したまま残る。
 
 ### CLEANUP-007: responsibility and remote boundary
 
-`iro cleanup` は local lifecycle operation であり、GitHub Issue / PR の lookup や semantic state inspection を行わない。
-`gh`、GitHub authentication、network access、Codex executable、Codex authentication、Codex invocation を要求・実行してはならない。
-remote branch、remote ref、Issue、PR、repository configuration、invoking checkout、other worktree、other branch、other ownership mapping、runtime logs を変更してはならない。
+local cleanup だけを行い、remote branch / PR / Issue state を確認・変更してはならない。tracker API / authentication / network、agent executable / authentication / invocation を要求・実行しない。
+
+discovery-snapshot target 以外の local refs / worktrees / paths、v1 ownership mappings、runtime logs、repository configuration を変更しない。ordinary Human worktree を detached という理由だけで adopt してはならない。
 
 ### CLEANUP-008: bulk cleanup
 
-operand を省略した `iro cleanup` は invocation repository と `iro.toml` から current repository identity を解決し、その repository の canonical ownership mappings だけを Issue number の昇順で列挙・処理する。他 repository や unowned resource を対象にしない。
-
-各 mapping に CLEANUP-002〜007 の ownership / worktree / cleanliness / branch safety を適用する。CLEAN candidate も invoking HEAD の ancestor 検証などを省略しない。DIRTY は resource を変更せず skip する。BROKEN / invalid ownership は変更・repair せず attention required とする。
-
-Issue ごとに独立して処理し、failure 後も可能な範囲で残りを続行する。成功済みの cleanup を rollback しない。automatic repair / retry / force deletion を行わない。remote branch / Issue / PR の確認・変更は行わず、GitHub CLI / authentication を要求しない。
-
-output は各 Issue number と理由、および cleaned / skipped / failed・attention required の summary を示す。BROKEN / invalid ownership または CLEAN candidate の cleanup failure が1件でもあれば最終 exit status は non-zero とする。すべて成功、DIRTY skip のみ、対象 mapping が0件の場合は zero とする。
+operand 省略時は current-local-repository inventory のすべての iro target を deterministic order で処理する。別の local common directory の同名 ref / runtime worktree は対象外とする。Issue を識別できない runtime detached residue も含む。dirty skip を行わず、全体の failure / confirmed absence は CLEANUP-006 に従う。
 
 ## 9. `iro run <issue-number>`
 
@@ -1495,7 +1434,7 @@ Codex thread/session ID は保存対象に含めない。
 
 ### LOCAL-001: per-Run delivery identity の基盤
 
-後続の Run / Revise / Status / Cleanup への組み込みに使う local mechanism として、delivery allocation と Git inventory を提供する。この基盤追加だけでは、上記の既存 CLI の Issue 単位の branch / ownership mapping 契約を切り替えない。
+delivery allocation と Git inventory を提供する。Status / Cleanup は STATUS-001〜006 / CLEANUP-001〜008 に従ってこの local inventory を使用する。Run / Revise の既存 CLI の Issue 単位の branch / ownership mapping 契約は、この基盤だけでは切り替えない。
 
 新規 delivery allocation は cryptographically secure RNG から得た 16 bytes を lowercase hexadecimal に encode した、正確に 32 ASCII hex characters の delivery ID を持たなければならない。命名は次に従う。
 
@@ -1519,15 +1458,17 @@ inventory は invoking local Git repository の absolute common directory に bi
 - `refs/heads/iro/*` の完全な ref name と object ID。branch-only な ref も含む。
 - `git worktree list --porcelain -z` の registered path（Git が返した文字列を保持）、HEAD、attached branch ref / detached / bare、locked / prunable の区別。
 
-全 observation command は同じ invoking repository で実行する。読み取り前後の common directory が異なる場合、command failure / broken-ref warning / malformed observation がある場合は、成功した部分だけの inventory を返さず error とする。inventory は filesystem scan や remote repository lookup を行わない。registered path が存在すること、HEAD が現在読み取れること、clean であることをこの一覧だけから推測してはならず、変更する consumer は対象を別途検証する。
+全 observation command は同じ invoking repository で実行する。読み取り前後の common directory が異なる場合、command failure / broken-ref warning / malformed observation がある場合は、成功した部分だけの inventory を返さず error とする。inventory は filesystem scan や remote repository lookup を行わない。registered path が存在すること、HEAD が現在読み取れること、clean であることをこの一覧だけから推測してはならず、変更する consumer はその command 契約が要求する検証を別途行う。明示 Cleanup は CLEANUP-003 に従い、cleanliness / HEAD ancestry を precondition にしない。
 
 ### LOCAL-003: runtime workspace namespace recognition
 
-managed delivery workspace の leaf は LOCAL-001 の命名、unmanaged detached workspace の leaf は既存 producer の `run-issue-N-<random-suffix>` / `review-pr-M-<random-suffix>` / `revise-pr-M-<random-suffix>` とする。DataRoot から `<workspace-kind>/<repository-key>/<leaf>` という深さの path だけを認識し、producer と unmanaged removal consumer は共通の命名・認識 helper を使う。
+managed delivery workspace の leaf は LOCAL-001 の命名、unmanaged detached workspace の leaf は既存 producer の `run-issue-N-<random-suffix>` / `review-pr-M-<random-suffix>` / `revise-pr-M-<random-suffix>` とする。DataRoot から `<workspace-kind>/<repository-key>/<leaf>` という深さの path だけを認識し、producer、unmanaged removal consumer、Status / Cleanup は共通の命名・認識 helper を使う。
 
 認識時は DataRoot と入力 path の存在する祖先まで symlink を解決し、不在の末尾成分を結合して比較する。これにより、producer の path と Git inventory の実体側 registered path のどちらも、対象 directory やその親が消失した場合を含めて認識できる。解決した path は比較用に限定し、inventory の exact registered path を書き換えてはならない。権限不足、symlink loop、dangling ancestor symlink 等の解決失敗は、未認識や衝突なしとして扱わず error とする。
 
 この predicate は naming evidence であり、削除 authorization ではない。consumer は current local repository の登録と具体的な操作契約を確認しなければならない。unmanaged removal consumer は各 command の cleanup boundary に達した今回作成の workspace だけを対象とし、削除前に LOCAL-002 inventory で対象登録が一意な detached / non-bare / unlocked / non-prunable であることを検証する。inventory の exact registered path は保持したまま、producer が返した path と同じ directory を指すことを filesystem identity で照合する。DataRoot 等の祖先 symlink は許容するが、同じ directory に複数の登録が一致する場合は削除しない。削除後は producer の path に加え、照合した exact registered path の登録も消えていることを確認する。対象 path は symlink ではない既存 directory で、invoking repository と common directory を共有し、現在の detached HEAD が inventory の HEAD と一致し、clean でなければならない。観測失敗や不一致時は削除せず保持する。通常の Human worktree は detached という理由だけで runtime workspace に分類してはならない。legacy managed `issue-N` path や v1 ownership JSON をこの新基盤で認識・adopt しない。既存 managed / unmanaged の保持・削除責務はそれぞれの command 契約に従う。
+
+明示 `iro cleanup` の authorization / mutation は CLEANUP-001〜008 に従う。unmanaged Run / Review / Revise 自身の success teardown に要求する clean / unlocked / detached 等の制限を、明示 Cleanup の semantic safety gate に流用しない。
 
 ## 14. Behavior matrix
 
@@ -1558,29 +1499,29 @@ managed delivery workspace の leaf は LOCAL-001 の命名、unmanaged detached
 |---|---|---|---|---|---|---|
 | Git executable missing | error | report | error | error | error | error; no changes |
 | Not a Git repository | error | report | error | error | error | error; no changes |
-| `WORKFLOW.md` missing | create only in clean init | report | error | error | error | error; no changes |
-| `iro.toml` missing | create only in clean init | report | error | error | error | error; no changes |
-| configured remote missing | allowed | report | error | error | error | error; no changes |
-| other remotes exist but configured remote invalid | allowed | report | error | error; no guessing | error; no guessing | error; no guessing |
+| `WORKFLOW.md` missing | create only in clean init | report | allowed; not consulted | error | error | allowed; not consulted |
+| `iro.toml` missing | create only in clean init | report | allowed; not consulted | error | error | allowed; not consulted |
+| configured remote missing | allowed | report | allowed; not consulted | error | error | allowed; not consulted |
+| other remotes exist but configured remote invalid | allowed | report | allowed; not consulted | error; no guessing | error; no guessing | allowed; not consulted |
 | `gh` missing | allowed | report | allowed; no GitHub access | error | error | allowed; no GitHub access |
 | GitHub auth missing | allowed | report | allowed; no authentication check | error | error | allowed; no authentication check |
 | Codex missing | allowed | report | allowed; no Codex access | error | error | allowed; no Codex access |
 | Codex auth missing | allowed | report | allowed; no authentication check | error | error | allowed; no authentication check |
-| source checkout dirty or non-default | N/A | report if inspected | allowed; invoking checkout cleanliness is not inspected; read-only | error; no changes | allowed; not inspected | allowed if target is a different clean worktree |
+| source checkout dirty or non-default | N/A | report if inspected | local inventory; no cleanliness inspection | error; no changes | allowed; not inspected | allowed; selected invoking worktree also attempted |
 | Issue or comments not found/unreadable | N/A | N/A | not applicable; no Issue lookup; read-only | error before workspace creation | origin Issue error before Reviewer | not applicable; no Issue lookup |
 | PR absent, closed, merged, or non-default base | N/A | N/A | not applicable | not applicable | error before Reviewer | not applicable |
 | Open Draft PR | N/A | N/A | not applicable | not applicable | allowed | not applicable |
 | PR origin closing relation count is not exactly 1 | N/A | N/A | not applicable | not applicable | error before Reviewer | not applicable |
-| target PR branch/worktree/ownership absent or unrelated | N/A | N/A | observe mapped state only | not applicable | allowed; disposable workspace only | not applicable |
-| Issue branch/worktree both absent | N/A | optional report | `BROKEN`; non-zero if an ownership mapping exists; otherwise no row; no repair | create from default branch local HEAD commit | not inspected | error; mapping required; no changes |
-| matching iro-owned Issue worktree clean | N/A | optional report | `CLEAN`; success; read-only | reuse; fresh ephemeral run | not inspected | remove worktree, safe-delete branch, then remove mapping |
-| matching iro-owned Issue worktree dirty | N/A | report if discoverable | `DIRTY`; success; read-only | error; no cleanup | not inspected | error; no changes |
-| expected branch/path exists without valid ownership mapping | N/A | report if discoverable | ignore; no ownership guessing; read-only | error; no ownership guessing | not inspected | error; no ownership guessing |
-| branch/worktree collision | N/A | report if discoverable | `BROKEN`; non-zero for a mapped workspace; unowned resource ignored; no repair | error; no repair | not inspected | error; no repair |
-| invalid or mismatched ownership mapping | N/A | report if discoverable | `BROKEN`; non-zero; no repair | error; no repair | not inspected | error; no repair |
-| Issue branch tip not in invoking `HEAD` history | N/A | N/A | not applicable; read-only | not applicable | not inspected | error; no changes |
-| worktree removal or safe branch deletion failure | N/A | N/A | not applicable | not applicable | not applicable | non-zero; mapping retained |
-| successful full cleanup | N/A | N/A | no mapping remains | not applicable | not applicable | worktree, local branch, and mapping removed |
+| target PR branch/worktree/ownership absent or unrelated | N/A | N/A | local refs / registered runtime worktrees only | not applicable | allowed; disposable workspace only | not applicable; no PR lookup |
+| Issue branch/worktree both absent | N/A | optional report | no row; v1 mapping ignored | create from default branch local HEAD commit | not inspected | success with no selected targets and no observation failure |
+| matching iro-owned Issue worktree clean | N/A | optional report | branch / registered path / HEAD; read-only | reuse; fresh ephemeral run | not inspected | force-remove worktree / branch; verify post-state |
+| matching iro-owned Issue worktree dirty | N/A | report if discoverable | same inventory; no dirty classification | error; no cleanup | not inspected | force removal attempted; no dirty gate |
+| expected branch/path exists without valid ownership mapping | N/A | report if discoverable | inventory by local ref / registration; mapping ignored | error; no ownership guessing | not inspected | local namespace selection; mapping ignored |
+| branch/worktree collision | N/A | report if discoverable | show all registered paths | error; no repair | not inspected | attempt every selected worktree; mechanism failure reported |
+| invalid or mismatched ownership mapping | N/A | report if discoverable | ignored; no v1 authority | error; no repair | not inspected | ignored; no v1 authority |
+| Issue branch tip not in invoking `HEAD` history | N/A | N/A | inventory; ancestry not inspected | not applicable | not inspected | allowed; force branch deletion |
+| worktree removal or force branch deletion failure | N/A | N/A | not applicable | not applicable | not applicable | non-zero; independent actions continue; no rollback |
+| successful full cleanup | N/A | N/A | selected resources no longer inventoried | not applicable | not applicable | selected refs / registrations / known paths confirmed absent; mappings untouched |
 | Codex / Reviewer success | N/A | N/A | observe local state only; no semantic inference; read-only | log worker result; commit / push / open PR; PR delivery report; human review | opaque final response を PR comment; `FINDING` でも success | not applicable |
 | Codex / Reviewer failure | N/A | N/A | observe local state only; no semantic inference; read-only | comment failure result if possible; keep worktree; non-zero | no PR comment; non-zero | not applicable |
 | tracker comment failure | N/A | N/A | observe local state only; no semantic inference; read-only | keep local result; Issue failure report error preserves original failure; PR delivery comment error only warns; no Codex rerun | non-zero; no Reviewer rerun | not applicable |
