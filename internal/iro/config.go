@@ -49,13 +49,13 @@ func (c Config) Validate() error {
 		return fmt.Errorf("unsupported config version %d; supported version is 1", c.Version)
 	}
 	if c.TrackerType != "github" {
-		return fmt.Errorf("unsupported tracker.type %q; supported value is github", c.TrackerType)
+		return unsupportedTracker(c.TrackerType)
 	}
 	if strings.TrimSpace(c.TrackerRemote) == "" {
 		return fmt.Errorf("tracker.remote must be non-empty")
 	}
 	if c.AgentType != "codex" {
-		return fmt.Errorf("unsupported agent.type %q; supported value is codex", c.AgentType)
+		return unsupportedAgent(c.AgentType)
 	}
 	if c.WorkspaceStrategy != "git-worktree" {
 		return fmt.Errorf("unsupported workspace.strategy %q; supported value is git-worktree", c.WorkspaceStrategy)

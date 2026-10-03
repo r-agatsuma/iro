@@ -38,26 +38,45 @@ func (s *Service) land(prNumber int, unmanaged bool, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var identity RepositoryIdentity
 	if unmanaged {
-		identity, err = s.originIdentity(root)
-	} else {
-		var config Config
-		config, err = s.loadProjectConfig(root)
-		if err == nil {
-			identity, err = s.repositoryIdentity(root, config)
+		identity, err := s.originIdentity(root)
+		if err != nil {
+			return err
 		}
-		if err == nil {
-			err = checkGitHubContext(identity)
-		}
+		return s.landGitHubTarget(root, identity, prNumber, true, out)
 	}
+	config, err := s.loadProjectConfig(root)
 	if err != nil {
 		return err
 	}
-	if err := s.requireExecutable("gh"); err != nil {
+	return s.landTracker(root, config, prNumber, out)
+}
+
+func (s *Service) landTracker(root string, config Config, prNumber int, out io.Writer) error {
+	switch config.TrackerType {
+	case "github":
+		return s.landGitHub(root, config, prNumber, out)
+	default:
+		return unsupportedTracker(config.TrackerType)
+	}
+}
+
+func (s *Service) landGitHub(root string, config Config, prNumber int, out io.Writer) error {
+	identity, err := s.repositoryIdentity(root, config)
+	if err != nil {
 		return err
 	}
-	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
+	if err := checkGitHubContext(identity); err != nil {
+		return err
+	}
+	return s.landGitHubTarget(root, identity, prNumber, false, out)
+}
+
+func (s *Service) landGitHubTarget(root string, identity RepositoryIdentity, prNumber int, unmanaged bool, out io.Writer) error {
+	if err := s.requireTrackerExecutable("github"); err != nil {
+		return err
+	}
+	if err := s.checkTrackerAuth("github", root, identity); err != nil {
 		return err
 	}
 	target, err := s.inspectLandTarget(root, identity, prNumber, unmanaged)

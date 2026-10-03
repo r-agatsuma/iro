@@ -32,7 +32,7 @@ func (s *Service) reviseWithModel(prNumber int, model string, out io.Writer) err
 	return s.reviseWithOptions(prNumber, workerOptions{Model: model}, out)
 }
 
-func (s *Service) reviseWithOptions(prNumber int, options workerOptions, out io.Writer) (operationErr error) {
+func (s *Service) reviseWithOptions(prNumber int, options workerOptions, out io.Writer) error {
 	if prNumber <= 0 {
 		return fmt.Errorf("pull request number must be a positive decimal integer")
 	}
@@ -51,6 +51,23 @@ func (s *Service) reviseWithOptions(prNumber int, options workerOptions, out io.
 	if err != nil {
 		return fmt.Errorf("iro.toml is unreadable: %w", err)
 	}
+	return s.reviseTracker(root, config, prNumber, configData, options, out)
+}
+
+func (s *Service) reviseTracker(root string, config Config, prNumber int, configData []byte, options workerOptions, out io.Writer) error {
+	switch config.TrackerType {
+	case "github":
+		return s.reviseGitHub(root, config, prNumber, configData, options, out)
+	default:
+		return unsupportedTracker(config.TrackerType)
+	}
+}
+
+func (s *Service) reviseGitHub(root string, config Config, prNumber int, configData []byte, options workerOptions, out io.Writer) (operationErr error) {
+	agent, err := s.selectAgent(config.AgentType)
+	if err != nil {
+		return err
+	}
 	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
 		return err
@@ -58,10 +75,10 @@ func (s *Service) reviseWithOptions(prNumber int, options workerOptions, out io.
 	if err := checkGitHubContext(identity); err != nil {
 		return err
 	}
-	if err := s.requireExecutable("gh"); err != nil {
+	if err := s.requireTrackerExecutable(config.TrackerType); err != nil {
 		return err
 	}
-	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
+	if err := s.checkTrackerAuth(config.TrackerType, root, identity); err != nil {
 		return err
 	}
 	target, err := s.inspectReviseTarget(root, identity, prNumber)
@@ -82,10 +99,7 @@ func (s *Service) reviseWithOptions(prNumber int, options workerOptions, out io.
 	if err != nil {
 		return err
 	}
-	if err := s.requireExecutable("codex"); err != nil {
-		return err
-	}
-	if err := s.checkAuth("codex", []string{"login", "status"}, root); err != nil {
+	if err := agent.preflight(root); err != nil {
 		return err
 	}
 
@@ -112,7 +126,7 @@ func (s *Service) reviseWithOptions(prNumber int, options workerOptions, out io.
 	}
 
 	started := s.Now().UTC()
-	result := s.runRevisionAuthor(workspace, identity, target, origin, configData, workflowData, context, options)
+	result := agent.runRevisionAuthor(workspace, identity, target, origin, configData, workflowData, context, options)
 	logPath, err := s.writeReviseLog(identity, target, workspace, started, result)
 	if err != nil {
 		return fmt.Errorf("Author finished with status %d, but its report could not be saved; changes kept at %s: %w", result.ExitCode, workspace, err)
@@ -426,8 +440,8 @@ func (s *Service) readStartingWorkflow(workspace, head string) ([]byte, error) {
 	return []byte(result.Stdout), nil
 }
 
-func (s *Service) runRevisionAuthor(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, options workerOptions) CommandResult {
-	return s.Runner.Run(CommandSpec{
+func (c codexRuntime) runRevisionAuthor(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, options workerOptions) CommandResult {
+	return c.service.Runner.Run(CommandSpec{
 		Name: "codex",
 		Args: withCodexOptions(append(codexWorkerArgs(workspace, options), []string{
 			"-c", "developer_instructions=" + strconv.Quote(reviseDeveloperInstructions),

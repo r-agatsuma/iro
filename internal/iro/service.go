@@ -159,7 +159,12 @@ func (s *Service) Doctor(out io.Writer) error {
 			remote = config.TrackerRemote
 			check("configured GitHub remote", func() error {
 				var err error
-				identity, err = s.repositoryIdentity(root, config)
+				switch config.TrackerType {
+				case "github":
+					identity, err = s.repositoryIdentity(root, config)
+				default:
+					return unsupportedTracker(config.TrackerType)
+				}
 				if err == nil {
 					host, repository = identity.Host(), identity.String()
 				}
@@ -187,7 +192,12 @@ func (s *Service) Doctor(out io.Writer) error {
 
 	ghAvailable := false
 	check("gh executable", func() error {
-		if err := s.requireExecutable("gh"); err != nil {
+		// Diagnose supported tools even when project configuration is unavailable.
+		trackerType := "github"
+		if configValid {
+			trackerType = config.TrackerType
+		}
+		if err := s.requireTrackerExecutable(trackerType); err != nil {
 			return err
 		}
 		ghAvailable = true
@@ -200,12 +210,21 @@ func (s *Service) Doctor(out io.Writer) error {
 		if !contextValid {
 			return fmt.Errorf("GitHub CLI context is invalid; resolve the context diagnostic and retry")
 		}
-		return s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root)
+		return s.checkTrackerAuth(config.TrackerType, root, identity)
 	})
 
+	// This is the supported-tool health inventory, not an operation fallback.
+	agentType := "codex"
+	if configValid {
+		agentType = config.AgentType
+	}
+	agent, agentErr := s.selectAgent(agentType)
 	codexAvailable := false
 	check("codex executable", func() error {
-		if err := s.requireExecutable("codex"); err != nil {
+		if agentErr != nil {
+			return agentErr
+		}
+		if err := agent.requireExecutable(); err != nil {
 			return err
 		}
 		codexAvailable = true
@@ -213,7 +232,7 @@ func (s *Service) Doctor(out io.Writer) error {
 	})
 	if codexAvailable {
 		check("Codex authentication", func() error {
-			return s.checkAuth("codex", []string{"login", "status"}, root)
+			return agent.checkAuth(root)
 		})
 	} else {
 		failures++
@@ -238,7 +257,7 @@ func (s *Service) runWithModel(issueNumber int, model string, out, errOut io.Wri
 	return s.runWithOptions(issueNumber, workerOptions{Model: model}, out, errOut)
 }
 
-func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, errOut io.Writer) (runErr error) {
+func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, errOut io.Writer) error {
 	if options.Unmanaged {
 		return s.runUnmanaged(issueNumber, options, out, errOut)
 	}
@@ -265,6 +284,23 @@ func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, er
 	if _, err := s.FileSystem.ReadFile(filepath.Join(root, "WORKFLOW.md")); err != nil {
 		return fmt.Errorf("WORKFLOW.md is missing or unreadable")
 	}
+	return s.runTracker(root, config, issueNumber, options, out, errOut)
+}
+
+func (s *Service) runTracker(root string, config Config, issueNumber int, options workerOptions, out, errOut io.Writer) error {
+	switch config.TrackerType {
+	case "github":
+		return s.runGitHub(root, config, issueNumber, options, out, errOut)
+	default:
+		return unsupportedTracker(config.TrackerType)
+	}
+}
+
+func (s *Service) runGitHub(root string, config Config, issueNumber int, options workerOptions, out, errOut io.Writer) (runErr error) {
+	agent, err := s.selectAgent(config.AgentType)
+	if err != nil {
+		return err
+	}
 	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
 		return err
@@ -275,10 +311,10 @@ func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, er
 	if err := s.checkoutClean(root); err != nil {
 		return err
 	}
-	if err := s.requireExecutable("gh"); err != nil {
+	if err := s.requireTrackerExecutable(config.TrackerType); err != nil {
 		return err
 	}
-	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
+	if err := s.checkTrackerAuth(config.TrackerType, root, identity); err != nil {
 		return err
 	}
 	if err := s.verifyPushRemote(root, config.TrackerRemote, identity); err != nil {
@@ -292,10 +328,7 @@ func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, er
 	if err != nil {
 		return err
 	}
-	if err := s.requireExecutable("codex"); err != nil {
-		return err
-	}
-	if err := s.checkAuth("codex", []string{"login", "status"}, root); err != nil {
+	if err := agent.preflight(root); err != nil {
 		return err
 	}
 	allocation, err := s.allocateRunDelivery(root, identity, issueNumber, config.TrackerRemote, false)
@@ -318,7 +351,7 @@ func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, er
 	}
 
 	started := s.Now().UTC()
-	codexResult := s.runCodex(workspace, identity, target, options)
+	codexResult := agent.runAuthor(workspace, identity, target, options)
 	finished := s.Now().UTC()
 	if !commandSucceeded(codexResult) {
 		operationErr := state.failure(fmt.Errorf("Codex exited with status %d (%v); worktree was kept for human inspection", codexResult.ExitCode, codexResult.Err))
@@ -535,13 +568,13 @@ Work only on the supplied Issue and avoid unrelated changes.
 Run relevant tests when feasible.
 Keep the final Author report focused on material changes actually made, validation actually performed and its results, and known limitations that materially affect correctness or the Issue acceptance criteria. Git lifecycle state, including whether changes are uncommitted or committed, push state, and PR state, is outside the Author report's responsibility because iro owns delivery after the Author exits. Do not enumerate optional or unrequested validation that was not performed. You may report an unperformed validation when its absence leaves an acceptance criterion or concrete correctness risk materially unresolved. Return the final work report in Japanese within this scope.`
 
-func (s *Service) runCodex(workspace string, identity RepositoryIdentity, target issue, options workerOptions) CommandResult {
+func (c codexRuntime) runAuthor(workspace string, identity RepositoryIdentity, target issue, options workerOptions) CommandResult {
 	payload := buildIssuePayload(identity, target)
 	policy := developerInstructions
 	if options.Unmanaged {
 		policy = unmanagedDeveloperInstructions
 	}
-	return s.Runner.Run(CommandSpec{
+	return c.service.Runner.Run(CommandSpec{
 		Name: "codex",
 		Args: withCodexOptions(append(codexWorkerArgs(workspace, options), []string{
 			"-c", "developer_instructions=" + strconv.Quote(policy),
