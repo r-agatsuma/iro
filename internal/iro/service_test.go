@@ -60,6 +60,11 @@ func writeProjectFiles(t *testing.T, root string) {
 }
 
 func standardFakeResult(spec CommandSpec, root, workspace string, issueFailure bool, dirtyWorkspace bool) CommandResult {
+	if normalized, result := pushInspectionForTest(spec); result != nil {
+		return *result
+	} else {
+		spec = normalized
+	}
 	if spec.Name == "git" {
 		switch {
 		case len(spec.Args) > 1 && spec.Args[0] == "rev-parse" && spec.Args[len(spec.Args)-1] == "--git-common-dir":

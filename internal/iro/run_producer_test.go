@@ -3,6 +3,7 @@ package iro
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,6 +18,20 @@ func validDeliveryHeadForTest(value any, number int) bool {
 	}
 	issue, _, err := parseDeliveryBranch(branch)
 	return err == nil && issue == number
+}
+
+// Producer fixtures model the command-local alias resolution. Real Git rewrite
+// behavior is covered separately without accessing a network endpoint.
+func pushInspectionForTest(spec CommandSpec) (CommandSpec, *CommandResult) {
+	if spec.Name == "git" && len(spec.Args) > 2 && spec.Args[0] == "-c" {
+		setting := spec.Args[1]
+		spec.Args = spec.Args[2:]
+		if containsString(spec.Args, "--get-url") {
+			endpoint, _, _ := strings.Cut(strings.TrimPrefix(setting, "url."), ".insteadOf=")
+			return spec, &CommandResult{Stdout: endpoint}
+		}
+	}
+	return spec, nil
 }
 
 func producerMutationStages(stages []string) []string {
@@ -53,6 +68,11 @@ func newManagedProducerFixture(t *testing.T) *managedProducerFixture {
 
 func (f *managedProducerFixture) run(spec CommandSpec) CommandResult {
 	f.t.Helper()
+	if normalized, result := pushInspectionForTest(spec); result != nil {
+		return *result
+	} else {
+		spec = normalized
+	}
 	if f.intercept != nil {
 		if result, ok := f.intercept(spec); ok {
 			return result
@@ -164,6 +184,187 @@ func TestRunProducesIndependentDeliveries(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRemoteCollisionUsesExpandedPushEndpointOnce(t *testing.T) {
+	const raw = "https://github.com/acme/iro.git"
+	const endpoint = "git@github.com:acme/iro.git"
+	for _, kind := range []string{"insteadOf", "pushInsteadOf", "alias collision", "namespace parent", "namespace child", "similar ref"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			advertisement := filepath.Join(dir, "advertisement")
+			ssh := filepath.Join(dir, "ssh")
+			transportLog := filepath.Join(dir, "transport.log")
+			ref := "refs/heads/" + deliveryBranch(123, foundationID)
+			switch kind {
+			case "namespace parent":
+				ref = "refs/heads/iro"
+			case "namespace child":
+				ref += "/nested/child"
+			case "similar ref":
+				ref += "-other"
+			}
+			line := foundationHEAD + " " + ref + "\x00\n"
+			if err := os.WriteFile(advertisement, []byte(fmt.Sprintf("%04x%s0000", len(line)+4, line)), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// SSH is a local protocol stub: Git reads an advertised collision without
+			// contacting GitHub, and the stub rejects the rewritten wrong endpoint.
+			script := `#!/bin/sh
+printf '%s\n' "$*" >> "$IRO_TEST_TRANSPORT_LOG"
+case "$*" in
+  *git@github.com*"git-upload-pack 'acme/iro.git'") cat "$IRO_TEST_ADVERTISEMENT" ;;
+  *) echo "unexpected endpoint" >&2; exit 1 ;;
+esac
+`
+			if err := os.WriteFile(ssh, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("GIT_SSH_COMMAND", ssh)
+			t.Setenv("GIT_SSH_VARIANT", "ssh")
+			t.Setenv("IRO_TEST_ADVERTISEMENT", advertisement)
+			t.Setenv("IRO_TEST_TRANSPORT_LOG", transportLog)
+			config := []string{"-c", "url.ssh://wrong.invalid/iro.git.insteadOf=" + endpoint}
+			key := "insteadOf"
+			if kind == "pushInsteadOf" {
+				key = "pushInsteadOf"
+			}
+			config = append(config, "-c", "url."+endpoint+"."+key+"="+raw)
+			if kind == "alias collision" {
+				config = append(config, "-c", "url.ssh://wrong.invalid/iro.git.insteadOf=iro-push-endpoint:"+string(foundationID))
+			}
+			git := NewOSCommandRunner()
+			// Allocation receives endpoint after get-url --push has already expanded
+			// raw with insteadOf or pushInsteadOf. Only the subsequent read is tested.
+			// Demonstrate the original bug with a read-only resolution command.
+			args := append(append([]string{}, config...), "ls-remote", "--get-url", "--", endpoint)
+			wrong := git.Run(CommandSpec{Name: "git", Args: args, Dir: dir})
+			if !commandSucceeded(wrong) || strings.TrimSpace(wrong.Stdout) != "ssh://wrong.invalid/iro.git" {
+				t.Fatalf("fixture did not reproduce double rewrite: %+v", wrong)
+			}
+			runner := &fakeCommandRunner{fn: func(spec CommandSpec) CommandResult {
+				spec.Args = append(append([]string{}, config...), spec.Args...)
+				return git.Run(spec)
+			}}
+			service := NewService(runner, NewOSFileSystem())
+			allocation := &deliveryAllocation{id: foundationID, issue: 123, branch: deliveryBranch(123, foundationID), pushURL: endpoint}
+			collision, err := service.inspectRemoteDeliveryCollision(dir, allocation)
+			if kind == "alias collision" {
+				if err == nil || len(runner.calls) != 1 {
+					t.Fatalf("endpoint mismatch did not stop before remote read: %t %v", collision, err)
+				}
+				if _, err := os.Stat(transportLog); !os.IsNotExist(err) {
+					t.Fatalf("unexpected transport invocation: %v", err)
+				}
+			} else if err != nil || collision != (kind != "similar ref") {
+				t.Fatalf("incorrect collision at actual push endpoint: %t %v", collision, err)
+			}
+		})
+	}
+}
+
+func TestRunRemoteNamespaceCollisions(t *testing.T) {
+	for _, unmanaged := range []bool{false, true} {
+		for _, phase := range []string{"allocation", "creation", "push"} {
+			for _, kind := range []string{"parent", "child", "similar ref"} {
+				name := fmt.Sprintf("unmanaged=%t/%s/%s", unmanaged, phase, kind)
+				t.Run(name, func(t *testing.T) {
+					var service *Service
+					var intercept *func(CommandSpec) (CommandResult, bool)
+					if unmanaged {
+						f := newUnmanagedFixture(t)
+						service, intercept = f.service, &f.intercept
+					} else {
+						f := newManagedProducerFixture(t)
+						service, intercept = f.service, &f.intercept
+					}
+					ids, reads, adds, workers, pushes := 0, 0, 0, 0, 0
+					service.newDeliveryID = func() (deliveryID, error) {
+						ids++
+						if ids == 1 {
+							return foundationID, nil
+						}
+						return foundationOtherID, nil
+					}
+					*intercept = func(spec CommandSpec) (CommandResult, bool) {
+						if spec.Name == "codex" && containsString(spec.Args, "--ephemeral") {
+							workers++
+						}
+						if spec.Name != "git" {
+							return CommandResult{}, false
+						}
+						if containsArgs(spec.Args, "worktree", "add") {
+							adds++
+						}
+						if spec.Args[0] == "push" {
+							pushes++
+						}
+						if spec.Args[0] != "ls-remote" || len(spec.Args) < 4 || !strings.HasPrefix(spec.Args[3], "iro-push-endpoint:") {
+							return CommandResult{}, false
+						}
+						reads++
+						ref := spec.Args[len(spec.Args)-2]
+						if !containsString(spec.Args, "refs/heads/iro") || spec.Args[len(spec.Args)-1] != ref+"/*" {
+							t.Fatalf("namespace not requested: %v", spec.Args)
+						}
+						if phase == "creation" && reads < 2 || phase == "push" && workers == 0 {
+							return CommandResult{}, true
+						}
+						remoteRef := "refs/heads/iro"
+						if kind == "child" {
+							remoteRef = "refs/heads/" + deliveryBranch(123, foundationID) + "/nested/child"
+						} else if kind == "similar ref" {
+							remoteRef = ref + "-other"
+						}
+						// Model ls-remote's ref filtering; an exact-only query would
+						// hide parents/children, reproducing the reviewed bug.
+						for _, pattern := range spec.Args[4:] {
+							if pattern == remoteRef || strings.HasSuffix(pattern, "/*") && strings.HasPrefix(remoteRef, strings.TrimSuffix(pattern, "*")) {
+								return CommandResult{Stdout: foundationHEAD + "\t" + remoteRef + "\n"}, true
+							}
+						}
+						return CommandResult{}, true
+					}
+					var out, diagnostic strings.Builder
+					err := service.runWithOptions(123, workerOptions{Unmanaged: unmanaged}, &out, &diagnostic)
+					if kind == "similar ref" || phase == "allocation" && kind == "child" {
+						wantIDs := 1
+						if kind == "child" {
+							wantIDs = 2
+							if !strings.Contains(out.String(), string(foundationOtherID)) {
+								t.Fatal("replacement ID missing", out.String())
+							}
+						}
+						if err != nil || ids != wantIDs || adds != 1 || workers != 1 || pushes != 1 {
+							t.Fatalf("independent allocation failed: ids=%d adds=%d workers=%d pushes=%d err=%v", ids, adds, workers, pushes, err)
+						}
+					} else {
+						if err == nil || pushes != 0 {
+							t.Fatalf("collision not rejected: pushes=%d err=%v", pushes, err)
+						}
+						if phase == "allocation" {
+							if ids != 16 || adds != 0 || workers != 0 {
+								t.Fatalf("namespace parent caused side effects: ids=%d adds=%d workers=%d", ids, adds, workers)
+							}
+						} else {
+							wantEffects := 0
+							if phase == "push" {
+								wantEffects = 1
+							}
+							if ids != 1 || adds != wantEffects || workers != wantEffects || !strings.Contains(err.Error(), string(foundationID)) {
+								t.Fatalf("creation boundary changed: ids=%d adds=%d workers=%d err=%v", ids, adds, workers, err)
+							}
+						}
+						if phase != "push" {
+							if _, statErr := os.Stat(service.Dirs.DataRoot); !os.IsNotExist(statErr) {
+								t.Fatalf("workspace directories created before rejection: %v", statErr)
+							}
+						}
+					}
+				})
+			}
+		}
 	}
 }
 

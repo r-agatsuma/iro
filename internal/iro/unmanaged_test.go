@@ -34,6 +34,11 @@ func newUnmanagedFixture(t *testing.T) *unmanagedFixture {
 // artifacts are real. Unknown commands fail the test instead of succeeding.
 func (f *unmanagedFixture) run(spec CommandSpec) CommandResult {
 	f.t.Helper()
+	if normalized, result := pushInspectionForTest(spec); result != nil {
+		return *result
+	} else {
+		spec = normalized
+	}
 	command := strings.Join(spec.Args, " ")
 	stage := ""
 	if spec.Name == "git" {

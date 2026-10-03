@@ -10,7 +10,11 @@ import (
 // remoteHeads reads the actual endpoint, never a possibly stale tracking ref.
 func (s *Service) remoteHeads(root, destination string, refs ...string) (map[string]string, error) {
 	args := append([]string{"ls-remote", "--heads", "--", destination}, refs...)
-	result := s.Runner.Run(CommandSpec{Name: "git", Args: args, Dir: root})
+	return s.readRemoteHeads(CommandSpec{Name: "git", Args: args, Dir: root})
+}
+
+func (s *Service) readRemoteHeads(spec CommandSpec) (map[string]string, error) {
+	result := s.Runner.Run(spec)
 	if !commandSucceeded(result) {
 		return nil, fmt.Errorf("could not inspect remote refs; verify remote access")
 	}
@@ -82,12 +86,23 @@ func (s *Service) allocateRunDelivery(root string, identity RepositoryIdentity, 
 
 func (s *Service) inspectRemoteDeliveryCollision(root string, allocation *deliveryAllocation) (bool, error) {
 	ref := "refs/heads/" + allocation.branch
-	heads, err := s.remoteHeads(root, allocation.pushURL, ref)
+	// get-url --push already expanded the URL. Rewrite a private alias to that
+	// exact endpoint in one pass, rather than rewriting the endpoint a second time.
+	alias := "iro-push-endpoint:" + string(allocation.id)
+	prefix := []string{"-c", "url." + allocation.pushURL + ".insteadOf=" + alias, "ls-remote"}
+	resolveArgs := append(append([]string{}, prefix...), "--get-url", "--", alias)
+	resolved := s.Runner.Run(CommandSpec{Name: "git", Args: resolveArgs, Dir: root})
+	if !commandSucceeded(resolved) || strings.TrimSpace(resolved.Stdout) != allocation.pushURL {
+		return false, fmt.Errorf("could not resolve the exact push endpoint for collision inspection; no remote read attempted")
+	}
+	// Request both the namespace parent and all descendants of the intended ref.
+	args := append(prefix, "--heads", "--", alias, "refs/heads/iro", ref, ref+"/*")
+	heads, err := s.readRemoteHeads(CommandSpec{Name: "git", Args: args, Dir: root})
 	if err != nil {
 		return false, err
 	}
 	for name := range heads {
-		if name == ref || strings.HasPrefix(name, ref+"/") {
+		if name == "refs/heads/iro" || name == ref || strings.HasPrefix(name, ref+"/") {
 			return true, nil
 		}
 	}

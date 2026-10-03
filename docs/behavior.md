@@ -1487,7 +1487,7 @@ managed worktree: <DataRoot>/workspaces/<repository-key>/issue-N-<delivery-id>
 
 Issue number は Human-readable hint と physical cleanup selector であり、PR origin の authority として使ってはならない。repository-key は既存の path grouping のための値であり、remote identity だけで local ownership を判断してはならない。
 
-allocation / collision inspection は local side effect を起こしてはならない。この段階では既存 local ref、registered worktree path、filesystem path（dangling symlink を含む）、実際の push destination の intended remote ref との衝突時に新しい ID を生成してよい。`refs/heads/iro` および生成予定 ref の子 ref による namespace collision も拒否する。連続 16 回の衝突は error とする。不正な ID、entropy failure、inventory / filesystem observation failure は衝突として retry せず error とする。
+allocation / collision inspection は local side effect を起こしてはならない。この段階では既存 local ref、registered worktree path、filesystem path（dangling symlink を含む）、実際の push destination の intended remote ref との衝突時に新しい ID を生成してよい。`refs/heads/iro` および生成予定 ref の子 ref による namespace collision も local / remote の双方で拒否する。remote 検査は intended ref に加えて親 ref と全ての子 ref を取得する。`remote get-url --push` で展開済みの effective URL に `url.*.insteadOf` を再適用して別 endpoint を検査してはならない。command-local alias の一度の rewrite により exact endpoint を読み取り、事前の URL 解決確認に失敗した場合は remote read 前に停止する。連続 16 回の衝突は error とする。不正な ID、entropy failure、inventory / filesystem / remote observation failure は衝突として retry せず error とする。
 
 registered path との照合は LOCAL-003 と共通の path 解決処理を使い、祖先 symlink 経由でも同じ場所を衝突として扱う。対象 directory やその親が消失した detached 登録も検査対象とし、directory が存在しないことを理由に登録を無視してはならない。
 
