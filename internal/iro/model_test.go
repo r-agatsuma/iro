@@ -82,16 +82,16 @@ func TestCodexModelOverrideArguments(t *testing.T) {
 func TestCodexReasoningEffortOverrideArguments(t *testing.T) {
 	base := []string{"--cd", "workspace", "exec", "--ephemeral"}
 	want := []string{"--cd", "workspace", "-c", `model_reasoning_effort="xhigh"`, "exec", "--ephemeral"}
-	if got := withCodexOptions(base, workerOptions{ReasoningEffort: "xhigh"}); !reflect.DeepEqual(got, want) {
+	if got := withCodexOptions(base, codexOptions{ReasoningEffort: "xhigh"}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("withCodexOptions with reasoning effort = %v, want %v", got, want)
 	}
 
 	want = []string{"--cd", "workspace", "--model", "gpt-test", "-c", `model_reasoning_effort="low"`, "exec", "--ephemeral"}
-	if got := withCodexOptions(base, workerOptions{Model: "gpt-test", ReasoningEffort: "low"}); !reflect.DeepEqual(got, want) {
+	if got := withCodexOptions(base, codexOptions{Model: "gpt-test", ReasoningEffort: "low"}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("withCodexOptions with model and reasoning effort = %v, want %v", got, want)
 	}
 
-	if got := withCodexOptions(base, workerOptions{}); !reflect.DeepEqual(got, base) {
+	if got := withCodexOptions(base, codexOptions{}); !reflect.DeepEqual(got, base) {
 		t.Fatalf("withCodexOptions without overrides = %v, want %v", got, base)
 	}
 }

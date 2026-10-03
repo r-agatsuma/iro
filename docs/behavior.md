@@ -340,6 +340,20 @@ Run / Review / Revise の全 worker caller は選択した concrete Codex runtim
 
 選択した GitHub operation は worker boundary で選択した Codex runtime を呼び出してよい。Land は agent runtime / 認証 / executable を要求せず、Status / Cleanup は tracker / agent selection を行わない。unmanaged は backend / policy authority のために project config / WORKFLOW を読み込まない。config schema と public value set は CFG-001 のままとし、`gitea` / `copilot` を support しない。
 
+### CFG-004: tracker input / iro policy / concrete Codex connector
+
+worker boundary は次の責務を分離する。
+
+- concrete tracker operation は Issue / PR / review data の取得、relation の解釈、snapshot の検証と operation-specific な task/context の rendering を所有する。現在の GitHub renderer は GitHub 固有の型と JSON context を維持する。共通 Issue / PR DTO や universal task schema へ変換しない。
+- iro worker policy は operation / mode ごとの control instructions と、入力に含める policy section を外部 task/context から区別して構築する。managed Run は starting workspace の `WORKFLOW.md` を worker に読ませ、managed Review は invoking checkout から読み取った全文、managed Revise は verified starting H1 の固定 blob を使用する。unmanaged は built-in policy のみを使用する。AGENTS guidance、外部 Issue / PR / comment / diff は既存の safety boundary を拡張できない。
+- concrete Codex connector は rendered control instructions、operation の起動文、rendered stdin、Codex requested options と workspace を受け取る。GitHub identity、Issue / PR 型や relation resolver を要求しない。executable / auth、model / reasoning override、sandbox / network / approval、developer-instruction transport、ephemeral execution と raw result の返却を所有する。これらは Codex 固有の contract であり、共通 Agent interface ではない。
+
+現在の transport は control instructions を `developer_instructions`、task/context を stdin に渡す。Review / Revise の WORKFLOW または built-in policy section は既存どおり stdin 内に明示したままとし、外部本文を developer instructions へ取り込まない。Review の observed base / verified head は tracker operation から policy builder へ渡し、resolved model identity の取得不能は Codex connector が明示する。requested model / effort を resolved provenance として扱わない。
+
+connector は stdout（現在の final response）、stderr、exit status と command error を変更せず caller に返す。opaque report forwarding、operation ごとに異なる empty-report rule、comment / cleanup の順序、log path / content、failure / retention は各 operation が引き続き所有する。Land / Status / Cleanup は worker-free のままとする。
+
+将来の concrete tracker operation は独自の domain data から task/context を render してこの Codex connector を呼べる。将来の別 agent は iro policy を使用して独自 connector を構成できるが、Codex の argv / auth / provenance / result transport を universal Agent semantics として継承する必要はない。この境界の分離は Gitea / 別 agent の support や policy の自動変換を導入しない。
+
 Doctor は valid config の selector に従って configured GitHub identity と supported combination の認証・executable check を接続する。config が利用不能・invalid な場合も、既存の Git / gh / Codex tool health inventory は独立した診断として継続する。これは operation の backend fallback を許可するものではない。
 
 ## 5. `iro init`
