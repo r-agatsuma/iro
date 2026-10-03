@@ -187,13 +187,16 @@ func (c copilotRuntime) execute(root, workspace, commonDir string, policy worker
 		args = append(args, "--reasoning-effort", options.ReasoningEffort)
 	}
 	// Prompt-mode repository hook opt-in overrides disableAllHooks in CLI
-	// 1.0.91. Disable it in the child without changing Human configuration.
+	// 1.0.91. Disable repository execution opt-ins explicitly in the child;
+	// private config defaults alone must not control these paths.
 	result := c.runner.Run(CommandSpec{Name: "copilot", Args: args, Dir: workspace, Stdin: []byte(payload), Env: map[string]string{
-		"COPILOT_HOME":                          dir,
-		"COPILOT_AUTO_UPDATE":                   "false",
-		"COPILOT_ALLOW_ALL":                     "false",
-		"COPILOT_ASSISTED_APPROVAL":             "false",
-		"GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS": "false",
+		"COPILOT_HOME":                             dir,
+		"COPILOT_AUTO_UPDATE":                      "false",
+		"COPILOT_ALLOW_ALL":                        "false",
+		"COPILOT_ASSISTED_APPROVAL":                "false",
+		"GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS":    "false",
+		"GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS":    "false",
+		"GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP": "false",
 	}, Timeout: copilotWorkerTimeout})
 	// Raw events include task echoes and tool details. Forward only a deterministic
 	// Author report, never a whole event stream as an apparent final response.
@@ -218,6 +221,7 @@ func redactCopilotSecrets(value string) string {
 // The observed 1.0.91 JSONL stream has assistant.message data and a terminal
 // result with exitCode. Unknown event types, tool errors and incomplete endings
 // fail closed, even if the CLI's process status is zero.
+// Provider finish reasons discarded by the CLI are outside this boundary.
 func parseCopilotOutput(output string) (string, error) {
 	fail := func() (string, error) {
 		return "", fmt.Errorf("Copilot returned malformed, failed, empty, or incomplete JSONL completion; inspect the runtime/provider configuration before retrying")

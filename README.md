@@ -624,7 +624,7 @@ iro run 123 --model <copilot-model> --reasoning-effort high
 
 Human environment の公式 [BYOK/custom-provider](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#environment-variables) 設定を許可する。有料 GitHub-hosted Copilot account はこの connector の実装・テストに必要ない。project environment で GitHub-hosted Copilot service は未 acceptance であり、production support / Codex parity を主張しない。agent / account / provider / model の自動 fallback は行わない。
 
-Copilot CLI 1.0.91 の実行を確認している。exact patch pin はせず、必要な native flags と JSONL completion を検証する。auto-update を disabled にし、stdin の complete task/context と外部 private custom-agent profile の controlling policy を分離する。Human の native config を private home にコピーし、auto routing fallback / memory / hooks / plugins を無効化する。repository hooks の有効化環境変数 `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS` は子プロセスで false に上書きする。Human の config / credential は変更せず、session を resume / adopt しない。repository instruction files には Copilot の semantics が適用される。
+Copilot CLI 1.0.91 の実行を確認している。exact patch pin はせず、必要な native flags と JSONL completion を検証する。auto-update を disabled にし、stdin の complete task/context と外部 private custom-agent profile の controlling policy を分離する。Human の native config を private home にコピーし、auto routing fallback / memory / hooks / plugins を無効化する。repository hooks / extensions / workspace MCP の有効化環境変数 `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS` / `GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS` / `GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP` は子プロセスで明示的に false に上書きする。Human の config / credential は変更せず、session を resume / adopt しない。repository instruction files には Copilot の semantics が適用される。
 
 shell / file tools を制限し、非対話 approval、ask-user / built-in MCP / remote export の無効化、Git / gh deny patterns を使う。これらは **hard OS sandbox ではない**。allowed shell は path / command heuristics を回避でき、Human が許可した development VM と behavioral policy が trust boundary となる。`--no-sandbox` は Copilot で使用できない。
 
@@ -636,7 +636,7 @@ Doctor は Copilot executable / version / invocation flags を read-only で診�
 IRO_TEST_COPILOT_CLI=1 go test ./internal/iro -run TestCopilotLocalBYOKAcceptance -v
 ```
 
-worker timeout は 30 分。終了コード、非空 final response、JSONL completion を検証し、unknown / malformed output、tool failure、timeout、permission / provider rejection は failure とする。Git commit / push / PR create と result / failure comments は既存 Run 同様に iro が所有する。詳細は [Copilot の runtime contract](docs/behavior.md#run-copilot-001-experimental-selection-and-option-matrix) を参照する。
+worker timeout は 30 分。終了コード、非空 final response、JSONL completion を検証し、unknown / malformed output、未完了 tool、tool failure、timeout、CLI が公開する permission / provider rejection は failure とする。観測境界は Copilot CLI であり、CLI が破棄した provider 終了理由を HTTP proxy 等で復元しない。例えば BYOK の `finish_reason=length` / `finish_reason=content_filter` が正常な CLI completion に変換され、理由が出力に残らなければ、iro は成功として扱う場合がある。これは experimental な制約である。Git commit / push / PR create と result / failure comments は既存 Run 同様に iro が所有する。詳細は [Copilot の runtime contract](docs/behavior.md#run-copilot-001-experimental-selection-and-option-matrix) を参照する。
 
 ### `WORKFLOW.md`
 

@@ -511,17 +511,54 @@ func TestOSCommandRunnerTimeoutAndEnvironmentOverrides(t *testing.T) {
 	}
 }
 
+func TestCopilotDisablesInheritedRepositoryExecutionOptIns(t *testing.T) {
+	t.Setenv("COPILOT_HOME", t.TempDir())
+	optIns := []string{
+		"GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS",
+		"GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS",
+		"GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP",
+	}
+	for _, name := range optIns {
+		t.Setenv(name, "true")
+	}
+	runner := &fakeCommandRunner{fn: func(spec CommandSpec) CommandResult {
+		// Exercise the actual environment merge at the process boundary, using
+		// a local shell in place of Copilot and a valid CLI completion fixture.
+		spec.Name = "sh"
+		spec.Args = []string{"-c", `printf '%s\n' "$GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS" "$GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS" "$GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP" >&2; cat`}
+		spec.Stdin = []byte(copilotCompletionForTest("完了"))
+		return NewOSCommandRunner().Run(spec)
+	}}
+	c := copilotRuntime{runner: runner, files: NewOSFileSystem()}
+	result := c.execute(t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), ".git"), copilotRunWorkerPolicy(), "task", copilotOptions{})
+	if !commandSucceeded(result) || result.Stdout != "完了" || result.Stderr != "false\nfalse\nfalse\n" {
+		t.Fatalf("repository execution opt-ins reached child: %+v", result)
+	}
+	for _, name := range optIns {
+		if os.Getenv(name) != "true" {
+			t.Fatalf("Human environment changed: %s", name)
+		}
+	}
+}
+
 // Opt-in acceptance uses the installed CLI with a loopback BYOK provider only.
 // No paid account, real provider credentials, GitHub calls or tracker mutation.
 func TestCopilotLocalBYOKAcceptance(t *testing.T) {
 	if os.Getenv("IRO_TEST_COPILOT_CLI") != "1" {
 		t.Skip("set IRO_TEST_COPILOT_CLI=1 to exercise the installed CLI with a local BYOK provider")
 	}
-	t.Run("synchronous edit", func(t *testing.T) { testCopilotLocalBYOKAcceptance(t, false) })
-	t.Run("detached shell rejected", func(t *testing.T) { testCopilotLocalBYOKAcceptance(t, true) })
+	t.Run("synchronous edit", func(t *testing.T) { testCopilotLocalBYOKAcceptance(t, false, "stop") })
+	t.Run("detached shell rejected", func(t *testing.T) { testCopilotLocalBYOKAcceptance(t, true, "stop") })
+	// These reasons are normalized away by CLI 1.0.91. They are fixture
+	// provider inputs, never a second observation boundary in the connector.
+	for _, reason := range []string{"content_filter", "length"} {
+		t.Run("hidden provider finish reason/"+reason, func(t *testing.T) {
+			testCopilotLocalBYOKAcceptance(t, false, reason)
+		})
+	}
 }
 
-func testCopilotLocalBYOKAcceptance(t *testing.T, detached bool) {
+func testCopilotLocalBYOKAcceptance(t *testing.T, detached bool, finishReason string) {
 	t.Helper()
 	for _, name := range []string{"COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_API_KEY_COMMAND", "COPILOT_PROVIDER_BEARER_TOKEN", "COPILOT_PROVIDER_HEADERS", "COPILOT_PROVIDER_WIRE_MODEL", "COPILOT_PROVIDER_MODEL_ID", "COPILOT_PROVIDER_WIRE_API", "COPILOT_PROVIDER_TRANSPORT", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
 		t.Setenv(name, "")
@@ -531,6 +568,8 @@ func testCopilotLocalBYOKAcceptance(t *testing.T, detached bool) {
 	t.Setenv("COPILOT_PROVIDER_TYPE", "openai")
 	t.Setenv("COPILOT_MODEL", "iro-local-test")
 	t.Setenv("GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS", "true")
+	t.Setenv("GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS", "true")
+	t.Setenv("GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP", "true")
 	root := t.TempDir()
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "WORKFLOW.md"), []byte("LOCAL_WORKFLOW_MARKER"), 0600); err != nil {
@@ -591,14 +630,16 @@ func testCopilotLocalBYOKAcceptance(t *testing.T, detached bool) {
 			message = map[string]any{"role": "assistant", "content": "", "tool_calls": []any{map[string]any{"id": "local-edit", "type": "function", "function": map[string]any{"name": "bash", "arguments": string(args)}}}}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": "local-response", "object": "chat.completion", "model": "iro-local-test", "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": map[bool]string{true: "tool_calls", false: "stop"}[calls == 1]}}, "usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "local-response", "object": "chat.completion", "model": "iro-local-test", "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": map[bool]string{true: "tool_calls", false: finishReason}[calls == 1]}}, "usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
 	}))
 	defer server.Close()
 	t.Setenv("COPILOT_PROVIDER_BASE_URL", server.URL+"/v1")
 	var raw string
+	workerCalls := 0
 	actualRunner := NewOSCommandRunner()
 	capturing := &fakeCommandRunner{fn: func(spec CommandSpec) CommandResult {
 		if len(spec.Stdin) > 0 {
+			workerCalls++
 			spec.Timeout = 30 * time.Second
 		}
 		result := actualRunner.Run(spec)
@@ -661,11 +702,16 @@ func testCopilotLocalBYOKAcceptance(t *testing.T, detached bool) {
 		if err != nil || string(data) != "fixture change" {
 			t.Fatal(string(data), err)
 		}
+		if finishReason != "stop" && (strings.Contains(raw, "finish_reason") || strings.Contains(raw, finishReason)) {
+			t.Fatalf("CLI exposed provider finish reason; reassess the observable completion contract: %s", raw)
+		}
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if calls != 2 || !policySeen || !taskSeen {
-		t.Fatalf("calls=%d policy=%t task=%t", calls, policySeen, taskSeen)
+	// CLI 1.0.91 may internally repeat a length-truncated provider request.
+	// This must not become an iro retry or a second worker invocation.
+	if workerCalls != 1 || calls < 2 || finishReason != "length" && calls != 2 || !policySeen || !taskSeen {
+		t.Fatalf("workerCalls=%d providerCalls=%d policy=%t task=%t", workerCalls, calls, policySeen, taskSeen)
 	}
 }
 
