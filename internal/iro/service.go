@@ -81,9 +81,10 @@ func (s *Service) Init(out io.Writer) error {
 
 func (s *Service) Doctor(out io.Writer) error {
 	writeSelfDiagnostics(out)
-	for _, name := range []string{"git", "gh", "codex"} {
-		s.toolDiagnostics(out, name)
-	}
+	// Report supported tools before project checks, even when config is unavailable.
+	s.toolDiagnostics(out, "git")
+	s.trackerToolDiagnostics(out, "github")
+	s.agentToolDiagnostics(out, "codex")
 	failures := 0
 	check := func(label string, checkFunc func() error) {
 		if err := checkFunc(); err != nil {
@@ -123,8 +124,6 @@ func (s *Service) Doctor(out io.Writer) error {
 		}
 		fmt.Fprintf(out, "project %s: %s\n", name, knownValue(path))
 	}
-	remote, host, repository := "", "", ""
-	var identity RepositoryIdentity
 	var config Config
 	configValid := false
 	if root != "" {
@@ -153,71 +152,14 @@ func (s *Service) Doctor(out io.Writer) error {
 			configValid = true
 			return nil
 		})
-
-		if configValid {
-			remote = config.TrackerRemote
-			check("configured GitHub remote", func() error {
-				var err error
-				identity, err = s.repositoryIdentity(root, config)
-				if err == nil {
-					host, repository = identity.Host(), identity.String()
-				}
-				return err
-			})
-		} else {
-			failures++
-			fmt.Fprintln(out, "FAIL: configured GitHub remote: iro.toml is invalid")
-		}
 	}
-
-	fmt.Fprintf(out, "repository configured remote: %s\nrepository GitHub host: %s\nrepository owner/repository: %s\n", knownValue(remote), knownValue(host), knownValue(repository))
-
-	contextValid := false
-	check("GitHub CLI context", func() error {
-		if repository == "" {
-			return fmt.Errorf("configured repository identity is unavailable; fix the configured GitHub remote and retry")
-		}
-		if err := checkGitHubContext(identity); err != nil {
-			return err
-		}
-		contextValid = true
-		return nil
-	})
-
-	ghAvailable := false
-	check("gh executable", func() error {
-		if err := s.requireExecutable("gh"); err != nil {
-			return err
-		}
-		ghAvailable = true
-		return nil
-	})
-	check("GitHub authentication", func() error {
-		if !ghAvailable {
-			return fmt.Errorf("gh executable is unavailable")
-		}
-		if !contextValid {
-			return fmt.Errorf("GitHub CLI context is invalid; resolve the context diagnostic and retry")
-		}
-		return s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root)
-	})
-
-	codexAvailable := false
-	check("codex executable", func() error {
-		if err := s.requireExecutable("codex"); err != nil {
-			return err
-		}
-		codexAvailable = true
-		return nil
-	})
-	if codexAvailable {
-		check("Codex authentication", func() error {
-			return s.checkAuth("codex", []string{"login", "status"}, root)
-		})
-	} else {
-		failures++
-		fmt.Fprintln(out, "FAIL: Codex authentication: codex executable is unavailable")
+	// Invalid or unavailable config must not suppress independent diagnostics.
+	trackerType, agentType := "github", "codex"
+	if configValid {
+		trackerType, agentType = config.TrackerType, config.AgentType
 	}
+	s.doctorTracker(out, trackerType, root, config, configValid, check)
+	s.doctorAgent(agentType, root, check)
 
 	if failures != 0 {
 		return fmt.Errorf("doctor found %d failing check(s)", failures)
@@ -264,6 +206,15 @@ func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, er
 	if _, err := s.FileSystem.ReadFile(filepath.Join(root, "WORKFLOW.md")); err != nil {
 		return fmt.Errorf("WORKFLOW.md is missing or unreadable")
 	}
+	switch config.TrackerType {
+	case "github":
+		return s.runGitHub(root, config, issueNumber, options, out, errOut)
+	default:
+		return fmt.Errorf("unsupported tracker.type %q; supported value is github", config.TrackerType)
+	}
+}
+
+func (s *Service) runGitHub(root string, config Config, issueNumber int, options workerOptions, out, errOut io.Writer) error {
 	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
 		return err
@@ -295,10 +246,7 @@ func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, er
 	if err != nil {
 		return err
 	}
-	if err := s.requireExecutable("codex"); err != nil {
-		return err
-	}
-	if err := s.checkAuth("codex", []string{"login", "status"}, root); err != nil {
+	if err := s.requireAgent(config.AgentType, root); err != nil {
 		return err
 	}
 	head, err := s.currentHead(root)
@@ -316,7 +264,7 @@ func (s *Service) runWithOptions(issueNumber int, options workerOptions, out, er
 	}
 
 	started := s.Now().UTC()
-	codexResult := s.runCodex(workspace, identity, target, options)
+	codexResult := s.runAuthor(config.AgentType, workspace, identity, target, options)
 	finished := s.Now().UTC()
 	if !commandSucceeded(codexResult) {
 		operationErr := fmt.Errorf("Codex exited with status %d (%v); worktree was kept for human inspection", codexResult.ExitCode, codexResult.Err)

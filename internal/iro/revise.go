@@ -50,6 +50,15 @@ func (s *Service) reviseWithOptions(prNumber int, options workerOptions, out io.
 	if err != nil {
 		return fmt.Errorf("iro.toml is unreadable: %w", err)
 	}
+	switch config.TrackerType {
+	case "github":
+		return s.reviseGitHub(root, config, prNumber, configData, options, out)
+	default:
+		return fmt.Errorf("unsupported tracker.type %q; supported value is github", config.TrackerType)
+	}
+}
+
+func (s *Service) reviseGitHub(root string, config Config, prNumber int, configData []byte, options workerOptions, out io.Writer) error {
 	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
 		return err
@@ -81,10 +90,7 @@ func (s *Service) reviseWithOptions(prNumber int, options workerOptions, out io.
 	if err != nil {
 		return err
 	}
-	if err := s.requireExecutable("codex"); err != nil {
-		return err
-	}
-	if err := s.checkAuth("codex", []string{"login", "status"}, root); err != nil {
+	if err := s.requireAgent(config.AgentType, root); err != nil {
 		return err
 	}
 
@@ -114,7 +120,7 @@ func (s *Service) reviseWithOptions(prNumber int, options workerOptions, out io.
 	}
 
 	started := s.Now().UTC()
-	result := s.runRevisionAuthor(workspace, identity, target, origin, configData, workflowData, context, options)
+	result := s.runRevisionAuthor(config.AgentType, workspace, identity, target, origin, configData, workflowData, context, options)
 	logPath, err := s.writeReviseLog(identity, target, workspace, started, result)
 	if err != nil {
 		return fmt.Errorf("Author finished with status %d, but its report could not be saved; changes kept at %s: %w", result.ExitCode, workspace, err)
@@ -348,7 +354,7 @@ func (s *Service) readStartingWorkflow(workspace, head string) ([]byte, error) {
 	return []byte(result.Stdout), nil
 }
 
-func (s *Service) runRevisionAuthor(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, options workerOptions) CommandResult {
+func (s *Service) runCodexRevisionAuthor(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, options workerOptions) CommandResult {
 	return s.Runner.Run(CommandSpec{
 		Name: "codex",
 		Args: withCodexOptions(append(codexWorkerArgs(workspace, options), []string{

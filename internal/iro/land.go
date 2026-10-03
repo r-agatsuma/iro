@@ -38,15 +38,28 @@ func (s *Service) land(prNumber int, unmanaged bool, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if unmanaged {
+		return s.landGitHub(root, Config{}, prNumber, true, out)
+	}
+	config, err := s.loadProjectConfig(root)
+	if err != nil {
+		return err
+	}
+	switch config.TrackerType {
+	case "github":
+		return s.landGitHub(root, config, prNumber, false, out)
+	default:
+		return fmt.Errorf("unsupported tracker.type %q; supported value is github", config.TrackerType)
+	}
+}
+
+func (s *Service) landGitHub(root string, config Config, prNumber int, unmanaged bool, out io.Writer) error {
 	var identity RepositoryIdentity
+	var err error
 	if unmanaged {
 		identity, err = s.originIdentity(root)
 	} else {
-		var config Config
-		config, err = s.loadProjectConfig(root)
-		if err == nil {
-			identity, err = s.repositoryIdentity(root, config)
-		}
+		identity, err = s.repositoryIdentity(root, config)
 		if err == nil {
 			err = checkGitHubContext(identity)
 		}

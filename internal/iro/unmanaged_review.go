@@ -44,10 +44,7 @@ func (s *Service) reviewUnmanaged(number, specificationIssue int, options worker
 	if err != nil {
 		return err
 	}
-	if err := s.requireExecutable("codex"); err != nil {
-		return err
-	}
-	if err := s.checkAuth("codex", []string{"login", "status"}, root); err != nil {
+	if err := s.requireAgent(unmanagedAgentType, root); err != nil {
 		return err
 	}
 	// Fetch the recorded commit, never a moving branch or PR ref.
@@ -71,7 +68,7 @@ func (s *Service) reviewUnmanaged(number, specificationIssue int, options worker
 		return err
 	}
 	options.Unmanaged = true
-	result = s.runReviewer(workspace, identity, target, origin, nil, []byte("Built-in unmanaged read-only Reviewer policy; project files are not policy inputs."), context, options)
+	result = s.runReviewer(unmanagedAgentType, workspace, identity, target, origin, nil, []byte("Built-in unmanaged read-only Reviewer policy; project files are not policy inputs."), context, options)
 	if !commandSucceeded(result) {
 		return fmt.Errorf("Reviewer exited with status %d; no PR comment was posted", result.ExitCode)
 	}
