@@ -502,15 +502,14 @@ func TestLandRequiresValidProjectContextBeforeRemoteMutation(t *testing.T) {
 	}
 }
 
-func TestStatusStillRequiresWorkflowAfterLandProjectLoadingChange(t *testing.T) {
-	root := t.TempDir()
-	writeProjectFiles(t, root)
-	if err := os.Remove(filepath.Join(root, "WORKFLOW.md")); err != nil {
+func TestStatusDoesNotRequireWorkflow(t *testing.T) {
+	f := newLocalLifecycleFixture(t)
+	writeProjectFiles(t, f.root)
+	if err := os.Remove(filepath.Join(f.root, "WORKFLOW.md")); err != nil {
 		t.Fatal(err)
 	}
-	service := newTestService(t, statusTestRunner(root, "", false, false), root)
-	if err := service.Status(io.Discard); err == nil || !strings.Contains(err.Error(), "WORKFLOW.md") {
-		t.Fatalf("Status() error = %v, want WORKFLOW.md precondition failure", err)
+	if err := f.service.Status(io.Discard); err != nil {
+		t.Fatalf("Status() error = %v", err)
 	}
 }
 

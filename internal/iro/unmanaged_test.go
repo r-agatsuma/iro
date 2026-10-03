@@ -708,29 +708,23 @@ func TestUnmanagedG2ManagedEligibilityUsesCurrentRelationNotProvenance(t *testin
 	}
 }
 
-func TestManagedStatusAndCleanupIgnoreUnmanagedWorkspaces(t *testing.T) {
-	f := newUnmanagedFixture(t)
-	f.intercept = func(spec CommandSpec) (CommandResult, bool) {
-		return CommandResult{ExitCode: 1}, spec.Name == "git" && containsArgs(spec.Args, "worktree", "remove")
-	}
-	if code, _, diagnostic := f.execute(); code != 0 {
-		t.Fatal(diagnostic)
-	}
-	writeProjectFiles(t, f.root)
+func TestLocalStatusAndCleanupIncludeRegisteredUnmanagedWorkspaces(t *testing.T) {
 	for _, args := range [][]string{{"status"}, {"cleanup"}, {"cleanup", "123"}} {
+		f := newLocalLifecycleFixture(t)
+		workspace := f.runtimePath(unmanagedWorkspace, "run-issue-123-123")
+		f.addWorktree(t, workspace, "")
 		var out, diagnostic strings.Builder
-		f.runner.calls = nil
 		code := Execute(args, &out, &diagnostic, f.service)
-		if len(args) == 1 && code != 0 || len(args) == 2 && code != 1 {
+		if code != 0 {
 			t.Fatalf("%v: code=%d %s", args, code, diagnostic.String())
 		}
-		for _, call := range f.runner.calls {
-			if call.Name != "git" || call.Args[0] != "config" && call.Args[0] != "rev-parse" {
-				t.Fatalf("managed status/cleanup claimed unmanaged state: %+v", call)
+		_, err := os.Stat(workspace)
+		if args[0] == "status" {
+			if err != nil || !strings.Contains(out.String(), workspace) {
+				t.Fatalf("registered unmanaged worktree not inventoried: %s (%v)", out.String(), err)
 			}
-		}
-		if _, err := os.Stat(f.workspace); err != nil {
-			t.Fatalf("unmanaged worktree removed: %v", err)
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("registered unmanaged worktree not removed: %v", err)
 		}
 	}
 }
