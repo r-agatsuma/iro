@@ -186,7 +186,15 @@ func (c copilotRuntime) execute(root, workspace, commonDir string, policy worker
 	if options.ReasoningEffort != "" {
 		args = append(args, "--reasoning-effort", options.ReasoningEffort)
 	}
-	result := c.runner.Run(CommandSpec{Name: "copilot", Args: args, Dir: workspace, Stdin: []byte(payload), Env: map[string]string{"COPILOT_HOME": dir, "COPILOT_AUTO_UPDATE": "false", "COPILOT_ALLOW_ALL": "false", "COPILOT_ASSISTED_APPROVAL": "false"}, Timeout: copilotWorkerTimeout})
+	// Prompt-mode repository hook opt-in overrides disableAllHooks in CLI
+	// 1.0.91. Disable it in the child without changing Human configuration.
+	result := c.runner.Run(CommandSpec{Name: "copilot", Args: args, Dir: workspace, Stdin: []byte(payload), Env: map[string]string{
+		"COPILOT_HOME":                          dir,
+		"COPILOT_AUTO_UPDATE":                   "false",
+		"COPILOT_ALLOW_ALL":                     "false",
+		"COPILOT_ASSISTED_APPROVAL":             "false",
+		"GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS": "false",
+	}, Timeout: copilotWorkerTimeout})
 	// Raw events include task echoes and tool details. Forward only a deterministic
 	// Author report, never a whole event stream as an apparent final response.
 	report, parseErr := parseCopilotOutput(result.Stdout)

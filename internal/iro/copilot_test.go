@@ -236,6 +236,7 @@ func TestCopilotPreflightFailurePreventsWorkspace(t *testing.T) {
 func TestCopilotNativePolicyPayloadPermissionsAndOptions(t *testing.T) {
 	human := t.TempDir()
 	t.Setenv("COPILOT_HOME", human)
+	t.Setenv("GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS", "true")
 	humanConfig := `{"model":"human-model","reasoningEffort":"high","continueOnAutoMode":true,"autoUpdate":true}`
 	if err := os.WriteFile(filepath.Join(human, "config.json"), []byte(humanConfig), 0600); err != nil {
 		t.Fatal(err)
@@ -258,6 +259,9 @@ func TestCopilotNativePolicyPayloadPermissionsAndOptions(t *testing.T) {
 			}
 		}
 		private = spec.Env["COPILOT_HOME"]
+		if spec.Env["GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS"] != "false" {
+			t.Fatal("inherited repository hook opt-in was not disabled")
+		}
 		if private == human || private == "" {
 			t.Fatal("global state reused")
 		}
@@ -300,6 +304,9 @@ func TestCopilotNativePolicyPayloadPermissionsAndOptions(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(human, "config.json"))
 	if string(data) != humanConfig {
 		t.Fatal("Human configuration mutated")
+	}
+	if os.Getenv("GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS") != "true" {
+		t.Fatal("Human repository hook environment mutated")
 	}
 	for _, effort := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"} {
 		if err := validateCopilotRunOptions(workerOptions{ReasoningEffort: effort}); err != nil {
@@ -523,9 +530,27 @@ func testCopilotLocalBYOKAcceptance(t *testing.T, detached bool) {
 	t.Setenv("COPILOT_OFFLINE", "true")
 	t.Setenv("COPILOT_PROVIDER_TYPE", "openai")
 	t.Setenv("COPILOT_MODEL", "iro-local-test")
+	t.Setenv("GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS", "true")
 	root := t.TempDir()
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "WORKFLOW.md"), []byte("LOCAL_WORKFLOW_MARKER"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// This inherited opt-in bypassed disableAllHooks in CLI 1.0.91. Each
+	// lifecycle hook writes only a marker in the disposable fixture workspace.
+	hookDir := filepath.Join(workspace, ".github", "hooks")
+	if err := os.MkdirAll(hookDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	hooks := map[string]any{}
+	for _, event := range []string{"sessionStart", "preToolUse", "postToolUse", "sessionEnd"} {
+		hooks[event] = []any{map[string]any{"type": "command", "bash": "printf 'hook ran\\n' >> hook-ran.txt", "cwd": workspace, "timeoutSec": 5}}
+	}
+	hookConfig, err := json.Marshal(map[string]any{"version": 1, "hooks": hooks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hookDir, "acceptance.json"), hookConfig, 0600); err != nil {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex
@@ -605,6 +630,9 @@ func testCopilotLocalBYOKAcceptance(t *testing.T, detached bool) {
 		}()
 	}
 	result := c.execute(root, workspace, filepath.Join(root, ".git"), copilotRunWorkerPolicy(), "LOCAL_TASK_MARKER: Read WORKFLOW.md, edit result.txt, and return the Japanese report.", copilotOptions{Model: "iro-local-test", ReasoningEffort: "high"})
+	if _, err := os.Stat(filepath.Join(workspace, "hook-ran.txt")); !os.IsNotExist(err) {
+		t.Fatalf("repository hook executed despite connector hook disablement: %v", err)
+	}
 	if detached {
 		launchOnly := false
 		for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {

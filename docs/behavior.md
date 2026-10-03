@@ -908,7 +908,7 @@ private state は外部 temporary directory に排他的に作成する。TMPDIR
 
 ### RUN-COPILOT-003: noninteractive permissions
 
-invocation は `--no-auto-update`, `--allow-all-tools`, `--allow-all-urls`, `--no-ask-user`, `--no-experimental`, `--disable-builtin-mcps`, `--no-remote`, `--no-remote-export`, `--output-format json`, `--stream off` を使用する。auto-update は preflight も含めて disabled とする。child environment の `COPILOT_ALLOW_ALL` と `COPILOT_ASSISTED_APPROVAL` を false にして、継承した auto trust / assisted approval の設定が対話 loop を追加しないようにする。
+invocation は `--no-auto-update`, `--allow-all-tools`, `--allow-all-urls`, `--no-ask-user`, `--no-experimental`, `--disable-builtin-mcps`, `--no-remote`, `--no-remote-export`, `--output-format json`, `--stream off` を使用する。auto-update は preflight も含めて disabled とする。child environment の `COPILOT_ALLOW_ALL` と `COPILOT_ASSISTED_APPROVAL` を false にして、継承した auto trust / assisted approval の設定が対話 loop を追加しないようにする。`GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS` も child environment で false に上書きする。CLI 1.0.91 ではこの環境変数の true が private config の `disableAllHooks=true` に優先するため、両方を制御して repository hooks を無効化する。Human の環境変数は変更しない。
 
 native tool availability と profile tools は shell（bash / powershell と list / read / stop）、file view / create / edit / apply_patch / glob / grep に制限する。subagent、ask-user、MCP tools を公開しない。`--allow-all-paths` / `--allow-all` / `--yolo` は使用しない。worktree と runtime の通常 temporary path 許可を使用する。gh、Git lifecycle mutating subcommands、`.git` / private profile への file write には native deny patterns を追加する。環境の provider / GitHub token と provider headers の secret values は native redaction と connector の既知 environment secret redaction の対象とし、診断へ出力しない。
 
