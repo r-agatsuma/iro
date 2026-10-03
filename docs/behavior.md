@@ -170,6 +170,54 @@ host は configured remote と同じく大文字・小文字を区別しない�
 
 local directory、GitHub CLI の default host、`GH_HOST` / `GH_REPO` による implicit target inference を正本にしてはならない。`doctor` は同じ検証を read-only diagnostic として行う（DOC-002 / DOC-005）。GitHub operation を行わない `init` / `status` / `cleanup` は、この environment precondition を要求しない。
 
+## 2a. GitHub raw-body origin relation primitive
+
+この節は GitHub 専用 resolver と Run body writer の contract を定義する（Issue #88 / F1）。Review / Revise の workflow、Land eligibility、Run の既存 delivery relation 検査はこの primitive へまだ移行しておらず、それぞれの command 節に記述した条件に従う。この節から command の新しい eligibility や invocation 内の再検証タイミングを推測してはならない。
+
+### GH-ORIGIN-001: candidate source and lexical grammar
+
+resolver は指定 repository の選択 PR の **現在の raw body** を呼び出しごとに取得し、それだけを候補抽出元にしなければならない。
+
+local token は次のすべてを満たす `#N` とする。
+
+- prefix は body start または Unicode `White_Space`
+- `N` は `[1-9][0-9]*`
+- suffix は body end、Unicode `White_Space`、または `. , ; : ! ? ) ] }` のいずれか
+
+`owner/repo#N`、URL fragment、`abc#N` を suffix-match してはならない。`#0`、`#073` のような leading-zero form も候補ではない。Markdown を解釈せず、fenced code、inline code、blockquote、prose 内でも同じ字句境界を満たす token は候補とする。例えば inline code の `` ` #73 ` `` は候補を含むが、`` `#73` `` は含まない。
+
+branch name、title、comments、timeline、native closing relation、history / chronology、author、LLM inference を fallback または priority source に使ってはならない。`Closes` / `Refs` 等の keyword も候補の優先順位を変えない。
+
+### GH-ORIGIN-002: typed validation and resolution
+
+抽出した Issue number を重複排除し、各候補を選択 PR の repository に bind した GitHub API で検証しなければならない。GitHub の typed `issueOrPullRequest` response が readable な `Issue` であり、number と repository identity が一致することを要求する。PR number は Issue として受理してはならない。repository identity は大文字・小文字を区別しない。
+
+missing / unreadable / null / malformed response、API error（partial data を伴う場合も含む）、unexpected type / number / repository、numeric overflow は relation failure とする。GraphQL の `Int` argument の上限 `2147483647` を超える local token は overflow とする。失敗した候補を黙って捨て、singleton を作ってはならない。PR 自体または raw body が取得不能・missing / null の場合も relation failure とし、明示的な空 body は候補ゼロとして扱う。
+
+全候補が検証できた場合だけ、次の結果を返す。
+
+| Validated distinct Issues | Result |
+|---|---|
+| exactly 1 | resolved origin/specification Issue |
+| 0 | unresolved |
+| 2 or more | ambiguous |
+
+候補検証の失敗は unresolved / ambiguous と区別し、部分的な解決結果を返してはならない。
+
+### GH-ORIGIN-003: time semantics and writer
+
+resolver は結果を cache したり、immutable provenance として永続化したりしてはならない。後続 invocation は編集後の現在の body から再解決する。取得した body と候補検証は単一 transaction ではない。consumer による invocation 内の binding は各 workflow の contract に委ねる。
+
+Run の固定 body は managed では `Closes #N`、unmanaged では `Refs #N` を使う。どちらも qualified reference / URL に置き換えず、worker text を body に展開しない。現在の writer の正確な form は次とし、末尾にも newline を付ける。同じ `N` の出現は重複排除される。
+
+```text
+Issue #N の実装です。
+
+Closes #N
+```
+
+unmanaged では最終行だけを `Refs #N` とする。native closing の有無はこの origin resolver の identity や優先順位に影響しない。
+
 ## 3. Output contract
 
 MVP の基本 contract は次とする。

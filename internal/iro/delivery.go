@@ -163,8 +163,8 @@ func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, n
 	if !commandSucceeded(result) {
 		return fmt.Errorf("push failed; local commit remains on %s at %s; remote branch may have been updated, inspect it before retrying", branch, workspace)
 	}
-	// Use a fixed body, so worker text cannot introduce additional closing relations.
-	payload, _ := json.Marshal(map[string]any{"title": fmt.Sprintf("Implement issue #%d", number), "body": fmt.Sprintf("Issue #%d の実装です。\n\nCloses #%d\n", number, number), "head": branch, "base": base, "draft": false})
+	// Use a fixed body, so worker text cannot introduce additional origin candidates.
+	payload, _ := json.Marshal(map[string]any{"title": fmt.Sprintf("Implement issue #%d", number), "body": githubRunBody(number, false), "head": branch, "base": base, "draft": false})
 	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"api", "repos/" + identity.String() + "/pulls", "--hostname", identity.Host(), "--method", "POST", "--input", "-"}, Dir: root, Stdin: payload})
 	var pr struct {
 		Number int `json:"number"`
