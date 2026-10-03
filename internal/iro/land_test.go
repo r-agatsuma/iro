@@ -57,8 +57,6 @@ type landFixture struct {
 	service     *Service
 	runner      *fakeCommandRunner
 	target      string
-	pages       []string
-	page        int
 	liveHead    string
 	mergeResult CommandResult
 	mergeCalls  int
@@ -73,7 +71,6 @@ func newLandFixture(t *testing.T) *landFixture {
 	t.Helper()
 	f := &landFixture{
 		t: t, root: t.TempDir(), target: landResponseForTest,
-		pages:       []string{landDeliveryPage(landActivePRForTest, false, "")},
 		liveHead:    landHeadForTest,
 		mergeResult: CommandResult{Stdout: `{"merged":true,"sha":"` + landMergeForTest + `"}`},
 	}
@@ -104,28 +101,19 @@ func (f *landFixture) respond(spec CommandSpec) CommandResult {
 				f.t.Fatalf("missing configured repository: %+v", spec)
 			}
 			if containsString(spec.Args, "query="+landPreflightQuery) {
+				for _, field := range []string{"defaultBranchRef", "closingIssuesReferences", "headRepository", "headRefName", "baseRefName", "body", "pullRequests"} {
+					if strings.Contains(landPreflightQuery, field) {
+						f.t.Fatalf("managed Land queried delivery topology or origin: %s", field)
+					}
+				}
 				if !containsArgs(spec.Args, "-F", "number=42") {
 					f.t.Fatalf("wrong target: %+v", spec)
 				}
 				return CommandResult{Stdout: f.target}
 			}
-			if containsString(spec.Args, "query="+strings.Replace(deliveryQuery, "states:[OPEN,CLOSED,MERGED]", "states:[OPEN]", 1)) {
-				if f.page >= len(f.pages) {
-					f.t.Fatalf("unexpected active PR read: %+v", spec)
-				}
-				if f.page > 0 && !containsArgs(spec.Args, "-f", "cursor=next") {
-					f.t.Fatalf("missing next page cursor: %+v", spec)
-				}
-				result := CommandResult{Stdout: f.pages[f.page]}
-				f.page++
-				return result
-			}
 		}
 		if reflect.DeepEqual(spec.Args, []string{"api", "repos/acme/iro/pulls/42/merge", "--hostname", "github.com", "--method", "PUT", "--input", "-"}) {
 			f.mergeCalls++
-			if f.page != len(f.pages) {
-				f.t.Fatal("merge attempted before checking all active delivery PRs")
-			}
 			var payload map[string]string
 			if json.Unmarshal(spec.Stdin, &payload) != nil || !reflect.DeepEqual(payload, map[string]string{"sha": landHeadForTest, "merge_method": "merge"}) {
 				f.t.Fatalf("merge did not bind the validated HEAD and normal merge method: %s", spec.Stdin)
@@ -142,7 +130,7 @@ func (f *landFixture) respond(spec CommandSpec) CommandResult {
 	return CommandResult{ExitCode: 1}
 }
 
-func TestLandUsesOnlyRemoteDeliveryStateAndExplicitHumanAuthorization(t *testing.T) {
+func TestLandUsesOnlyMergeIntegrityAndExplicitHumanAuthorization(t *testing.T) {
 	for _, state := range []string{"no local state or reviews", "human-created PR", "AI FINDING", "no GitHub approval", "failing optional checks", "pre-receive hooks", "admin without bypass", "maintainer"} {
 		t.Run(state, func(t *testing.T) {
 			f := newLandFixture(t)
@@ -166,7 +154,7 @@ func TestLandUsesOnlyRemoteDeliveryStateAndExplicitHumanAuthorization(t *testing
 			if code := Execute([]string{"land", "42"}, &out, &errOut, f.service); code != 0 {
 				t.Fatalf("exit %d: %s", code, errOut.String())
 			}
-			if f.mergeCalls != 1 || !f.merged || !strings.Contains(out.String(), "Landed PR #42 for Issue #123") || !strings.Contains(out.String(), landMergeForTest) || !strings.Contains(out.String(), "Sync your local default branch with the remote before the next iro run.\nFor example: git pull") || errOut.Len() != 0 {
+			if f.mergeCalls != 1 || !f.merged || !strings.Contains(out.String(), "Landed PR #42 with merge commit") || !strings.Contains(out.String(), landMergeForTest) || !strings.Contains(out.String(), "Sync your local default branch with the remote before the next iro run.\nFor example: git pull") || strings.Contains(out.String(), "Issue") || errOut.Len() != 0 {
 				t.Fatalf("unexpected merge/output: calls=%d, stdout=%q, stderr=%q", f.mergeCalls, out.String(), errOut.String())
 			}
 		})
@@ -185,9 +173,8 @@ func TestLandPrintsGenericLocalSyncHint(t *testing.T) {
 	}
 }
 
-func TestLandBindsConfiguredHostOnEveryPageAndMerge(t *testing.T) {
+func TestLandBindsConfiguredHostOnPreflightAndMerge(t *testing.T) {
 	f := newLandFixture(t)
-	f.pages = []string{landDeliveryPage(landActivePRForTest, true, "next"), landDeliveryPage("", false, "")}
 	requests := 0
 	f.runner.fn = func(spec CommandSpec) CommandResult {
 		if spec.Name == "gh" {
@@ -201,9 +188,9 @@ func TestLandBindsConfiguredHostOnEveryPageAndMerge(t *testing.T) {
 	if err := f.service.Land(42, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	// Authentication, target metadata, two delivery pages, and one merge.
-	if requests != 5 || f.page != 2 || f.mergeCalls != 1 || !f.merged {
-		t.Fatalf("requests=%d, pages=%d, merges=%d, merged=%t", requests, f.page, f.mergeCalls, f.merged)
+	// Authentication, selected PR metadata, and one merge only.
+	if requests != 3 || f.mergeCalls != 1 || !f.merged {
+		t.Fatalf("requests=%d, merges=%d, merged=%t", requests, f.mergeCalls, f.merged)
 	}
 }
 
@@ -235,44 +222,79 @@ func TestLandLeavesExistingLocalExecutionStateUntouched(t *testing.T) {
 }
 
 func TestLandRejectsInvalidTargetBeforeMerge(t *testing.T) {
-	for _, tc := range []struct{ name, from, to, want string }{
-		{"closed", `"state":"OPEN"`, `"state":"CLOSED"`, "must be open"},
-		{"merged", `"state":"OPEN"`, `"state":"MERGED"`, "must be open"},
-		{"missing PR", `"number":42`, `"number":0`, "does not exist"},
-		{"different PR", `"number":42`, `"number":43`, "does not exist"},
-		{"draft", `"isDraft":false`, `"isDraft":true`, "remediation: mark the pull request ready for review, then retry `iro land 42`"},
-		{"unknown draft", `"isDraft":false`, `"isDraft":null`, "draft state is unavailable"},
-		{"missing default", `"defaultBranchRef":{"name":"main"}`, `"defaultBranchRef":null`, "default branch is unavailable"},
-		{"wrong base", `"baseRefName":"main"`, `"baseRefName":"release"`, "requires default branch"},
-		{"no origin", `"totalCount":1`, `"totalCount":0`, "exactly one origin"},
-		{"multiple origins", `"totalCount":1`, `"totalCount":2`, "exactly one origin"},
-		{"wrong origin", `"number":123`, `"number":124`, "iro/issue-124"},
-		{"invalid origin", `"number":123`, `"number":0`, "origin Issue must belong"},
-		{"foreign origin", `"repository":{"nameWithOwner":"acme/iro"}`, `"repository":{"nameWithOwner":"other/iro"}`, "origin Issue must belong"},
-		{"incomplete origin", `"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}}]`, `"nodes":[]`, "exactly one origin"},
-		{"wrong canonical branch", `"iro/issue-123"`, `"human-feature"`, "head to be iro/issue-123"},
-		{"noncanonical decimal", `"iro/issue-123"`, `"iro/issue-0123"`, "head to be iro/issue-123"},
-		{"fork head", `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":{"nameWithOwner":"contributor/iro"}`, "head to be iro/issue-123"},
-		{"unknown head repository", `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":null`, "head to be iro/issue-123"},
-		{"missing HEAD", landHeadForTest, "", "HEAD commit is invalid"},
-		{"invalid HEAD", landHeadForTest, strings.Repeat("z", 40), "HEAD commit is invalid"},
-		{"archived repository", `"isArchived":false`, `"isArchived":true`, "does not allow normal merge"},
-		{"unknown archive state", `"isArchived":false`, `"isArchived":null`, "does not allow normal merge"},
-		{"merge method disabled", `"mergeCommitAllowed":true`, `"mergeCommitAllowed":false`, "does not allow normal merge"},
-		{"unknown merge method", `"mergeCommitAllowed":true`, `"mergeCommitAllowed":null`, "does not allow normal merge"},
-		{"read permission", `"WRITE"`, `"READ"`, "write permission is unavailable"},
-		{"triage permission", `"WRITE"`, `"TRIAGE"`, "write permission is unavailable"},
-		{"unknown permission", `"viewerPermission":"WRITE"`, `"viewerPermission":null`, "write permission is unavailable"},
-		{"queue required", `"isMergeQueueEnabled":false`, `"isMergeQueueEnabled":true`, "requires a merge queue"},
-		{"unknown queue policy", `"isMergeQueueEnabled":false`, `"isMergeQueueEnabled":null`, "queue policy is unavailable"},
-		{"conflicts", `"MERGEABLE"`, `"CONFLICTING"`, "resolve conflicts"},
-		{"pending mergeability", `"MERGEABLE"`, `"UNKNOWN"`, "wait for GitHub"},
-		{"blocked", `"CLEAN"`, `"BLOCKED"`, "does not allow land"},
-		{"dirty", `"CLEAN"`, `"DIRTY"`, "does not allow land"},
-		{"pending policy", `"CLEAN"`, `"UNKNOWN"`, "does not allow land"},
-		{"unknown policy", `"CLEAN"`, `"FUTURE_STATE"`, "does not allow land"},
-		{"missing policy", `"CLEAN"`, `""`, "does not allow land"},
-		{"partial GraphQL failure", `{"data":`, `{"errors":[{"message":"failed"}],"data":`, "could not inspect"},
+	for _, headRepository := range []string{"acme/iro", "contributor/iro"} {
+		t.Run(headRepository, func(t *testing.T) {
+			for _, tc := range []struct{ name, from, to, want string }{
+				{"closed", `"state":"OPEN"`, `"state":"CLOSED"`, "must be open"},
+				{"merged", `"state":"OPEN"`, `"state":"MERGED"`, "must be open"},
+				{"missing PR", `"number":42`, `"number":0`, "does not exist"},
+				{"different PR", `"number":42`, `"number":43`, "does not exist"},
+				{"draft", `"isDraft":false`, `"isDraft":true`, "remediation: mark the pull request ready for review, then retry `iro land 42`"},
+				{"unknown draft", `"isDraft":false`, `"isDraft":null`, "draft state is unavailable"},
+				{"missing HEAD", landHeadForTest, "", "HEAD commit is invalid"},
+				{"invalid HEAD", landHeadForTest, strings.Repeat("z", 40), "HEAD commit is invalid"},
+				{"archived repository", `"isArchived":false`, `"isArchived":true`, "does not allow normal merge"},
+				{"unknown archive state", `"isArchived":false`, `"isArchived":null`, "does not allow normal merge"},
+				{"merge method disabled", `"mergeCommitAllowed":true`, `"mergeCommitAllowed":false`, "does not allow normal merge"},
+				{"unknown merge method", `"mergeCommitAllowed":true`, `"mergeCommitAllowed":null`, "does not allow normal merge"},
+				{"read permission", `"WRITE"`, `"READ"`, "write permission is unavailable"},
+				{"triage permission", `"WRITE"`, `"TRIAGE"`, "write permission is unavailable"},
+				{"unknown permission", `"viewerPermission":"WRITE"`, `"viewerPermission":null`, "write permission is unavailable"},
+				{"queue required", `"isMergeQueueEnabled":false`, `"isMergeQueueEnabled":true`, "requires a merge queue"},
+				{"unknown queue policy", `"isMergeQueueEnabled":false`, `"isMergeQueueEnabled":null`, "queue policy is unavailable"},
+				{"conflicts", `"MERGEABLE"`, `"CONFLICTING"`, "resolve conflicts"},
+				{"pending mergeability", `"MERGEABLE"`, `"UNKNOWN"`, "wait for GitHub"},
+				{"blocked", `"CLEAN"`, `"BLOCKED"`, "does not allow land"},
+				{"dirty", `"CLEAN"`, `"DIRTY"`, "does not allow land"},
+				{"pending policy", `"CLEAN"`, `"UNKNOWN"`, "does not allow land"},
+				{"unknown policy", `"CLEAN"`, `"FUTURE_STATE"`, "does not allow land"},
+				{"missing policy", `"CLEAN"`, `""`, "does not allow land"},
+				{"partial GraphQL failure", `{"data":`, `{"errors":[{"message":"failed"}],"data":`, "could not inspect"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					f := newLandFixture(t)
+					if headRepository == "contributor/iro" {
+						f.target = strings.Replace(f.target, `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":{"nameWithOwner":"contributor/iro","viewerPermission":"READ"}`, 1)
+					}
+					original := f.target
+					f.target = strings.Replace(f.target, tc.from, tc.to, 1)
+					if f.target == original {
+						t.Fatal("fixture was not modified")
+					}
+					err := f.service.Land(42, io.Discard)
+					if err == nil || !strings.Contains(err.Error(), tc.want) || f.mergeCalls != 0 {
+						t.Fatalf("error=%v, merges=%d; want %q before merge", err, f.mergeCalls, tc.want)
+					}
+				})
+			}
+			for _, target := range []string{"not JSON", `{"data":{"repository":null}}`, strings.Replace(landResponseForTest, `"WRITE"`, `"ADMIN"`, 1)} {
+				f := newLandFixture(t)
+				f.target = strings.Replace(target, `"CLEAN"`, `"BLOCKED"`, 1)
+				if headRepository == "contributor/iro" {
+					f.target = strings.Replace(f.target, `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":{"nameWithOwner":"contributor/iro","viewerPermission":"READ"}`, 1)
+				}
+				if err := f.service.Land(42, io.Discard); err == nil || f.mergeCalls != 0 {
+					t.Fatalf("invalid data or admin bypass allowed: %v, merges=%d", err, f.mergeCalls)
+				}
+			}
+		})
+	}
+}
+
+func TestLandDoesNotRequireDeliveryTopologyOrOrigin(t *testing.T) {
+	for _, tc := range []struct{ name, from, to string }{
+		{"missing default", `"defaultBranchRef":{"name":"main"}`, `"defaultBranchRef":null`},
+		{"wrong base", `"baseRefName":"main"`, `"baseRefName":"release"`},
+		{"no origin", `"totalCount":1`, `"totalCount":0`},
+		{"multiple origins", `"totalCount":1`, `"totalCount":2`},
+		{"wrong origin", `"number":123`, `"number":124`},
+		{"invalid origin", `"number":123`, `"number":0`},
+		{"foreign origin", `"repository":{"nameWithOwner":"acme/iro"}`, `"repository":{"nameWithOwner":"other/iro"}`},
+		{"incomplete origin", `"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}}]`, `"nodes":[]`},
+		{"wrong canonical branch", `"iro/issue-123"`, `"human-feature"`},
+		{"noncanonical decimal", `"iro/issue-123"`, `"iro/issue-0123"`},
+		{"fork head", `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":{"nameWithOwner":"contributor/iro"}`},
+		{"unknown head repository", `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":null`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newLandFixture(t)
@@ -280,58 +302,29 @@ func TestLandRejectsInvalidTargetBeforeMerge(t *testing.T) {
 			if f.target == landResponseForTest {
 				t.Fatal("fixture was not modified")
 			}
-			err := f.service.Land(42, io.Discard)
-			if err == nil || !strings.Contains(err.Error(), tc.want) || f.mergeCalls != 0 {
-				t.Fatalf("error=%v, merges=%d; want %q before merge", err, f.mergeCalls, tc.want)
+			var out strings.Builder
+			if err := f.service.Land(42, &out); err != nil || f.mergeCalls != 1 || !f.merged || strings.Contains(out.String(), "Issue") {
+				t.Fatalf("error=%v, merges=%d, merged=%t, output=%q", err, f.mergeCalls, f.merged, out.String())
 			}
 		})
-	}
-	for _, target := range []string{"not JSON", `{"data":{"repository":null}}`, strings.Replace(landResponseForTest, `"WRITE"`, `"ADMIN"`, 1)} {
-		f := newLandFixture(t)
-		f.target = strings.Replace(target, `"CLEAN"`, `"BLOCKED"`, 1)
-		if err := f.service.Land(42, io.Discard); err == nil || f.mergeCalls != 0 {
-			t.Fatalf("invalid data or admin bypass allowed: %v, merges=%d", err, f.mergeCalls)
-		}
 	}
 }
 
-func TestLandChecksEveryActiveDeliveryRelationBeforeMerge(t *testing.T) {
-	duplicate := strings.Replace(landActivePRForTest, `"number":42`, `"number":43`, 1)
-	for _, tc := range []struct {
-		name, node string
-		allowed    bool
-	}{
-		{"same canonical branch", strings.Replace(duplicate, `"number":123`, `"number":999`, 1), false},
-		{"same origin different branch", strings.Replace(duplicate, "iro/issue-123", "human-feature", 1), false},
-		{"same origin in fork", strings.Replace(duplicate, `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":{"nameWithOwner":"fork/iro"}`, 1), false},
-		{"unrelated fork canonical name", strings.NewReplacer(`"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":{"nameWithOwner":"fork/iro"}`, `"number":123`, `"number":999`).Replace(duplicate), true},
-		{"unknown canonical repository", strings.Replace(duplicate, `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":null`, 1), false},
-		{"truncated closing relations", strings.Replace(duplicate, `"totalCount":1`, `"totalCount":101`, 1), false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newLandFixture(t)
-			f.pages = []string{landDeliveryPage(landActivePRForTest, true, "next"), landDeliveryPage(tc.node, false, "")}
-			err := f.service.Land(42, io.Discard)
-			if (err == nil) != tc.allowed || f.merged != tc.allowed {
-				t.Fatalf("allowed=%t, error=%v, merged=%t", tc.allowed, err, f.merged)
-			}
-		})
+func TestLandForkDoesNotRequireHeadRepositoryWritePermission(t *testing.T) {
+	f := newLandFixture(t)
+	f.target = strings.Replace(f.target, `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":{"nameWithOwner":"contributor/iro","viewerPermission":"READ"}`, 1)
+	// Only the base repository grants WRITE; unexpected queries, pushes, and
+	// other PR enumeration fail in the fixture's command boundary.
+	if err := f.service.Land(42, io.Discard); err != nil || f.mergeCalls != 1 || !f.merged {
+		t.Fatalf("error=%v, merges=%d, merged=%t", err, f.mergeCalls, f.merged)
 	}
-	for _, page := range []string{
-		landDeliveryPage("", false, ""),
-		landDeliveryPage(strings.Replace(landActivePRForTest, `"number":123`, `"number":124`, 1), false, ""),
-		landDeliveryPage(landActivePRForTest+","+landActivePRForTest, false, ""),
-		strings.Replace(landDeliveryPage(landActivePRForTest, false, ""), `"main"`, `"release"`, 1),
-		landDeliveryPage(landActivePRForTest, true, ""),
-		strings.Replace(landDeliveryPage(landActivePRForTest, false, ""), `"hasNextPage":false`, `"hasNextPage":null`, 1),
-		`{"errors":[{"message":"denied"}]}`,
-		`invalid JSON`,
-	} {
-		f := newLandFixture(t)
-		f.pages = []string{page}
-		if err := f.service.Land(42, io.Discard); err == nil || f.mergeCalls != 0 {
-			t.Fatalf("invalid active relation allowed: %v, merges=%d", err, f.mergeCalls)
-		}
+}
+
+func TestLandNeedsOnlySelectedPRAndMergePolicyMetadata(t *testing.T) {
+	f := newLandFixture(t)
+	f.target = `{"data":{"repository":{"isArchived":false,"mergeCommitAllowed":true,"viewerPermission":"WRITE","pullRequest":{"number":42,"state":"OPEN","isDraft":false,"headRefOid":"` + landHeadForTest + `","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","isMergeQueueEnabled":false}}}}`
+	if err := f.service.Land(42, io.Discard); err != nil || f.mergeCalls != 1 || !f.merged {
+		t.Fatalf("error=%v, merges=%d, merged=%t", err, f.mergeCalls, f.merged)
 	}
 }
 
@@ -372,33 +365,50 @@ func TestLandBehindDefersToMergeEndpoint(t *testing.T) {
 }
 
 func TestLandBindsValidatedHeadAndDoesNotRetryChangedHead(t *testing.T) {
-	f := newLandFixture(t)
-	f.liveHead = landMergeForTest
-	var out, errOut strings.Builder
-	code := Execute([]string{"land", "42"}, &out, &errOut, f.service)
-	if code != 1 || f.mergeCalls != 1 || f.merged || out.Len() != 0 || !strings.Contains(errOut.String(), landHeadForTest) || !strings.Contains(errOut.String(), "iro land 42") {
-		t.Fatalf("exit=%d, calls=%d, merged=%t, stdout=%q, stderr=%q", code, f.mergeCalls, f.merged, out.String(), errOut.String())
+	for _, headRepository := range []string{"acme/iro", "contributor/iro"} {
+		t.Run(headRepository, func(t *testing.T) {
+			f := newLandFixture(t)
+			if headRepository == "contributor/iro" {
+				f.target = strings.Replace(f.target, `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":{"nameWithOwner":"contributor/iro","viewerPermission":"READ"}`, 1)
+			}
+			f.liveHead = landMergeForTest
+			var out, errOut strings.Builder
+			code := Execute([]string{"land", "42"}, &out, &errOut, f.service)
+			if code != 1 || f.mergeCalls != 1 || f.merged || out.Len() != 0 || !strings.Contains(errOut.String(), landHeadForTest) || !strings.Contains(errOut.String(), "`iro land 42`") || strings.Contains(errOut.String(), "--unmanaged") {
+				t.Fatalf("exit=%d, calls=%d, merged=%t, stdout=%q, stderr=%q", code, f.mergeCalls, f.merged, out.String(), errOut.String())
+			}
+		})
 	}
 }
 
 func TestLandMergeFailureDoesNotRetryRepairOrFallback(t *testing.T) {
-	for _, result := range []CommandResult{
-		{ExitCode: 1, Stderr: "HTTP 405: required reviews have not been satisfied"},
-		{ExitCode: 1, Stderr: "HTTP 403: repository rules rejected the merge"},
-		{ExitCode: -1, Err: errors.New("could not start gh")},
-		{Stdout: `{"merged":false,"message":"Merge blocked"}`},
-		{Stdout: `{"merged":true,"sha":"` + landMergeForTest + `"}`, ExitCode: 1, Err: errors.New("connection lost")},
-		{Stdout: `not JSON`},
-		{Stdout: `{"merged":true}`},
-		{Stdout: `{}`},
-	} {
-		f := newLandFixture(t)
-		f.mergeResult = result
-		var out strings.Builder
-		err := f.service.Land(42, &out)
-		if err == nil || f.mergeCalls != 1 || out.Len() != 0 || !strings.Contains(err.Error(), "failed or could not be confirmed") || !strings.Contains(err.Error(), "no automatic retry") {
-			t.Fatalf("error=%v, calls=%d, output=%q", err, f.mergeCalls, out.String())
-		}
+	for _, headRepository := range []string{"acme/iro", "contributor/iro"} {
+		t.Run(headRepository, func(t *testing.T) {
+			for _, result := range []CommandResult{
+				{ExitCode: 1, Stderr: "HTTP 405: required reviews have not been satisfied"},
+				{ExitCode: 1, Stderr: "HTTP 405: required checks have not been satisfied"},
+				{ExitCode: 1, Stderr: "HTTP 403: repository rules rejected the merge"},
+				{ExitCode: -1, Err: errors.New("could not start gh")},
+				{Stdout: `{"merged":false,"message":"Merge blocked"}`},
+				{Stdout: `{"merged":true,"sha":"` + landMergeForTest + `"}`, ExitCode: 1, Err: errors.New("connection lost")},
+				{Stdout: `not JSON`},
+				{Stdout: `{"merged":true}`},
+				{Stdout: `{"sha":"` + landMergeForTest + `"}`},
+				{Stdout: `{"merged":true,"sha":"invalid"}`},
+				{Stdout: `{}`},
+			} {
+				f := newLandFixture(t)
+				if headRepository == "contributor/iro" {
+					f.target = strings.Replace(f.target, `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":{"nameWithOwner":"contributor/iro","viewerPermission":"READ"}`, 1)
+				}
+				f.mergeResult = result
+				var out strings.Builder
+				err := f.service.Land(42, &out)
+				if err == nil || f.mergeCalls != 1 || out.Len() != 0 || !strings.Contains(err.Error(), "failed or could not be confirmed") || !strings.Contains(err.Error(), "no automatic retry") || !strings.Contains(err.Error(), "`iro land 42`") || strings.Contains(err.Error(), "--unmanaged") {
+					t.Fatalf("error=%v, calls=%d, output=%q", err, f.mergeCalls, out.String())
+				}
+			}
+		})
 	}
 }
 
@@ -462,7 +472,7 @@ func TestLandRequiresValidProjectContextBeforeRemoteMutation(t *testing.T) {
 			t.Fatalf("missing %s allowed: %v", name, err)
 		}
 	}
-	for _, stage := range []string{"git root", "missing remote", "ambiguous remote", "wrong host", "auth", "target query", "active query"} {
+	for _, stage := range []string{"git root", "missing remote", "ambiguous remote", "wrong host", "auth", "target query"} {
 		t.Run(stage, func(t *testing.T) {
 			f := newLandFixture(t)
 			f.runner.fn = func(spec CommandSpec) CommandResult {
@@ -480,7 +490,7 @@ func TestLandRequiresValidProjectContextBeforeRemoteMutation(t *testing.T) {
 						return CommandResult{Stdout: "https://example.com/acme/iro"}
 					}
 				}
-				if stage == "target query" && containsString(spec.Args, "query="+landPreflightQuery) || stage == "active query" && strings.Contains(strings.Join(spec.Args, " "), "states:[OPEN]") {
+				if stage == "target query" && containsString(spec.Args, "query="+landPreflightQuery) {
 					return fail
 				}
 				return f.respond(spec)

@@ -670,6 +670,15 @@ func TestUnmanagedG2ManagedEligibilityUsesCurrentRelationNotProvenance(t *testin
 				t.Fatalf("managed operation proceeded past invalid relation: %+v", spec)
 				return CommandResult{ExitCode: 1}
 			}
+			if operation == "land" {
+				// Managed Land uses the selected PR's merge integrity, independent
+				// of the base or origin relation of an earlier unmanaged delivery.
+				identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
+				if _, err := f.service.inspectLandTarget(f.root, identity, 42, false); err != nil {
+					t.Fatalf("managed Land rejected relation-independent target: %v", err)
+				}
+				return
+			}
 			for _, want := range []string{"requires default branch", "closing relation"} {
 				var diagnostic strings.Builder
 				if code := Execute([]string{operation, "42"}, io.Discard, &diagnostic, f.service); code != 1 || !strings.Contains(diagnostic.String(), want) {
@@ -688,8 +697,6 @@ func TestUnmanagedG2ManagedEligibilityUsesCurrentRelationNotProvenance(t *testin
 				_, err = f.service.inspectPRTarget(f.root, identity, 42, operation)
 			case "revise":
 				_, err = f.service.inspectReviseTarget(f.root, identity, 42)
-			case "land":
-				_, err = f.service.inspectLandTarget(f.root, identity, 42, false)
 			}
 			if err != nil {
 				t.Fatalf("human-reshaped relation was rejected: %v", err)

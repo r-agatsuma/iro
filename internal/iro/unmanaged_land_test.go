@@ -13,7 +13,6 @@ import (
 func newUnmanagedLandFixture(t *testing.T) *landFixture {
 	t.Helper()
 	f := newLandFixture(t)
-	f.pages = nil
 	// Any filesystem access fails; there is no config, workflow, or ownership IO.
 	f.service.FileSystem = landProjectFiles{t: t, root: "forbidden", rejectWorkflow: true}
 	f.runner.fn = func(spec CommandSpec) CommandResult {
@@ -54,7 +53,7 @@ func TestUnmanagedLandArbitraryDeliveryAndAmbientSelectors(t *testing.T) {
 func TestUnmanagedLandPreflightFailures(t *testing.T) {
 	for _, change := range [][2]string{
 		{`"OPEN"`, `"CLOSED"`}, {`"number":42`, `"number":43`}, {`"isDraft":false`, `"isDraft":true`}, {`"isDraft":false`, `"isDraft":null`},
-		{`acme/iro`, `fork/iro`}, {landHeadForTest, "invalid"}, {`"isArchived":false`, `"isArchived":true`}, {`"isArchived":false`, `"isArchived":null`},
+		{`acme/iro`, `fork/iro`}, {`"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":null`}, {landHeadForTest, "invalid"}, {`"isArchived":false`, `"isArchived":true`}, {`"isArchived":false`, `"isArchived":null`},
 		{`"mergeCommitAllowed":true`, `"mergeCommitAllowed":false`}, {`"WRITE"`, `"READ"`}, {`"MERGEABLE"`, `"UNKNOWN"`},
 		{`"CLEAN"`, `"BLOCKED"`}, {`"CLEAN"`, `"UNKNOWN"`}, {`"isMergeQueueEnabled":false`, `"isMergeQueueEnabled":true`}, {`"isMergeQueueEnabled":false`, `"isMergeQueueEnabled":null`},
 	} {
@@ -115,18 +114,47 @@ func TestLandRejectsOptionsBeforeCommands(t *testing.T) {
 	}
 }
 
-func TestUnmanagedLandSharedHeadDoesNotGrantManagedEligibility(t *testing.T) {
-	f := newUnmanagedLandFixture(t)
-	duplicate := strings.Replace(landActivePRForTest, `"number":42`, `"number":43`, 1)
-	// The fixture rejects all operations except the selected PR's preflight/merge.
-	// K remains present in the later managed enumeration, with the same head.
-	if err := f.service.landUnmanaged(42, io.Discard); err != nil {
-		t.Fatal(err)
+func TestLandIgnoresOtherPRsSharingHeadOrOrigin(t *testing.T) {
+	for _, unmanaged := range []bool{false, true} {
+		t.Run(landInvocation(42, unmanaged), func(t *testing.T) {
+			f := newUnmanagedLandFixture(t)
+			f.service.FileSystem = landProjectFiles{t: t, root: f.root, rejectWorkflow: true}
+			duplicate := strings.Replace(landActivePRForTest, `"number":42`, `"number":43`, 1)
+			f.target = strings.Replace(f.target, `"pullRequest":`, `"pullRequests":{"nodes":[`+landActivePRForTest+`,`+duplicate+`]},"pullRequest":`, 1)
+			// Only PR #42's preflight and merge are permitted by the fixture.
+			// No enumeration, mutation of #43, or Issue closure is permitted.
+			if err := f.service.land(42, unmanaged, io.Discard); err != nil || f.mergeCalls != 1 || !f.merged {
+				t.Fatalf("err=%v merges=%d merged=%t", err, f.mergeCalls, f.merged)
+			}
+		})
 	}
-	f.pages = []string{landDeliveryPage(landActivePRForTest+","+duplicate, false, "")}
+}
+
+func TestLandDraftRemediationKeepsOperationMode(t *testing.T) {
+	for _, unmanaged := range []bool{false, true} {
+		t.Run(landInvocation(42, unmanaged), func(t *testing.T) {
+			f := newUnmanagedLandFixture(t)
+			f.service.FileSystem = landProjectFiles{t: t, root: f.root, rejectWorkflow: true}
+			f.target = strings.Replace(f.target, `"isDraft":false`, `"isDraft":true`, 1)
+			err := f.service.land(42, unmanaged, io.Discard)
+			want := "retry `" + landInvocation(42, unmanaged) + "`"
+			if err == nil || !strings.Contains(err.Error(), want) || f.mergeCalls != 0 {
+				t.Fatalf("err=%v merges=%d; want %q before merge", err, f.mergeCalls, want)
+			}
+		})
+	}
+}
+
+func TestManagedLandForkAcceptanceDoesNotWidenUnmanagedAuthority(t *testing.T) {
+	f := newUnmanagedLandFixture(t)
+	f.target = strings.Replace(f.target, `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":{"nameWithOwner":"fork/iro","viewerPermission":"READ"}`, 1)
 	f.service.FileSystem = landProjectFiles{t: t, root: f.root, rejectWorkflow: true}
-	if err := f.service.Land(42, io.Discard); err == nil || f.mergeCalls != 1 {
-		t.Fatalf("managed accepted shared head after unmanaged success: err=%v merges=%d", err, f.mergeCalls)
+	if err := f.service.Land(42, io.Discard); err != nil || f.mergeCalls != 1 {
+		t.Fatalf("managed fork: err=%v merges=%d", err, f.mergeCalls)
+	}
+	f.service.FileSystem = landProjectFiles{t: t, root: "forbidden", rejectWorkflow: true}
+	if err := f.service.landUnmanaged(42, io.Discard); err == nil || !strings.Contains(err.Error(), "head must belong to origin repository") || f.mergeCalls != 1 {
+		t.Fatalf("unmanaged accepted fork after managed success: err=%v merges=%d", err, f.mergeCalls)
 	}
 }
 
@@ -137,7 +165,7 @@ func TestLandModeSpecificIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := f.runner.fn
-	managedReads := 0
+	managedReads, managedMerges := 0, 0
 	f.runner.fn = func(spec CommandSpec) CommandResult {
 		if spec.Name == "git" && strings.Join(spec.Args, " ") == "config --get-all remote.tracker.url" {
 			return CommandResult{Stdout: "git@github.com:managed/project.git\n"}
@@ -147,8 +175,15 @@ func TestLandModeSpecificIdentity(t *testing.T) {
 				t.Fatalf("managed target drift: %+v", spec)
 			}
 			managedReads++
-			// The configured repository's selected PR is noncanonical.
+			// The configured repository's selected PR has no origin relation.
 			return CommandResult{Stdout: strings.NewReplacer("acme/iro", "managed/project", `"totalCount":1`, `"totalCount":0`).Replace(landResponseForTest)}
+		}
+		if spec.Name == "gh" && containsArgs(spec.Args, "api", "repos/managed/project/pulls/42/merge") {
+			if !containsArgs(spec.Args, "--hostname", "github.com") || !containsArgs(spec.Args, "--method", "PUT") || !containsArgs(spec.Args, "--input", "-") || !strings.Contains(string(spec.Stdin), `"sha":"`+landHeadForTest+`"`) || !strings.Contains(string(spec.Stdin), `"merge_method":"merge"`) {
+				t.Fatalf("wrong managed merge: %+v", spec)
+			}
+			managedMerges++
+			return f.mergeResult
 		}
 		return original(spec)
 	}
@@ -158,15 +193,15 @@ func TestLandModeSpecificIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.service.FileSystem = landProjectFiles{t: t, root: f.root, rejectWorkflow: true}
-	if err := f.service.Land(42, io.Discard); err == nil || !strings.Contains(err.Error(), "exactly one origin") || managedReads != 1 {
-		t.Fatalf("managed relation: %v reads=%d", err, managedReads)
+	if err := f.service.Land(42, io.Discard); err != nil || managedReads != 1 || managedMerges != 1 {
+		t.Fatalf("managed target: %v reads=%d merges=%d", err, managedReads, managedMerges)
 	}
 	t.Setenv("GH_REPO", "acme/iro")
 	if err := f.service.Land(42, io.Discard); err == nil || managedReads != 1 {
 		t.Fatalf("managed context: %v reads=%d", err, managedReads)
 	}
-	if f.mergeCalls != 1 {
-		t.Fatalf("merge calls=%d", f.mergeCalls)
+	if f.mergeCalls != 1 || managedMerges != 1 {
+		t.Fatalf("unmanaged merges=%d managed merges=%d", f.mergeCalls, managedMerges)
 	}
 }
 

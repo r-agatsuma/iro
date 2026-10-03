@@ -308,7 +308,7 @@ managed Run は概ね次を要求する。
 
 iro は検証済みの既定ブランチ HEAD から Issue 用 branch / worktree を準備し、fresh な Codex Author を起動する。成功後、変更を commit / push し、`iro/issue-N` を head とする通常の open PR を作成する。
 
-PR body には GitHub native closing relation を構成し、managed Land が同じ Issue / PR 関係を検証できるようにする。
+PR body には GitHub native closing relation を構成する。merge 時の Issue closure は GitHub の動作に委ね、managed Land の eligibility には使わない。
 
 iro は開始前にローカル既定ブランチを自動 fetch / pull しない。利用者が同期する。
 
@@ -383,19 +383,18 @@ managed Land は worker を起動しないため Codex を要求せず、`WORKFL
 主な managed precondition は次のとおりである。
 
 - PR が open かつ non-Draft
-- base が configured repository の既定ブランチ
-- head が同じ repository の `iro/issue-N`
-- native closing Issue relation が exactly `{N}`
-- active delivery relation が一意
+- PR が configured repository に存在し、有効な exact HEAD を取得できる
 - repository が normal merge commit を許可
 - 実行者に必要な repository permission がある
 - mergeability、required checks / reviews、merge queue 等の policy が immediate merge を許可
+
+managed Land は fork head も扱い、fork の write permission や push 条件を要求しない。origin Issue、native closing relation、default base、canonical head、他の active PR の一意性を検査せず、PR body の origin resolver を実行しない。unmanaged Land は同じ origin repository の head という従来の制約を維持する。
 
 AI Review の実行有無、Reviewer verdict、PR creator identity、local Issue worktree の有無は Land authorization ではない。
 
 validation で得た exact PR HEAD を merge request に bind し、HEAD drift があれば failure とする。admin bypass、force merge、branch auto-update、別 merge method への fallback、自動 retry は行わない。
 
-成功後も local checkout、Issue worktree、local branch、ownership mapping、remote branch を自動 cleanup しない。
+成功出力は PR number と merge commit OID を示し、origin Issue を主張しない。Issue close / reopen API は呼ばず、GitHub native behavior による Issue closure の有無を成功条件にしない。成功後も local checkout、Issue worktree、local branch、ownership mapping、remote branch を自動 cleanup しない。
 
 ### Local sync
 
