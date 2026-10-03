@@ -14,7 +14,7 @@ import (
 
 const reviewBaseForTest = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 const reviewHeadForTest = "0123456789abcdef0123456789abcdef01234567"
-const reviewResponseForTest = `{"data":{"repository":{"defaultBranchRef":{"name":"main"},"pullRequest":{"number":42,"title":"Human contribution","body":"Implements the requested behavior.","url":"https://github.com/acme/iro/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","baseRefOid":"` + reviewBaseForTest + `","headRefName":"human-feature","headRefOid":"` + reviewHeadForTest + `","headRepository":{"nameWithOwner":"contributor/iro"},"author":{"login":"outside-author"},"mergeable":"MERGEABLE","reviewDecision":"","changedFiles":2,"additions":20,"deletions":3,"closingIssuesReferences":{"totalCount":1,"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}}]}}}}}`
+const reviewResponseForTest = `{"data":{"repository":{"nameWithOwner":"acme/iro","defaultBranchRef":{"name":"main"},"pullRequest":{"number":42,"title":"Human contribution","body":"Implements the requested behavior. Refs #123","url":"https://github.com/acme/iro/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","baseRefOid":"` + reviewBaseForTest + `","headRefName":"human-feature","headRefOid":"` + reviewHeadForTest + `","headRepository":{"nameWithOwner":"contributor/iro"},"author":{"login":"outside-author"},"mergeable":"MERGEABLE","reviewDecision":"","changedFiles":2,"additions":20,"deletions":3,"closingIssuesReferences":{"totalCount":1,"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}}]}}}}}`
 
 var reviewFeedbackPagesForTest = []struct {
 	endpoint, label, heading string
@@ -60,6 +60,8 @@ func reviewFakeResult(spec CommandSpec, root, reviewerOutput string) CommandResu
 	}
 	if spec.Name == "gh" {
 		switch {
+		case containsString(spec.Args, "query="+githubOriginCandidateQuery):
+			return CommandResult{Stdout: strings.ReplaceAll(originCandidateResponse(123), "ACME/SELECTED", "acme/iro")}
 		case len(spec.Args) >= 2 && spec.Args[0] == "api" && spec.Args[1] == "graphql":
 			return CommandResult{Stdout: reviewResponseForTest}
 		case len(spec.Args) >= 2 && spec.Args[0] == "issue" && spec.Args[1] == "view":
@@ -303,7 +305,7 @@ func TestReviewSuppliesTrustedProvenanceAfterHeadVerification(t *testing.T) {
 			preflightCalls, reviewerCalls := 0, 0
 			runner := &fakeCommandRunner{}
 			runner.fn = func(spec CommandSpec) CommandResult {
-				if spec.Name == "gh" && containsString(spec.Args, "graphql") {
+				if spec.Name == "gh" && containsString(spec.Args, "query="+managedReviewPreflightQuery) {
 					preflightCalls++
 					if !strings.Contains(strings.Join(spec.Args, " "), "baseRefOid") {
 						t.Fatal("preflight did not request the remote PR base OID")
@@ -360,41 +362,46 @@ func TestReviewSuppliesTrustedProvenanceAfterHeadVerification(t *testing.T) {
 	}
 }
 
-func TestReviewRejectsInvalidBaseOIDBeforeWorkspaceCreation(t *testing.T) {
-	for _, tc := range []struct{ name, jsonValue string }{
-		{"missing", ""},
-		{"null", "null"},
-		{"empty", `""`},
-		{"abbreviated", `"abcdef"`},
-		{"non-hex", strconv.Quote(strings.Repeat("g", 40))},
-		{"wrong length", strconv.Quote(strings.Repeat("a", 41))},
-		{"whitespace", strconv.Quote(reviewBaseForTest + "\n")},
+func TestReviewRejectsInvalidCommitOIDsBeforeWorkspaceCreation(t *testing.T) {
+	for _, oid := range []struct{ field, value, label string }{
+		{"baseRefOid", reviewBaseForTest, "base"},
+		{"headRefOid", reviewHeadForTest, "HEAD"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			writeProjectFiles(t, root)
-			field := ""
-			if tc.jsonValue != "" {
-				field = `"baseRefOid":` + tc.jsonValue + ","
-			}
-			response := strings.Replace(reviewResponseForTest, `"baseRefOid":"`+reviewBaseForTest+`",`, field, 1)
-			runner := &fakeCommandRunner{}
-			runner.fn = func(spec CommandSpec) CommandResult {
-				if spec.Name == "gh" && containsString(spec.Args, "graphql") {
-					return CommandResult{Stdout: response}
+		for _, tc := range []struct{ name, jsonValue string }{
+			{"missing", ""},
+			{"null", "null"},
+			{"empty", `""`},
+			{"abbreviated", `"abcdef"`},
+			{"non-hex", strconv.Quote(strings.Repeat("g", 40))},
+			{"wrong length", strconv.Quote(strings.Repeat("a", 41))},
+			{"whitespace", strconv.Quote(oid.value + "\n")},
+		} {
+			t.Run(oid.label+"/"+tc.name, func(t *testing.T) {
+				root := t.TempDir()
+				writeProjectFiles(t, root)
+				field := ""
+				if tc.jsonValue != "" {
+					field = strconv.Quote(oid.field) + ":" + tc.jsonValue + ","
 				}
-				return reviewFakeResult(spec, root, "review")
-			}
-			service := newTestService(t, runner, root)
-			if err := service.Review(42, io.Discard); err == nil || !strings.Contains(err.Error(), "base commit is invalid or unavailable") {
-				t.Fatalf("Review() error = %v", err)
-			}
-			for _, call := range runner.calls {
-				if call.Name == "codex" || call.Name == "gh" && len(call.Args) >= 2 && (call.Args[0] == "repo" && call.Args[1] == "clone" || call.Args[0] == "pr" && call.Args[1] == "comment") {
-					t.Fatalf("workspace, Reviewer or comment started with invalid base OID: %+v", call)
+				response := strings.Replace(reviewResponseForTest, strconv.Quote(oid.field)+":"+strconv.Quote(oid.value)+",", field, 1)
+				runner := &fakeCommandRunner{}
+				runner.fn = func(spec CommandSpec) CommandResult {
+					if spec.Name == "gh" && containsString(spec.Args, "query="+managedReviewPreflightQuery) {
+						return CommandResult{Stdout: response}
+					}
+					return reviewFakeResult(spec, root, "review")
 				}
-			}
-		})
+				service := newTestService(t, runner, root)
+				if err := service.Review(42, io.Discard); err == nil || !strings.Contains(err.Error(), oid.label+" commit is") {
+					t.Fatalf("Review() error = %v", err)
+				}
+				for _, call := range runner.calls {
+					if call.Name == "codex" || call.Name == "gh" && len(call.Args) >= 2 && (call.Args[0] == "repo" && call.Args[1] == "clone" || call.Args[0] == "pr" && call.Args[1] == "comment") {
+						t.Fatalf("workspace, Reviewer or comment started with invalid commit OID: %+v", call)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -404,7 +411,7 @@ func TestReviewAllowsDraftPR(t *testing.T) {
 	response := strings.Replace(reviewResponseForTest, `"isDraft":false`, `"isDraft":true`, 1)
 	runner := &fakeCommandRunner{}
 	runner.fn = func(spec CommandSpec) CommandResult {
-		if spec.Name == "gh" && len(spec.Args) >= 2 && spec.Args[0] == "api" && spec.Args[1] == "graphql" {
+		if spec.Name == "gh" && containsString(spec.Args, "query="+managedReviewPreflightQuery) {
 			return CommandResult{Stdout: response}
 		}
 		return reviewFakeResult(spec, root, "draft review")
@@ -432,10 +439,9 @@ func TestReviewRejectsInvalidRemoteRelationBeforeReviewer(t *testing.T) {
 		with     string
 		wantText string
 	}{
-		{"no origin", `"totalCount":1,"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}}]`, `"totalCount":0,"nodes":[]`, "exactly one"},
-		{"multiple origins", `"totalCount":1,"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}}]`, `"totalCount":2,"nodes":[{"number":123,"repository":{"nameWithOwner":"acme/iro"}},{"number":124,"repository":{"nameWithOwner":"acme/iro"}}]`, "exactly one"},
-		{"different repository origin", `"nameWithOwner":"acme/iro"}}]`, `"nameWithOwner":"other/iro"}}]`, "configured repository"},
-		{"non-default base", `"baseRefName":"main"`, `"baseRefName":"release"`, "default branch"},
+		{"no origin", "Refs #123", "Refs acme/iro#123", "unresolved"},
+		{"multiple origins", "Refs #123", "Refs #123 #124", "ambiguous"},
+		{"different repository", `"nameWithOwner":"acme/iro","defaultBranchRef"`, `"nameWithOwner":"other/iro","defaultBranchRef"`, "unexpected repository"},
 		{"closed", `"state":"OPEN"`, `"state":"CLOSED"`, "not reviewable"},
 		{"merged", `"state":"OPEN"`, `"state":"MERGED"`, "not reviewable"},
 	}
@@ -446,8 +452,12 @@ func TestReviewRejectsInvalidRemoteRelationBeforeReviewer(t *testing.T) {
 			response := strings.Replace(reviewResponseForTest, tt.replace, tt.with, 1)
 			runner := &fakeCommandRunner{}
 			runner.fn = func(spec CommandSpec) CommandResult {
-				if spec.Name == "gh" && len(spec.Args) >= 2 && spec.Args[0] == "api" && spec.Args[1] == "graphql" {
+				if spec.Name == "gh" && containsString(spec.Args, "query="+managedReviewPreflightQuery) {
 					return CommandResult{Stdout: response}
+				}
+				if containsString(spec.Args, "query="+githubOriginCandidateQuery) {
+					number, _ := strconv.Atoi(strings.TrimPrefix(spec.Args[len(spec.Args)-1], "number="))
+					return CommandResult{Stdout: strings.ReplaceAll(originCandidateResponse(number), "ACME/SELECTED", "acme/iro")}
 				}
 				return reviewFakeResult(spec, root, "review")
 			}
