@@ -4,7 +4,7 @@
 
 GitHub + Codex の #83 foundation baseline を示す。Run の delivery identity、Review / Revise の specification binding、Land の merge integrity、Cleanup の physical namespace は別の責務である。
 
-managed Run / Review / Revise / Land は config 読み込み後の小さな `tracker.type` switch から concrete GitHub operation へ入る。worker caller は `agent.type` から選択した concrete Codex runtime を使い、unmanaged は built-in `codex` 選択を使う。Land に agent dependency はなく、Status / Cleanup に selector / network dependency はない。これは #105 の behavior-preserving wiring であり、Gitea / Copilot support や共通 Tracker / Agent semantic interface は含まない。
+managed Run / Review / Revise / Land は config 読み込み後の小さな `tracker.type` switch から concrete GitHub operation へ入る。worker caller は `agent.type` から選択した concrete Codex runtime を使い、unmanaged は built-in `codex` 選択を使う。Land に agent dependency はなく、Status / Cleanup に selector / network dependency はない。#105 の selector wiring と #107 の worker 責務分離は既存 behavior を維持し、Gitea / Copilot support や共通 Tracker / Agent semantic interface は含まない。
 
 ## Authority and durable state
 
@@ -162,6 +162,20 @@ flowchart LR
 この図は managed Land を示す。unmanaged Land は origin identity を使い、same-repository head を要求する。両 mode とも merge response が不明なら non-success とし、remote 確認を Human に委ねて retry / fallback / repair をしない。
 
 ## Instruction and policy layers
+
+`github_worker_input.go` は GitHub domain data から operation-specific な stdin を render する。`worker_policy.go` は iro control instructions と policy section を構築する。GitHub の各 worker caller は必要な source を読み取り、policy と rendered task/context を接続する。`codex.go` の `codexRuntime.execute` は GitHub 型や relation を受け取らず、制御指示と task/context を別引数で受ける concrete connector である。`workerOptions` の operation selector は caller に残し、connector には `codexOptions` の requested runtime configuration だけを渡す。
+
+```mermaid
+flowchart LR
+    GH["concrete GitHub operation<br/>acquisition / relation / verified snapshot"] --> INPUT["GitHub task/context renderer<br/>GitHub domain types / JSON"]
+    GH --> POLICY["iro operation/mode policy<br/>WORKFLOW source / built-in authority"]
+    POLICY -->|"explicit policy section<br/>legacy stdin rendering"| INPUT
+    POLICY -->|"control instructions"| CODEX["concrete Codex connector<br/>executable / auth / argv / ephemeral exec"]
+    INPUT -->|"rendered task/context"| CODEX
+    CODEX -->|"unchanged command result"| CALLER["operation caller<br/>report / log / comment / cleanup / retention"]
+```
+
+Review の trusted provenance は operation が観測・検証した primitive な endpoint 値と、Codex connector が示す resolved model identity の取得不能を policy に渡して構築する。model / reasoning の requested option は resolved fact に昇格しない。将来の concrete tracker は独自 renderer と policy 接続を持てる。将来の別 agent は別 connector を持てるが、共通 domain DTO / task schema / Agent interface は設けない。現在の policy 文面と stdin 内の policy section は変更せず、Codex transport の変更に GitHub relation semantics の理解を要求しない。
 
 ```mermaid
 flowchart TB

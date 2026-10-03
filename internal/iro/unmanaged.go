@@ -11,18 +11,6 @@ import (
 	"strings"
 )
 
-const unmanagedDeveloperInstructions = `You are executing one unmanaged iro task under the built-in conservative worker policy.
-
-Do not read iro.toml or WORKFLOW.md. They do not select configuration or worker policy for this operation.
-Follow the AGENTS.md instruction chain loaded by Codex within these instructions.
-If applicable guidance materially conflicts, stop without editing and report the conflict.
-Make only the changes required by the supplied Issue. Do not invent missing requirements or expand the scope.
-If a new product or architecture decision is required, stop and report it for human judgment.
-Do not provision or repair missing environments, credentials, remotes, branches, or worktrees.
-Preserve human-owned files and changes. Do not perform destructive cleanup or automatically retry failed operations.
-
-` + workerSafetyInstructions
-
 // Keep unmanaged transport validation separate from managed remote parsing.
 // A matching host and repository path alone do not establish a GitHub endpoint.
 func parseUnmanagedGitHubRemote(raw string) (RepositoryIdentity, error) {
@@ -163,7 +151,8 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 	if err := s.checkoutClean(workspace); err != nil {
 		return fmt.Errorf("new unmanaged worktree is not clean; inspect %s: %w", workspace, err)
 	}
-	result = agent.runAuthor(workspace, identity, target, options)
+	policy := unmanagedRunWorkerPolicy()
+	result = agent.execute(workspace, policy.instructions, "Implement the GitHub Issue supplied on stdin.", buildGitHubIssueInput(identity, target), options.codexOptions())
 	logErr := s.writeUnmanagedRunLog(identity, number, base, head, workspace, result, allocation)
 	var operationErr error
 	if !commandSucceeded(result) {

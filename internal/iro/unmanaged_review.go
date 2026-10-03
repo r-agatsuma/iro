@@ -71,8 +71,9 @@ func (s *Service) reviewUnmanaged(number, specificationIssue int, options worker
 	if err := s.verifyDetachedHead(workspace, target.HeadRefOID); err != nil {
 		return err
 	}
-	options.Unmanaged = true
-	result = agent.runReviewer(workspace, identity, target, origin, nil, []byte("Built-in unmanaged read-only Reviewer policy; project files are not policy inputs."), context, options)
+	policy := unmanagedReviewWorkerPolicy(agent.resolvedModelIdentity(), target.BaseRefName, target.BaseRefOID, target.HeadRefOID)
+	input := buildGitHubPRInput(identity, target, origin, nil, policy, context, "Origin Issue")
+	result = agent.execute(workspace, policy.instructions, "Independently review the GitHub pull request supplied on stdin.", input, options.codexOptions())
 	if !commandSucceeded(result) {
 		return fmt.Errorf("Reviewer exited with status %d; no PR comment was posted", result.ExitCode)
 	}

@@ -94,37 +94,29 @@ func TestManagedCommandsRejectFutureSelectorsBeforeRemoteOrWorkspaceAccess(t *te
 }
 
 func TestSelectedCodexPreservesWorkerResults(t *testing.T) {
-	for name, worker := range map[string]func(codexRuntime) CommandResult{
-		"run": func(c codexRuntime) CommandResult {
-			return c.runAuthor("workspace", RepositoryIdentity{}, issue{}, workerOptions{})
-		},
-		"review": func(c codexRuntime) CommandResult {
-			return c.runReviewer("workspace", RepositoryIdentity{}, reviewPullRequest{}, issue{}, nil, nil, reviewContext{}, workerOptions{})
-		},
-		"revise": func(c codexRuntime) CommandResult {
-			return c.runRevisionAuthor("workspace", RepositoryIdentity{}, reviewPullRequest{}, issue{}, nil, nil, reviewContext{}, workerOptions{})
-		},
-		"unmanaged-revise": func(c codexRuntime) CommandResult {
-			return c.runUnmanagedRevisionAuthor("workspace", RepositoryIdentity{}, reviewPullRequest{}, issue{}, reviewContext{}, workerOptions{})
-		},
+	for _, want := range []CommandResult{
+		{Stdout: "opaque report\r\n", Stderr: "runtime diagnostic\n"},
+		{Stdout: "partial report\n", Stderr: "runtime diagnostic\n", ExitCode: 7, Err: io.ErrUnexpectedEOF},
+		{},
+		{Stdout: " \t\n"},
+		{ExitCode: -1, Err: io.ErrUnexpectedEOF},
 	} {
-		t.Run(name, func(t *testing.T) {
-			want := CommandResult{Stdout: "opaque report\n", Stderr: "runtime diagnostic\n", ExitCode: 7, Err: io.ErrUnexpectedEOF}
-			runner := &fakeCommandRunner{fn: func(spec CommandSpec) CommandResult {
-				if spec.Name != "codex" || spec.Dir != "workspace" || !containsString(spec.Args, "--ephemeral") || !containsString(spec.Args, "exec") {
-					t.Fatalf("unexpected worker command: %+v", spec)
-				}
-				return want
-			}}
-			service := &Service{Runner: runner}
-			agent, err := service.selectAgent("codex")
-			if err != nil {
-				t.Fatal(err)
+		runner := &fakeCommandRunner{fn: func(spec CommandSpec) CommandResult {
+			if spec.Name != "codex" || spec.Dir != "workspace" || !containsString(spec.Args, "--ephemeral") || !containsString(spec.Args, "exec") {
+				t.Fatalf("unexpected worker command: %+v", spec)
 			}
-			if got := worker(agent); !reflect.DeepEqual(got, want) || len(runner.calls) != 1 {
-				t.Fatalf("result = %+v; calls = %d", got, len(runner.calls))
-			}
-		})
+			return want
+		}}
+		service := &Service{Runner: runner}
+		agent, err := service.selectAgent("codex")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// No GitHub identity, Issue, PR, or review schema is needed by the connector.
+		got := agent.execute("workspace", workerInstructions("iro control policy"), "Perform the supplied task.", "tracker-specific rendered context", codexOptions{})
+		if !reflect.DeepEqual(got, want) || len(runner.calls) != 1 {
+			t.Fatalf("result = %+v; calls = %d", got, len(runner.calls))
+		}
 	}
 }
 

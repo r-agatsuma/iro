@@ -13,33 +13,13 @@ func unsupportedAgent(value string) error {
 	return fmt.Errorf("unsupported agent.type %q; supported value is codex", value)
 }
 
-// codexRuntime is the concrete Codex worker path, not a shared agent contract.
-type codexRuntime struct {
-	service *Service
-}
-
 func (s *Service) selectAgent(agentType string) (codexRuntime, error) {
 	switch agentType {
 	case "codex":
-		return codexRuntime{service: s}, nil
+		return codexRuntime{runner: s.Runner}, nil
 	default:
 		return codexRuntime{}, unsupportedAgent(agentType)
 	}
-}
-
-func (c codexRuntime) requireExecutable() error {
-	return c.service.requireExecutable("codex")
-}
-
-func (c codexRuntime) checkAuth(root string) error {
-	return c.service.checkAuth("codex", []string{"login", "status"}, root)
-}
-
-func (c codexRuntime) preflight(root string) error {
-	if err := c.requireExecutable(); err != nil {
-		return err
-	}
-	return c.checkAuth(root)
 }
 
 func (s *Service) requireTrackerExecutable(trackerType string) error {

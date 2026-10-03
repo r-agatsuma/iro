@@ -137,6 +137,11 @@ type workerOptions struct {
 	ReasoningEffort    string
 }
 
+// codexOptions projects only runtime configuration across the Codex boundary.
+func (o workerOptions) codexOptions() codexOptions {
+	return codexOptions{NoSandbox: o.NoSandbox, Model: o.Model, ReasoningEffort: o.ReasoningEffort}
+}
+
 func parseWorkerOptions(args []string, command, operand string) (workerOptions, error) {
 	usage := fmt.Sprintf("usage: iro %s <%s> [--model <model> | -m <model>] [--reasoning-effort <effort>] [--no-sandbox]", command, operand)
 	if command == "run" {
