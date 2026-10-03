@@ -119,6 +119,23 @@ func (s *Service) reviewWithOptions(prNumber int, options workerOptions, out io.
 	if err != nil {
 		return fmt.Errorf("WORKFLOW.md is missing or unreadable")
 	}
+	return s.reviewTracker(root, config, prNumber, configData, workflowData, options, out)
+}
+
+func (s *Service) reviewTracker(root string, config Config, prNumber int, configData, workflowData []byte, options workerOptions, out io.Writer) error {
+	switch config.TrackerType {
+	case "github":
+		return s.reviewGitHub(root, config, prNumber, configData, workflowData, options, out)
+	default:
+		return unsupportedTracker(config.TrackerType)
+	}
+}
+
+func (s *Service) reviewGitHub(root string, config Config, prNumber int, configData, workflowData []byte, options workerOptions, out io.Writer) error {
+	agent, err := s.selectAgent(config.AgentType)
+	if err != nil {
+		return err
+	}
 	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
 		return err
@@ -126,10 +143,10 @@ func (s *Service) reviewWithOptions(prNumber int, options workerOptions, out io.
 	if err := checkGitHubContext(identity); err != nil {
 		return err
 	}
-	if err := s.requireExecutable("gh"); err != nil {
+	if err := s.requireTrackerExecutable(config.TrackerType); err != nil {
 		return err
 	}
-	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
+	if err := s.checkTrackerAuth(config.TrackerType, root, identity); err != nil {
 		return err
 	}
 
@@ -151,10 +168,7 @@ func (s *Service) reviewWithOptions(prNumber int, options workerOptions, out io.
 	if err != nil {
 		return err
 	}
-	if err := s.requireExecutable("codex"); err != nil {
-		return err
-	}
-	if err := s.checkAuth("codex", []string{"login", "status"}, root); err != nil {
+	if err := agent.preflight(root); err != nil {
 		return err
 	}
 
@@ -169,7 +183,7 @@ func (s *Service) reviewWithOptions(prNumber int, options workerOptions, out io.
 		}
 	}()
 
-	result := s.runReviewer(workspace, identity, target, origin, configData, workflowData, context, options)
+	result := agent.runReviewer(workspace, identity, target, origin, configData, workflowData, context, options)
 	if cleanupErr := s.FileSystem.RemoveAll(workspace); cleanupErr != nil {
 		return fmt.Errorf("could not remove disposable review workspace: %w", cleanupErr)
 	}
@@ -441,7 +455,7 @@ func (s *Service) materializeReviewWorkspace(root string, identity RepositoryIde
 	return workspace, nil
 }
 
-func (s *Service) runReviewer(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, options workerOptions) CommandResult {
+func (c codexRuntime) runReviewer(workspace string, identity RepositoryIdentity, target reviewPullRequest, origin issue, configData, workflowData []byte, context reviewContext, options workerOptions) CommandResult {
 	payload := buildReviewPayload(identity, target, origin, configData, workflowData, context)
 	if options.Unmanaged {
 		payload = buildPRPayload(identity, target, origin, nil, workflowData, context, "Built-in unmanaged Reviewer policy")
@@ -453,7 +467,7 @@ func (s *Service) runReviewer(workspace string, identity RepositoryIdentity, tar
 		policy += "\n\nThe specification Issue is bound once from the starting PR body. Review the verified workspace HEAD supplied in trusted provenance; fetched PR diff and feedback may reflect concurrent changes and must not replace that snapshot. Later PR body edits do not change the supplied Issue binding."
 	}
 	instructions := fmt.Sprintf("%s\n\nTrusted review provenance (supplied by iro):\nModel: %s\nBase branch: %s\nBase OID: %s\nReviewed HEAD OID: %s\n", policy, reviewerModelIdentity, target.BaseRefName, target.BaseRefOID, target.HeadRefOID)
-	return s.Runner.Run(CommandSpec{
+	return c.service.Runner.Run(CommandSpec{
 		Name: "codex",
 		Args: withCodexOptions(append(codexWorkerArgs(workspace, options), []string{
 			"-c", "developer_instructions=" + strconv.Quote(instructions),

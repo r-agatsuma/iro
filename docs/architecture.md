@@ -4,6 +4,8 @@
 
 GitHub + Codex の #83 foundation baseline を示す。Run の delivery identity、Review / Revise の specification binding、Land の merge integrity、Cleanup の physical namespace は別の責務である。
 
+managed Run / Review / Revise / Land は config 読み込み後の小さな `tracker.type` switch から concrete GitHub operation へ入る。worker caller は `agent.type` から選択した concrete Codex runtime を使い、unmanaged は built-in `codex` 選択を使う。Land に agent dependency はなく、Status / Cleanup に selector / network dependency はない。これは #105 の behavior-preserving wiring であり、Gitea / Copilot support や共通 Tracker / Agent semantic interface は含まない。
+
 ## Authority and durable state
 
 ```mermaid

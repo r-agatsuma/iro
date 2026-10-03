@@ -8,7 +8,7 @@
 
 `docs/architecture.md`、`docs/cookbook.md`、[foundation acceptance の検証索引](foundation-acceptance.md) は non-normative である。
 
-現在の GitHub + Codex baseline は #83 の foundation（#88〜#94 の各 slice と #95 の統合 acceptance）である。historical #72〜#81 の replacement selector / backend expansion は、この文書の現行 behavior を出発点として別の変更で設計する。PR #82 はこの baseline に含まれない。
+現在の GitHub + Codex baseline は #83 の foundation（#88〜#94 の各 slice と #95 の統合 acceptance）であり、#105 の selector dispatch はその behavior を維持する。backend support の拡張は別の変更で扱う。PR #82 はこの baseline に含まれない。
 
 ## 2. Global invariants
 
@@ -331,6 +331,16 @@ Issue に記述された作業を、この repository の isolated workspace で
 ```
 
 Codex に `WORKFLOW.md` を読ませる責任は `iro` の Codex developer instructions にある。
+
+### CFG-003: concrete selector dispatch boundaries
+
+managed Run / Review / Revise / Land は各 command が定める既存の project config 読み込みを行い、`tracker.type` で concrete operation を選択する。`github` は既存の GitHub implementation を選ぶ。selector dispatch は provider-specific な repository identity 解決、API / remote access より前に行い、未対応の値を worker 起動、新規 workspace 作成、remote mutation より前に拒否する。Issue / PR / merge semantics を共通化する Tracker interface は設けない。
+
+Run / Review / Revise の全 worker caller は選択した concrete Codex runtime を経由する。managed は `agent.type`、unmanaged は既存の built-in `codex` 選択を用いる。未対応の agent は worker 起動およびその worker に依存する operation の side effect より前に拒否する。Agent の共通 semantic interface / universal runtime contract は設けない。Codex の CLI 引数、policy / payload、認証、report / log、成功・失敗時の保持・削除責務は各 command の既存 contract に従う。
+
+選択した GitHub operation は worker boundary で選択した Codex runtime を呼び出してよい。Land は agent runtime / 認証 / executable を要求せず、Status / Cleanup は tracker / agent selection を行わない。unmanaged は backend / policy authority のために project config / WORKFLOW を読み込まない。config schema と public value set は CFG-001 のままとし、`gitea` / `copilot` を support しない。
+
+Doctor は valid config の selector に従って configured GitHub identity と supported combination の認証・executable check を接続する。config が利用不能・invalid な場合も、既存の Git / gh / Codex tool health inventory は独立した診断として継続する。これは operation の backend fallback を許可するものではない。
 
 ## 5. `iro init`
 
