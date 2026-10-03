@@ -536,8 +536,8 @@ func TestReviseModeSpecificIdentity(t *testing.T) {
 				}
 				if !unmanaged && spec.Name == "gh" && containsString(spec.Args, "graphql") {
 					configuredQueries++
-					if !containsString(spec.Args, "owner=other") || !containsString(spec.Args, "name=repo") || !containsString(spec.Args, "query="+reviewPreflightQuery) {
-						t.Fatalf("managed did not target R1 with native relation checks: %v", spec.Args)
+					if !containsString(spec.Args, "owner=other") || !containsString(spec.Args, "name=repo") || !containsString(spec.Args, "query="+managedReviewPreflightQuery) {
+						t.Fatalf("managed did not target R1 with raw-body relation checks: %v", spec.Args)
 					}
 					return CommandResult{ExitCode: 1}
 				}
@@ -604,7 +604,7 @@ func TestUnmanagedReviseG1PreservesManagedOwnershipAndRejectsStaleLocalState(t *
 		return managed.respond(spec)
 	}
 	var diagnostic strings.Builder
-	if code := Execute([]string{"revise", "42"}, io.Discard, &diagnostic, managed.service); code != 1 || !strings.Contains(diagnostic.String(), "differs from expected") {
+	if code := Execute([]string{"revise", "42"}, io.Discard, &diagnostic, managed.service); code != 1 || !strings.Contains(diagnostic.String(), "HEAD mismatch") {
 		t.Fatalf("managed stale state accepted: %d %s", code, diagnostic.String())
 	}
 	if stages := revisionMutations(managed.runner.calls); len(stages) != 0 {
@@ -623,7 +623,7 @@ func TestUnmanagedReviseG3ExplicitIssueDoesNotReplaceManagedOrigin(t *testing.T)
 	unmanaged.intercept = func(spec CommandSpec) (CommandResult, bool) {
 		if spec.Name == "gh" && containsArgs(spec.Args, "issue", "view") {
 			if spec.Args[2] != "456" {
-				t.Fatal("unmanaged reconciled explicit Issue B with native Issue A")
+				t.Fatal("unmanaged reconciled explicit Issue B with body-bound Issue A")
 			}
 			return CommandResult{Stdout: `{"number":456,"title":"Explicit B","body":"Use B","url":"https://github.com/acme/iro/issues/456","comments":[]}`}, true
 		}
@@ -647,14 +647,14 @@ func TestUnmanagedReviseG3ExplicitIssueDoesNotReplaceManagedOrigin(t *testing.T)
 	found := false
 	for _, call := range managed.runner.calls {
 		if call.Name == "gh" && containsArgs(call.Args, "issue", "view") && call.Args[2] != "123" {
-			t.Fatal("managed reconciled native Issue A with unmanaged Issue B")
+			t.Fatal("managed reconciled body-bound Issue A with unmanaged Issue B")
 		}
 		if call.Name == "codex" && containsString(call.Args, "--ephemeral") {
 			found = strings.Contains(string(call.Stdin), "Origin Issue:\nNumber: 123") && !strings.Contains(string(call.Stdin), "Explicit B")
 		}
 	}
 	if !found {
-		t.Fatal("managed Author did not use native Issue A")
+		t.Fatal("managed Author did not use body-bound Issue A")
 	}
 }
 
@@ -738,16 +738,12 @@ func TestUnmanagedReviseG5BuiltInPolicyThenManagedStartingPolicy(t *testing.T) {
 	}
 }
 
-func TestManagedReviseStillRejectsSharedHead(t *testing.T) {
+func TestManagedReviseAllowsSharedHead(t *testing.T) {
 	f := newReviseFixture(t, false)
 	other := strings.Replace(activeRevisionPR, `"number":42`, `"number":43`, 1)
 	f.active = strings.Replace(f.active, activeRevisionPR, activeRevisionPR+","+other, 1)
-	var diagnostic strings.Builder
-	if code := Execute([]string{"revise", "42"}, io.Discard, &diagnostic, f.service); code != 1 {
-		t.Fatal("managed shared-head PR unexpectedly accepted")
-	}
-	if stages := revisionMutations(f.runner.calls); len(stages) != 0 {
-		t.Fatalf("managed proceeded with shared-head PR: %v %s", stages, diagnostic.String())
+	if err := f.service.Revise(42, io.Discard); err != nil {
+		t.Fatal(err)
 	}
 }
 
