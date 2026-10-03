@@ -192,9 +192,9 @@ func (s *Service) inspectPRTarget(root string, identity RepositoryIdentity, numb
 }
 
 func (s *Service) inspectPRTargetWithIssue(root string, identity RepositoryIdentity, number int, operation string, specificationIssue int) (reviewPullRequest, error) {
-	managedReview := operation == "review" && specificationIssue == 0
+	managedRelation := (operation == "review" || operation == "revise") && specificationIssue == 0
 	query := reviewPreflightQuery
-	if managedReview {
+	if managedRelation {
 		query = managedReviewPreflightQuery
 	} else if specificationIssue > 0 {
 		query = strings.Replace(query, "defaultBranchRef{name} ", "", 1)
@@ -250,7 +250,7 @@ func (s *Service) inspectPRTargetWithIssue(root string, identity RepositoryIdent
 		return reviewPullRequest{}, fmt.Errorf("could not inspect PR #%d metadata; verify GitHub access", number)
 	}
 	repository := response.Data.Repository
-	if !managedReview && specificationIssue == 0 && (repository.DefaultBranchRef == nil || repository.DefaultBranchRef.Name == "") {
+	if !managedRelation && specificationIssue == 0 && (repository.DefaultBranchRef == nil || repository.DefaultBranchRef.Name == "") {
 		return reviewPullRequest{}, fmt.Errorf("configured repository default branch is unavailable")
 	}
 	pr := repository.PullRequest
@@ -264,7 +264,7 @@ func (s *Service) inspectPRTargetWithIssue(root string, identity RepositoryIdent
 		return reviewPullRequest{}, fmt.Errorf("PR #%d must be open for %s", number, operation)
 	}
 	originNumber := specificationIssue
-	if managedReview {
+	if managedRelation {
 		if !strings.EqualFold(repository.NameWithOwner, identity.String()) || pr.Body == nil {
 			return reviewPullRequest{}, fmt.Errorf("PR #%d origin relation failed: current raw body is missing, unreadable or belongs to an unexpected repository", number)
 		}

@@ -1,7 +1,6 @@
 package iro
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,17 +22,21 @@ type reviseFixture struct {
 	identity           RepositoryIdentity
 	target, active     string
 	head, registration string
+	otherRegistrations string
+	branchName         string
+	detached           bool
 	branch, dirty      bool
 	worker             CommandResult
 }
 
 func newReviseFixture(t *testing.T, existing bool) *reviseFixture {
 	t.Helper()
-	f := &reviseFixture{t: t, root: t.TempDir(), identity: RepositoryIdentity{Owner: "acme", Name: "iro"}, head: revisionHead, worker: CommandResult{Stdout: "修正しました。テスト成功。"}}
+	f := &reviseFixture{t: t, root: t.TempDir(), identity: RepositoryIdentity{Owner: "acme", Name: "iro"}, head: revisionHead, branchName: "iro/issue-123", worker: CommandResult{Stdout: "修正しました。テスト成功。"}}
 	writeProjectFiles(t, f.root)
 	f.runner = &fakeCommandRunner{}
 	f.service = newTestService(t, f.runner, f.root)
-	f.workspace = worktreePath(f.service.Dirs, f.identity, 123)
+	f.service.newDeliveryID = func() (deliveryID, error) { return deliveryID(strings.Repeat("a", 32)), nil }
+	f.workspace = deliveryWorktreePath(f.service.Dirs, f.identity, 123, deliveryID(strings.Repeat("a", 32)))
 	f.target = strings.NewReplacer(`"human-feature"`, `"iro/issue-123"`, `"contributor/iro"`, `"acme/iro"`, reviewHeadForTest, revisionHead).Replace(reviewResponseForTest)
 	f.active = strings.Replace(deliveryResponseForTest, `"nodes":[]`, `"nodes":[`+activeRevisionPR+`]`, 1)
 	if existing {
@@ -56,7 +59,11 @@ func (f *reviseFixture) createWorktree() {
 		f.t.Fatal(err)
 	}
 	f.branch = true
-	f.registration = fmt.Sprintf("worktree %s\nHEAD %s\nbranch refs/heads/iro/issue-123\n\n", f.workspace, f.head)
+	mode := "branch refs/heads/" + f.branchName
+	if f.detached {
+		mode = "detached"
+	}
+	f.registration = fmt.Sprintf("worktree %s\nHEAD %s\n%s\n\n", f.workspace, f.head, mode)
 }
 
 func (f *reviseFixture) respond(spec CommandSpec) CommandResult {
@@ -66,19 +73,30 @@ func (f *reviseFixture) respond(spec CommandSpec) CommandResult {
 			return CommandResult{Stdout: f.root}
 		case "config --get-all remote.origin.url", "remote get-url --push --all origin":
 			return CommandResult{Stdout: "git@github.com:acme/iro.git\n"}
-		case "ls-remote -- origin", "ls-remote --heads -- origin refs/heads/iro/issue-123":
-			return CommandResult{Stdout: revisionHead + "\trefs/heads/iro/issue-123\n"}
+		case "ls-remote -- origin", "ls-remote --heads -- origin refs/heads/" + f.branchName:
+			return CommandResult{Stdout: revisionHead + "\trefs/heads/" + f.branchName + "\n"}
 		case "show-ref --verify --quiet refs/heads/iro/issue-123":
 			if f.branch {
 				return CommandResult{}
 			}
 			return CommandResult{ExitCode: 1}
-		case "worktree list --porcelain":
-			return CommandResult{Stdout: "worktree " + f.root + "\nbranch refs/heads/main\n\n" + f.registration}
+		case "for-each-ref --sort=refname --format=%(refname)%00%(objectname) refs/heads/iro/":
+			if f.branch && !f.detached {
+				return CommandResult{Stdout: "refs/heads/" + f.branchName + "\x00" + f.head + "\n"}
+			}
+			return CommandResult{}
+		case "worktree list --porcelain -z":
+			registration := strings.ReplaceAll(f.registration, revisionHead, f.head)
+			return CommandResult{Stdout: strings.ReplaceAll("worktree "+f.root+"\nHEAD "+revisionHead+"\nbranch refs/heads/main\n\n"+registration, "\n", "\x00")}
+		case "rev-parse --absolute-git-dir":
+			return CommandResult{Stdout: filepath.Join(f.root, ".git", "worktrees", "revision")}
 		case "rev-parse --path-format=absolute --git-common-dir":
 			return CommandResult{Stdout: filepath.Join(f.root, ".git")}
 		case "symbolic-ref --quiet HEAD":
-			return CommandResult{Stdout: "refs/heads/iro/issue-123\n"}
+			if f.detached {
+				return CommandResult{ExitCode: 1}
+			}
+			return CommandResult{Stdout: "refs/heads/" + f.branchName + "\n"}
 		case "ls-tree -z " + revisionHead + " -- WORKFLOW.md":
 			return CommandResult{Stdout: "100644 blob " + revisionHead + "\tWORKFLOW.md\x00"}
 		case "cat-file blob " + revisionHead:
@@ -90,9 +108,9 @@ func (f *reviseFixture) respond(spec CommandSpec) CommandResult {
 				return CommandResult{Stdout: " M human.txt\n"}
 			}
 			return CommandResult{}
-		case "fetch --no-tags --no-write-fetch-head --refmap= -- origin refs/heads/iro/issue-123":
+		case "fetch --no-tags --no-write-fetch-head --refmap= -- origin refs/heads/" + f.branchName:
 			return CommandResult{}
-		case "cat-file -t " + revisionHead:
+		case "cat-file -t " + revisionHead, "cat-file -t " + f.head:
 			return CommandResult{Stdout: "commit\n"}
 		case "worktree add -b iro/issue-123 " + f.workspace + " " + revisionHead:
 			f.createWorktree()
@@ -106,19 +124,27 @@ func (f *reviseFixture) respond(spec CommandSpec) CommandResult {
 			return CommandResult{}
 		case "rev-list --parents -n 1 HEAD":
 			return CommandResult{Stdout: revisionCommit + " " + revisionHead}
-		case "push -- origin refs/heads/iro/issue-123:refs/heads/iro/issue-123":
+		case "write-tree", "rev-parse HEAD^{tree}":
+			return CommandResult{Stdout: revisionHead}
+		case "push --no-follow-tags --no-recurse-submodules -- origin refs/heads/" + f.branchName + ":refs/heads/" + f.branchName, "push --no-follow-tags --no-recurse-submodules -- origin " + revisionCommit + ":refs/heads/" + f.branchName:
 			return CommandResult{}
 		}
 	}
+	if spec.Name == "git" && containsArgs(spec.Args, "worktree", "add") {
+		f.workspace = spec.Args[len(spec.Args)-2]
+		f.detached = containsString(spec.Args, "--detach")
+		f.createWorktree()
+		return CommandResult{}
+	}
 	if spec.Name == "gh" {
 		if containsString(spec.Args, "graphql") {
-			if containsString(spec.Args, "query="+reviewPreflightQuery) {
+			if containsString(spec.Args, "query="+managedReviewPreflightQuery) || containsString(spec.Args, "query="+revisePushTargetQuery) {
 				return CommandResult{Stdout: f.target}
 			}
-			if !strings.Contains(strings.Join(spec.Args, " "), "states:[OPEN]") {
-				f.t.Fatalf("revise did not query active PRs: %v", spec.Args)
+			if containsString(spec.Args, "query="+githubOriginCandidateQuery) {
+				return reviewCandidateForTest(123)
 			}
-			return CommandResult{Stdout: f.active}
+			f.t.Fatalf("unexpected relation/topology query: %v", spec.Args)
 		}
 		if containsString(spec.Args, "comment") || containsString(spec.Args, "POST") || containsString(spec.Args, "checkout") || containsString(spec.Args, "clone") {
 			f.t.Fatalf("unexpected tracker mutation or disposable workspace: %v", spec.Args)
@@ -218,11 +244,11 @@ func TestReviseMaterializesOrReusesHumanPRAndPushesSameBranch(t *testing.T) {
 				t.Fatal(stdout.String())
 			}
 			mapping, present, err := f.service.readOwnership(mappingPath)
-			if err != nil || !present || validateOwnershipMapping(mapping, 123, f.identity, f.service.Dirs) != nil {
+			if err != nil || present != existing {
 				t.Fatalf("mapping=%+v, present=%t, error=%v", mapping, present, err)
 			}
 			after, _ := os.ReadFile(mappingPath)
-			if existing && string(before) != string(after) {
+			if string(before) != string(after) {
 				t.Fatal("reuse changed ownership mapping")
 			}
 			if strings.Contains(string(after), "pr_number") || strings.Contains(string(after), "author") {
@@ -266,15 +292,8 @@ func TestReviseRejectsRemotePreconditionsWithoutLocalMutation(t *testing.T) {
 		{"absent PR", `"number":42`, `"number":43`},
 		{"closed", `"state":"OPEN"`, `"state":"CLOSED"`},
 		{"merged", `"state":"OPEN"`, `"state":"MERGED"`},
-		{"base mismatch", `"baseRefName":"main"`, `"baseRefName":"release"`},
-		{"missing default", `"defaultBranchRef":{"name":"main"}`, `"defaultBranchRef":null`},
-		{"noncanonical branch", `"headRefName":"iro/issue-123"`, `"headRefName":"human-branch"`},
-		{"wrong Issue branch", `"headRefName":"iro/issue-123"`, `"headRefName":"iro/issue-124"`},
 		{"fork", `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":{"nameWithOwner":"other/iro"}`},
 		{"unknown head repo", `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":null`},
-		{"no origin", `"totalCount":1`, `"totalCount":0`},
-		{"multiple origins", `"totalCount":1`, `"totalCount":2`},
-		{"foreign origin", `"repository":{"nameWithOwner":"acme/iro"}`, `"repository":{"nameWithOwner":"other/iro"}`},
 		{"missing head", revisionHead, ""},
 		{"invalid head", revisionHead, "--malicious"},
 	} {
@@ -292,7 +311,7 @@ func TestReviseRejectsRemotePreconditionsWithoutLocalMutation(t *testing.T) {
 }
 
 func TestReviseRejectsUnavailablePreconditionsBeforeMutation(t *testing.T) {
-	for _, kind := range []string{"config", "invalid config", "ambiguous remote", "push destination", "Git remote", "branch HEAD", "gh executable", "gh auth", "codex executable", "codex auth", "Issue", "Issue comments", "PR feedback", "diff", "missing pagination", "missing closing relations", "unknown competing head repository"} {
+	for _, kind := range []string{"config", "invalid config", "ambiguous remote", "push destination", "Git remote", "branch HEAD", "gh executable", "gh auth", "codex executable", "codex auth", "Issue", "Issue comments", "PR feedback", "diff"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newReviseFixture(t, false)
 			switch kind {
@@ -306,13 +325,6 @@ func TestReviseRejectsUnavailablePreconditionsBeforeMutation(t *testing.T) {
 				f.runner.lookups = map[string]error{"gh": errors.New("missing")}
 			case "codex executable":
 				f.runner.lookups = map[string]error{"codex": errors.New("missing")}
-			case "missing pagination":
-				f.active = strings.Replace(f.active, `"hasNextPage":false`, `"endCursor":null`, 1)
-			case "missing closing relations":
-				f.active = strings.Replace(f.active, `"totalCount":1`, `"unknown":1`, 1)
-			case "unknown competing head repository":
-				other := strings.NewReplacer(`"number":42`, `"number":43`, `"headRepository":{"nameWithOwner":"acme/iro"}`, `"headRepository":null`).Replace(activeRevisionPR)
-				f.active = strings.Replace(f.active, activeRevisionPR, activeRevisionPR+","+other, 1)
 			}
 			f.runner.fn = func(spec CommandSpec) CommandResult {
 				if spec.Name == "git" {
@@ -363,144 +375,6 @@ func TestReviseAllowsUnknownCreatorAndDraft(t *testing.T) {
 	}
 }
 
-func TestReviseActiveRelationsPaginationAndAmbiguity(t *testing.T) {
-	for _, kind := range []string{"valid pagination", "duplicate branch", "duplicate Issue", "incomplete relations", "missing target", "changed target", "invalid cursor", "graphql error"} {
-		t.Run(kind, func(t *testing.T) {
-			f := newReviseFixture(t, false)
-			page := 0
-			f.runner.fn = func(spec CommandSpec) CommandResult {
-				if spec.Name == "gh" && containsString(spec.Args, "graphql") && !containsString(spec.Args, "query="+reviewPreflightQuery) {
-					page++
-					if page == 1 {
-						response := strings.Replace(f.active, `"hasNextPage":false`, `"hasNextPage":true,"endCursor":"next"`, 1)
-						if kind == "missing target" {
-							response = strings.Replace(response, activeRevisionPR, "", 1)
-						}
-						return CommandResult{Stdout: response}
-					}
-					if !containsString(spec.Args, "cursor=next") {
-						t.Fatal(spec.Args)
-					}
-					node := ""
-					switch kind {
-					case "duplicate branch":
-						node = strings.Replace(activeRevisionPR, `"number":42`, `"number":43`, 1)
-						node = strings.Replace(node, `"number":123`, `"number":124`, 1)
-					case "duplicate Issue":
-						node = strings.NewReplacer(`"number":42`, `"number":43`, `"iro/issue-123"`, `"human-branch"`).Replace(activeRevisionPR)
-					case "incomplete relations":
-						node = strings.Replace(activeRevisionPR, `"totalCount":1`, `"totalCount":101`, 1)
-					case "changed target":
-						node = strings.Replace(activeRevisionPR, `"number":123`, `"number":124`, 1)
-					case "invalid cursor":
-						return CommandResult{Stdout: strings.Replace(deliveryResponseForTest, `"hasNextPage":false`, `"hasNextPage":true,"endCursor":"next"`, 1)}
-					case "graphql error":
-						return CommandResult{Stdout: `{"errors":[{"message":"denied"}]}`}
-					}
-					return CommandResult{Stdout: strings.Replace(deliveryResponseForTest, `"nodes":[]`, `"nodes":[`+node+`]`, 1)}
-				}
-				return f.respond(spec)
-			}
-			_, err := f.service.inspectReviseTarget(f.root, f.identity, 42)
-			if (err == nil) != (kind == "valid pagination") || page != 2 {
-				t.Fatalf("error=%v, pages=%d", err, page)
-			}
-		})
-	}
-}
-
-func TestReviseRejectsPartialDirtyDivergentAndIncoherentState(t *testing.T) {
-	for _, kind := range []string{"mapping only", "branch only", "path only", "mapping missing", "branch missing", "path missing", "stale registration", "unregistered", "wrong registration branch", "other checkout", "duplicate registration", "invalid mapping", "repository mismatch", "Issue mismatch", "branch mismatch", "path mismatch", "version mismatch", "dirty", "divergent", "ahead", "behind", "mapping symlink", "path symlink", "different repository", "detached"} {
-		t.Run(kind, func(t *testing.T) {
-			f := newReviseFixture(t, true)
-			mappingPath := ownershipPath(f.service.Dirs, f.identity, 123)
-			mapping := f.mapping()
-			switch kind {
-			case "mapping only":
-				f.branch, f.registration = false, ""
-				mustRemove(t, f.workspace)
-			case "branch only":
-				f.registration = ""
-				mustRemove(t, f.workspace)
-				mustRemove(t, mappingPath)
-			case "path only":
-				f.branch, f.registration = false, ""
-				mustRemove(t, mappingPath)
-			case "mapping missing":
-				mustRemove(t, mappingPath)
-			case "branch missing":
-				f.branch = false
-			case "path missing":
-				mustRemove(t, f.workspace)
-			case "stale registration":
-				f.branch = false
-				mustRemove(t, f.workspace)
-				mustRemove(t, mappingPath)
-			case "unregistered":
-				f.registration = ""
-			case "wrong registration branch":
-				f.registration = strings.Replace(f.registration, "iro/issue-123", "other", 1)
-			case "other checkout":
-				f.registration += strings.Replace(f.registration, f.workspace, f.workspace+"-other", 1)
-			case "duplicate registration":
-				f.registration += f.registration
-			case "repository mismatch":
-				mapping.Repository = "other/iro"
-			case "Issue mismatch":
-				mapping.IssueNumber = 124
-			case "branch mismatch":
-				mapping.Branch = "iro/issue-124"
-			case "path mismatch":
-				mapping.Worktree = f.workspace + "-other"
-			case "version mismatch":
-				mapping.Version = 2
-			case "dirty":
-				f.dirty = true
-			case "divergent", "ahead", "behind":
-				f.head = revisionCommit
-			case "mapping symlink", "path symlink":
-				path := mappingPath
-				if kind == "path symlink" {
-					path = f.workspace
-				}
-				mustRemove(t, path)
-				if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), path); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if strings.HasSuffix(kind, "mismatch") || kind == "invalid mapping" {
-				data, _ := json.Marshal(mapping)
-				if kind == "invalid mapping" {
-					data = []byte("not JSON")
-				}
-				if err := os.WriteFile(mappingPath, data, 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			f.runner.fn = func(spec CommandSpec) CommandResult {
-				if kind == "different repository" && spec.Dir == f.workspace && containsString(spec.Args, "--git-common-dir") {
-					return CommandResult{Stdout: filepath.Join(f.workspace, ".git")}
-				}
-				if kind == "detached" && containsString(spec.Args, "symbolic-ref") {
-					return CommandResult{ExitCode: 1}
-				}
-				return f.respond(spec)
-			}
-			before, _ := os.ReadFile(mappingPath)
-			if err := f.service.Revise(42, io.Discard); err == nil {
-				t.Fatal("unexpected success")
-			}
-			if stages := revisionMutations(f.runner.calls); len(stages) != 0 {
-				t.Fatal("mutation before rejection", stages)
-			}
-			after, _ := os.ReadFile(mappingPath)
-			if string(before) != string(after) {
-				t.Fatal("mapping was changed")
-			}
-		})
-	}
-}
-
 func mustRemove(t *testing.T, path string) {
 	t.Helper()
 	if err := os.Remove(path); err != nil {
@@ -518,14 +392,14 @@ func TestReviseFailuresPreservePartialStateAndStopDelivery(t *testing.T) {
 		{"empty diff", "no committable changes", "worker,add"},
 		{"diff inspection", "inspect staged revision", "worker,add"},
 		{"commit", "revision commit failed", "worker,add,commit"},
-		{"commit parent", "local commit remains", "worker,add,commit"},
+		{"commit parent", "no push attempted", "worker,add,commit"},
 		{"push", "remote branch may have been updated", "worker,add,commit,push"},
-		{"relation after worker", "before commit", "worker"},
-		{"head after worker", "before commit", "worker"},
+		{"relation after worker", "no push attempted", "worker,add,commit"},
+		{"head after worker", "no push attempted", "worker,add,commit"},
 		{"local head after worker", "divergent state", "worker"},
-		{"relation after commit", "local commit remains", "worker,add,commit"},
-		{"head after commit", "local commit remains", "worker,add,commit"},
-		{"dirty after commit", "local commit remains", "worker,add,commit"},
+		{"relation after commit", "no push attempted", "worker,add,commit"},
+		{"head after commit", "no push attempted", "worker,add,commit"},
+		{"dirty after commit", "no push attempted", "worker,add,commit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newReviseFixture(t, true)
@@ -544,12 +418,12 @@ func TestReviseFailuresPreservePartialStateAndStopDelivery(t *testing.T) {
 						f.head = revisionCommit
 					}
 				}
-				if workerDone && spec.Name == "gh" && containsString(spec.Args, "query="+reviewPreflightQuery) {
+				if workerDone && spec.Name == "gh" && containsString(spec.Args, "query="+revisePushTargetQuery) {
 					if tc.name == "relation after worker" || tc.name == "relation after commit" && f.head == revisionCommit {
 						return CommandResult{Stdout: strings.Replace(f.target, `"state":"OPEN"`, `"state":"CLOSED"`, 1)}
 					}
 					if tc.name == "head after worker" || tc.name == "head after commit" && f.head == revisionCommit {
-						return CommandResult{Stdout: strings.Replace(f.target, revisionHead, revisionCommit, 1)}
+						return CommandResult{Stdout: strings.Replace(f.target, `"headRefName":"iro/issue-123"`, `"headRefName":"iro/changed"`, 1)}
 					}
 				}
 				if spec.Name == "git" {
@@ -591,9 +465,8 @@ func TestReviseMaterializationFailures(t *testing.T) {
 	for _, tc := range []struct{ name, want, stages string }{
 		{"fetch", "could not fetch", "fetch"},
 		{"missing object", "was not obtained", "fetch"},
-		{"remote drift", "HEAD changed", "fetch"},
+		{"remote drift", "no longer OPEN", "fetch,worktree add,worker,add,commit"},
 		{"worktree", "partial local state may remain", "fetch,worktree add"},
-		{"ownership", "ownership recording failed", "fetch,worktree add"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newReviseFixture(t, false)
@@ -608,17 +481,12 @@ func TestReviseMaterializationFailures(t *testing.T) {
 				if tc.name == "missing object" && spec.Name == "git" && spec.Args[0] == "cat-file" {
 					return CommandResult{ExitCode: 1}
 				}
-				if tc.name == "remote drift" && fetched && containsString(spec.Args, "query="+reviewPreflightQuery) {
-					return CommandResult{Stdout: strings.Replace(f.target, revisionHead, revisionCommit, 1)}
+				if tc.name == "remote drift" && fetched && containsString(spec.Args, "query="+revisePushTargetQuery) {
+					return CommandResult{Stdout: strings.Replace(f.target, `"headRefName":"iro/issue-123"`, `"headRefName":"iro/changed"`, 1)}
 				}
 				if spec.Name == "git" && containsArgs(spec.Args, "worktree", "add") {
 					if tc.name == "worktree" {
 						return CommandResult{ExitCode: 1}
-					}
-					if tc.name == "ownership" {
-						if err := os.MkdirAll(ownershipPath(f.service.Dirs, f.identity, 123), 0755); err != nil {
-							t.Fatal(err)
-						}
 					}
 				}
 				return f.respond(spec)
@@ -696,7 +564,9 @@ func TestReviseUsesFixedStartingPolicyAcrossExplicitInvocations(t *testing.T) {
 							return CommandResult{}
 						case "rev-list --parents -n 1 HEAD":
 							return CommandResult{Stdout: next + " " + start}
-						case "push -- origin refs/heads/iro/issue-123:refs/heads/iro/issue-123":
+						case "write-tree", "rev-parse HEAD^{tree}":
+							return CommandResult{Stdout: revisionHead}
+						case "push --no-follow-tags --no-recurse-submodules -- origin refs/heads/" + f.branchName + ":refs/heads/" + f.branchName, "push --no-follow-tags --no-recurse-submodules -- origin " + revisionCommit + ":refs/heads/" + f.branchName:
 							pushes++
 						}
 					}

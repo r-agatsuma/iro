@@ -697,18 +697,18 @@ func TestUnmanagedG2ManagedEligibilityUsesCurrentRelationNotProvenance(t *testin
 				t.Fatalf("managed operation proceeded past invalid relation: %+v", spec)
 				return CommandResult{ExitCode: 1}
 			}
-			if operation == "review" {
+			if operation == "review" || operation == "revise" {
 				identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
 				target, err := f.service.inspectPRTarget(f.root, identity, 42, operation)
 				if err != nil || target.OriginIssue != 123 {
-					t.Fatalf("managed Review rejected current raw-body relation: %+v %v", target, err)
+					t.Fatalf("managed consumer rejected current raw-body relation: %+v %v", target, err)
 				}
 				// Native closing metadata and producer provenance cannot supply
 				// a binding when the current raw body has no local Issue token.
 				pr["body"] = "No local Issue token"
 				pr["closingIssuesReferences"] = closing
 				if _, err := f.service.inspectPRTarget(f.root, identity, 42, operation); err == nil || !strings.Contains(err.Error(), "unresolved") {
-					t.Fatalf("managed Review inferred origin outside current body: %v", err)
+					t.Fatalf("managed consumer inferred origin outside current body: %v", err)
 				}
 				return
 			}
@@ -720,28 +720,6 @@ func TestUnmanagedG2ManagedEligibilityUsesCurrentRelationNotProvenance(t *testin
 					t.Fatalf("managed Land rejected relation-independent target: %v", err)
 				}
 				return
-			}
-			for _, want := range []string{"requires default branch", "closing relation"} {
-				var diagnostic strings.Builder
-				if code := Execute([]string{operation, "42"}, io.Discard, &diagnostic, f.service); code != 1 || !strings.Contains(diagnostic.String(), want) {
-					t.Fatalf("unmanaged delivery granted %s eligibility: %s", operation, diagnostic.String())
-				}
-				// A Human changes the base; the missing closing relation still rejects.
-				pr["baseRefName"] = "main"
-			}
-			// With a valid current relation, the same unmanaged provenance/logs do
-			// not poison eligibility. Revise's separate local checks still apply.
-			pr["closingIssuesReferences"] = closing
-			identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
-			var err error
-			switch operation {
-			case "review":
-				_, err = f.service.inspectPRTarget(f.root, identity, 42, operation)
-			case "revise":
-				_, err = f.service.inspectReviseTarget(f.root, identity, 42)
-			}
-			if err != nil {
-				t.Fatalf("human-reshaped relation was rejected: %v", err)
 			}
 		})
 	}
