@@ -50,11 +50,11 @@ type deliveryAllocation struct {
 	detached  bool
 }
 
-func (s *Service) allocateDelivery(root string, identity RepositoryIdentity, issueNumber int) (*deliveryAllocation, error) {
-	return s.allocateDeliveryWithGenerator(root, identity, issueNumber, generateDeliveryID)
+func (s *Service) allocateDelivery(root string, namespace runtimeNamespaceKey, issueNumber int) (*deliveryAllocation, error) {
+	return s.allocateDeliveryWithGenerator(root, namespace, issueNumber, generateDeliveryID)
 }
 
-func (s *Service) allocateDeliveryWithGenerator(root string, identity RepositoryIdentity, issueNumber int, generate func() (deliveryID, error)) (*deliveryAllocation, error) {
+func (s *Service) allocateDeliveryWithGenerator(root string, namespace runtimeNamespaceKey, issueNumber int, generate func() (deliveryID, error)) (*deliveryAllocation, error) {
 	if issueNumber <= 0 {
 		return nil, fmt.Errorf("issue number must be positive")
 	}
@@ -63,7 +63,7 @@ func (s *Service) allocateDeliveryWithGenerator(root string, identity Repository
 		return nil, err
 	}
 	allocation := &deliveryAllocation{issue: issueNumber, commonDir: common}
-	if err := s.selectDelivery(root, identity, allocation, generate); err != nil {
+	if err := s.selectDelivery(root, namespace, allocation, generate); err != nil {
 		return nil, err
 	}
 	return allocation, nil
@@ -71,7 +71,7 @@ func (s *Service) allocateDeliveryWithGenerator(root string, identity Repository
 
 // Selection may retry collisions only before any local side effect. The bounded
 // retry protects callers from a broken/injected generator returning one ID forever.
-func (s *Service) selectDelivery(root string, identity RepositoryIdentity, allocation *deliveryAllocation, generate func() (deliveryID, error)) error {
+func (s *Service) selectDelivery(root string, namespace runtimeNamespaceKey, allocation *deliveryAllocation, generate func() (deliveryID, error)) error {
 	if allocation.fixed {
 		return fmt.Errorf("delivery %s is fixed after the creation boundary; identity cannot change", allocation.id)
 	}
@@ -85,9 +85,9 @@ func (s *Service) selectDelivery(root string, identity RepositoryIdentity, alloc
 		}
 		allocation.id = id
 		allocation.branch = deliveryBranch(allocation.issue, id)
-		allocation.worktree = cleanAbsolutePath(deliveryWorktreePath(s.Dirs, identity, allocation.issue, id))
+		allocation.worktree = cleanAbsolutePath(deliveryWorktreePath(s.Dirs, namespace, allocation.issue, id))
 		if allocation.detached {
-			allocation.worktree = cleanAbsolutePath(filepath.Join(runtimeWorkspaceParent(s.Dirs, identity, unmanagedWorkspace), detachedWorkspaceStem("run", allocation.issue)+string(id)))
+			allocation.worktree = cleanAbsolutePath(filepath.Join(runtimeWorkspaceParent(s.Dirs, namespace, unmanagedWorkspace), detachedWorkspaceStem("run", allocation.issue)+string(id)))
 		}
 		collision, err := s.inspectDeliveryCollision(root, allocation)
 		if err != nil {

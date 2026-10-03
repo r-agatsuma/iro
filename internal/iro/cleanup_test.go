@@ -187,7 +187,7 @@ func (f *localLifecycleFixture) run(spec CommandSpec) CommandResult {
 }
 
 func (f *localLifecycleFixture) runtimePath(kind runtimeWorkspaceKind, leaf string) string {
-	return filepath.Join(runtimeWorkspaceParent(f.service.Dirs, RepositoryIdentity{Owner: "acme", Name: "iro"}, kind), leaf)
+	return filepath.Join(runtimeWorkspaceParent(f.service.Dirs, runtimeNamespaceKey("acme-iro-5f858f6c7d45"), kind), leaf)
 }
 
 func (f *localLifecycleFixture) addWorktree(t *testing.T, path, branch string) {

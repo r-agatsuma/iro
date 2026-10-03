@@ -1,8 +1,6 @@
 package iro
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -11,7 +9,8 @@ import (
 
 const supportedGitHubHost = "github.com"
 
-// RepositoryIdentity identifies a repository on the only supported host, github.com.
+// RepositoryIdentity is the concrete github.com remote identity, not a
+// cross-provider repository model or local Git lifecycle authority.
 type RepositoryIdentity struct {
 	Owner string
 	Name  string
@@ -33,11 +32,10 @@ func (r RepositoryIdentity) Canonical() string {
 	return strings.ToLower(r.Owner) + "/" + strings.ToLower(r.Name)
 }
 
+// Key retains the GitHub path key for compatibility. Remote comparisons must
+// use the concrete GitHub identity, never this path grouping value.
 func (r RepositoryIdentity) Key() string {
-	hash := sha256.Sum256([]byte(r.Canonical()))
-	owner := safePathPart(strings.ToLower(r.Owner))
-	name := safePathPart(strings.ToLower(r.Name))
-	return fmt.Sprintf("%s-%s-%s", owner, name, hex.EncodeToString(hash[:])[:12])
+	return string(githubRuntimeNamespace(r))
 }
 
 func parseGitHubRemote(raw string) (RepositoryIdentity, error) {
@@ -91,21 +89,6 @@ func parseGitHubRepositoryPath(path string) (RepositoryIdentity, error) {
 		}
 	}
 	return RepositoryIdentity{Owner: parts[0], Name: parts[1]}, nil
-}
-
-func safePathPart(value string) string {
-	var builder strings.Builder
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			builder.WriteRune(r)
-		} else {
-			builder.WriteByte('-')
-		}
-	}
-	if builder.Len() == 0 {
-		return "repo"
-	}
-	return builder.String()
 }
 
 func cleanAbsolutePath(path string) string {

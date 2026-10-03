@@ -1487,6 +1487,14 @@ managed delivery workspace の leaf は LOCAL-001 の命名、unmanaged Run の 
 
 明示 `iro cleanup` の authorization / mutation は CLEANUP-001〜008 に従う。unmanaged Run / Review / Revise 自身の success teardown に要求する clean / unlocked / detached 等の制限を、明示 Cleanup の semantic safety gate に流用しない。
 
+### LOCAL-004: provider remote identity と local runtime namespace
+
+GitHub remote の parsing、repository equality、API binding、effective push destination の検証は concrete GitHub identity の責務とする。workspace / log path mechanism は opaque な runtime namespace key を受け取り、その内容から provider、host、remote repository を推定しない。key equality を remote equality や push destination verification の代わりに使ってはならない。共通 Repository semantic interface は設けない。
+
+現在の GitHub `Key()` と namespace key は既存の encoding を維持する。小文字の `owner/repository` の SHA-256 の先頭 12 hexadecimal characters を、小文字 owner / repository の path-safe stem に `-` で結合する。stem は ASCII `a-z` / `0-9` / `-` / `_` を保持し、それ以外を `-` に置換する。例として `acme/iro` は `acme-iro-5f858f6c7d45` となる。現在の workspace / log path は byte-for-byte で維持し、rename / migration は行わない。
+
+namespace key は provider 側から一つの安全な path component として供給する。将来の provider は provider / host / repository 間の衝突を避ける独自 key を path mechanism に渡せるが、Gitea の identity / equality / namespace encoding はここでは定義しない。namespace は path grouping のみであり、local lifecycle authority ではない。Status / Cleanup は config / tracker / auth / network / agent や ownership JSON に依存せず、LOCAL-002 の current common directory、iro refs、registered worktrees と LOCAL-003 の naming evidence に従う。各 consumer が要求する common-directory membership を namespace 一致で代替してはならない。
+
 ## 14. Behavior matrix
 
 以下の matrix は managed operation を対象とする。unmanaged Land は UNMANAGED-LAND-001 から UNMANAGED-LAND-003 に従う。unmanaged Review は UNMANAGED-REVIEW-001 から UNMANAGED-REVIEW-004、unmanaged Revise は UNMANAGED-REVISE-001 から UNMANAGED-REVISE-006 に従う。unmanaged Run の条件と失敗時の保持・cleanup は UNMANAGED-RUN-001 から UNMANAGED-RUN-007 に定義する。

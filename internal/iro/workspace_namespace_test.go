@@ -27,10 +27,10 @@ func TestWorkspaceRecognitionWithMissingSymlinkedPaths(t *testing.T) {
 				service, _, _, root, _, _ := foundationService(t)
 				useSymlinkDataRoot(t, service)
 				identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
-				workspace := deliveryWorktreePath(service.Dirs, identity, 89, foundationID)
+				workspace := deliveryWorktreePath(service.Dirs, githubRuntimeNamespace(identity), 89, foundationID)
 				kind := managedWorkspace
 				if operation == "managed" {
-					allocation, err := service.allocateDeliveryWithGenerator(root, identity, 89, func() (deliveryID, error) { return foundationID, nil })
+					allocation, err := service.allocateDeliveryWithGenerator(root, githubRuntimeNamespace(identity), 89, func() (deliveryID, error) { return foundationID, nil })
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -39,7 +39,7 @@ func TestWorkspaceRecognitionWithMissingSymlinkedPaths(t *testing.T) {
 					}
 				} else {
 					var err error
-					workspace, err = service.createDetachedWorktree(root, identity, detachedWorkspacePattern(operation, 89), foundationHEAD)
+					workspace, err = service.createDetachedWorktree(root, githubRuntimeNamespace(identity), detachedWorkspacePattern(operation, 89), foundationHEAD)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -76,7 +76,7 @@ func TestWorkspacePathResolutionFailsClosed(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			service, runner, fs, root, _, worktrees := foundationService(t)
 			identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
-			workspace := deliveryWorktreePath(service.Dirs, identity, 89, foundationID)
+			workspace := deliveryWorktreePath(service.Dirs, githubRuntimeNamespace(identity), 89, foundationID)
 			switch failure {
 			case "permission":
 				fs.failure = "resolution"
@@ -103,7 +103,7 @@ func TestWorkspacePathResolutionFailsClosed(t *testing.T) {
 				t.Fatalf("unreadable location recognized: %s, %t, %v", kind, ok, err)
 			}
 			calls := 0
-			allocation, err := service.allocateDeliveryWithGenerator(root, identity, 89, func() (deliveryID, error) {
+			allocation, err := service.allocateDeliveryWithGenerator(root, githubRuntimeNamespace(identity), 89, func() (deliveryID, error) {
 				calls++
 				return foundationID, nil
 			})
@@ -125,8 +125,8 @@ func TestDeliveryNamingAndWorkspaceRecognitionFixtures(t *testing.T) {
 	if got := deliveryBranch(89, foundationID); got != "iro/"+leaf {
 		t.Fatalf("branch fixture = %q", got)
 	}
-	path := deliveryWorktreePath(service.Dirs, identity, 89, foundationID)
-	if path != filepath.Join(service.Dirs.DataRoot, "workspaces", identity.Key(), leaf) {
+	path := deliveryWorktreePath(service.Dirs, githubRuntimeNamespace(identity), 89, foundationID)
+	if path != filepath.Join(service.Dirs.DataRoot, "workspaces", "acme-iro-5f858f6c7d45", leaf) {
 		t.Fatalf("managed path fixture = %q", path)
 	}
 	if number, id, err := parseDeliveryLeaf(leaf); err != nil || number != 89 || id != foundationID {
@@ -155,14 +155,14 @@ func TestDeliveryNamingAndWorkspaceRecognitionFixtures(t *testing.T) {
 		if pattern != wantStem+"*" {
 			t.Fatalf("detached pattern fixture = %q", pattern)
 		}
-		workspace, err := service.createDetachedWorktree(root, identity, pattern, foundationHEAD)
+		workspace, err := service.createDetachedWorktree(root, githubRuntimeNamespace(identity), pattern, foundationHEAD)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if kind, ok, err := service.recognizeRuntimeWorkspace(workspace); err != nil || !ok || kind != unmanagedWorkspace {
 			t.Fatalf("detached producer path unrecognized: %s (%q, %t)", workspace, kind, ok)
 		}
-		if filepath.Dir(workspace) != runtimeWorkspaceParent(service.Dirs, identity, unmanagedWorkspace) || !strings.HasPrefix(filepath.Base(workspace), wantStem) {
+		if filepath.Dir(workspace) != filepath.Join(service.Dirs.DataRoot, "unmanaged-workspaces", "acme-iro-5f858f6c7d45") || !strings.HasPrefix(filepath.Base(workspace), wantStem) {
 			t.Fatalf("detached producer path fixture = %q", workspace)
 		}
 	}
@@ -197,7 +197,7 @@ func TestWorkspaceRecognitionRejectsHumanAndMalformedPaths(t *testing.T) {
 
 func TestUnmanagedRemovalUsesWorkspaceRecognition(t *testing.T) {
 	service, runner, _, root, _, _ := foundationService(t)
-	for _, path := range []string{filepath.Join(root, "human-detached"), deliveryWorktreePath(service.Dirs, RepositoryIdentity{Owner: "acme", Name: "iro"}, 89, foundationID)} {
+	for _, path := range []string{filepath.Join(root, "human-detached"), deliveryWorktreePath(service.Dirs, githubRuntimeNamespace(RepositoryIdentity{Owner: "acme", Name: "iro"}), 89, foundationID)} {
 		if err := service.removeUnmanagedWorktree(root, path); err == nil {
 			t.Fatalf("unmanaged removal accepted non-unmanaged path: %s", path)
 		}

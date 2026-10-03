@@ -348,7 +348,7 @@ func TestUnmanagedReviewCleanupConfirmsDirectoryAndRegistration(t *testing.T) {
 			}
 			service := newTestService(t, runner, root)
 			var err error
-			workspace, err = service.createDetachedWorktree(root, RepositoryIdentity{Owner: "acme", Name: "iro"}, detachedWorkspacePattern("review", 42), reviewHeadForTest)
+			workspace, err = service.createDetachedWorktree(root, githubRuntimeNamespace(RepositoryIdentity{Owner: "acme", Name: "iro"}), detachedWorkspacePattern("review", 42), reviewHeadForTest)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -100,7 +100,7 @@ func TestDeliveryAllocationRetriesOnlyBeforeSideEffects(t *testing.T) {
 	for _, collision := range []string{"branch", "descendant_ref", "namespace_ref", "file", "directory", "dangling_symlink", "attached", "detached_registration", "branch_elsewhere"} {
 		t.Run(collision, func(t *testing.T) {
 			service, runner, fs, root, refs, worktrees := foundationService(t)
-			path := deliveryWorktreePath(service.Dirs, identity, 89, foundationID)
+			path := deliveryWorktreePath(service.Dirs, githubRuntimeNamespace(identity), 89, foundationID)
 			branch := "refs/heads/" + deliveryBranch(89, foundationID)
 			switch collision {
 			case "branch", "descendant_ref":
@@ -144,7 +144,7 @@ func TestDeliveryAllocationRetriesOnlyBeforeSideEffects(t *testing.T) {
 				}
 			}
 			calls := 0
-			allocation, err := service.allocateDeliveryWithGenerator(root, identity, 89, func() (deliveryID, error) {
+			allocation, err := service.allocateDeliveryWithGenerator(root, githubRuntimeNamespace(identity), 89, func() (deliveryID, error) {
 				calls++
 				if calls == 1 {
 					return foundationID, nil
@@ -169,7 +169,7 @@ func TestDeliveryCreationFixesIdentityOnFailure(t *testing.T) {
 	for _, failure := range []string{"parent", "racing_path", "git", ""} {
 		t.Run("failure="+failure, func(t *testing.T) {
 			service, runner, fs, root, _, _ := foundationService(t)
-			allocation, err := service.allocateDeliveryWithGenerator(root, identity, 89, func() (deliveryID, error) { return foundationID, nil })
+			allocation, err := service.allocateDeliveryWithGenerator(root, githubRuntimeNamespace(identity), 89, func() (deliveryID, error) { return foundationID, nil })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -192,7 +192,7 @@ func TestDeliveryCreationFixesIdentityOnFailure(t *testing.T) {
 			if (err != nil) != (failure != "") || !allocation.fixed || fs.mutations == 0 {
 				t.Fatalf("creation = %v; fixed=%t mutations=%d", err, allocation.fixed, fs.mutations)
 			}
-			if err := service.selectDelivery(root, identity, allocation, func() (deliveryID, error) {
+			if err := service.selectDelivery(root, githubRuntimeNamespace(identity), allocation, func() (deliveryID, error) {
 				t.Fatal("generator called after first side effect")
 				return foundationOtherID, nil
 			}); err == nil || allocation.id != foundationID {
@@ -228,7 +228,7 @@ func TestDeliveryAllocationFailsClosed(t *testing.T) {
 			case "unreadable_path":
 				fs.failure = "observation"
 			}
-			allocation, err := service.allocateDeliveryWithGenerator(root, identity, 89, generator)
+			allocation, err := service.allocateDeliveryWithGenerator(root, githubRuntimeNamespace(identity), 89, generator)
 			if failure == "foreign_common" || failure == "late_collision" || failure == "invalid_head" {
 				if err != nil {
 					t.Fatal(err)
@@ -254,11 +254,11 @@ func TestDeliveryAllocationFailsClosed(t *testing.T) {
 func TestFreshDeliveryAllocationsForSameIssue(t *testing.T) {
 	service, _, fs, root, _, _ := foundationService(t)
 	identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
-	first, err := service.allocateDelivery(root, identity, 89)
+	first, err := service.allocateDelivery(root, githubRuntimeNamespace(identity), 89)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := service.allocateDelivery(root, identity, 89)
+	second, err := service.allocateDelivery(root, githubRuntimeNamespace(identity), 89)
 	if err != nil || first.id == second.id || first.branch == second.branch || first.worktree == second.worktree || fs.mutations != 0 {
 		t.Fatalf("fresh allocations = %+v, %+v, %v; mutations=%d", first, second, err, fs.mutations)
 	}
@@ -267,7 +267,7 @@ func TestFreshDeliveryAllocationsForSameIssue(t *testing.T) {
 func TestFixedDeliveryRechecksWithoutChangingIdentity(t *testing.T) {
 	for _, collision := range []bool{false, true} {
 		service, _, fs, root, refs, _ := foundationService(t)
-		allocation, err := service.allocateDeliveryWithGenerator(root, RepositoryIdentity{Owner: "acme", Name: "iro"}, 89, func() (deliveryID, error) { return foundationID, nil })
+		allocation, err := service.allocateDeliveryWithGenerator(root, githubRuntimeNamespace(RepositoryIdentity{Owner: "acme", Name: "iro"}), 89, func() (deliveryID, error) { return foundationID, nil })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -296,7 +296,7 @@ func TestDeliveryCollisionWithMissingSymlinkedRegistration(t *testing.T) {
 				var allocation *deliveryAllocation
 				var err error
 				if stage != "allocation" {
-					allocation, err = service.allocateDeliveryWithGenerator(root, identity, 89, func() (deliveryID, error) { return foundationID, nil })
+					allocation, err = service.allocateDeliveryWithGenerator(root, githubRuntimeNamespace(identity), 89, func() (deliveryID, error) { return foundationID, nil })
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -306,7 +306,7 @@ func TestDeliveryCollisionWithMissingSymlinkedRegistration(t *testing.T) {
 						}
 					}
 				}
-				workspace := deliveryWorktreePath(service.Dirs, identity, 89, foundationID)
+				workspace := deliveryWorktreePath(service.Dirs, githubRuntimeNamespace(identity), 89, foundationID)
 				if err := os.MkdirAll(workspace, 0700); err != nil {
 					t.Fatal(err)
 				}
@@ -328,7 +328,7 @@ func TestDeliveryCollisionWithMissingSymlinkedRegistration(t *testing.T) {
 				}
 				if stage == "allocation" {
 					calls := 0
-					allocation, err = service.allocateDeliveryWithGenerator(root, identity, 89, func() (deliveryID, error) {
+					allocation, err = service.allocateDeliveryWithGenerator(root, githubRuntimeNamespace(identity), 89, func() (deliveryID, error) {
 						calls++
 						if calls == 1 {
 							return foundationID, nil

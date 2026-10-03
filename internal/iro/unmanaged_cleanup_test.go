@@ -50,7 +50,7 @@ func TestUnmanagedRemovalValidatesLocalRegistrationBeforeMutation(t *testing.T) 
 			root := t.TempDir()
 			runner := &fakeCommandRunner{}
 			service := newTestService(t, runner, root)
-			workspace := filepath.Join(runtimeWorkspaceParent(service.Dirs, RepositoryIdentity{Owner: "acme", Name: "iro"}, unmanagedWorkspace), "review-pr-42-123")
+			workspace := filepath.Join(runtimeWorkspaceParent(service.Dirs, githubRuntimeNamespace(RepositoryIdentity{Owner: "acme", Name: "iro"}), unmanagedWorkspace), "review-pr-42-123")
 			if err := os.MkdirAll(workspace, 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -240,7 +240,7 @@ func TestDetachedWorkspaceProducerAndCleanupWithSymlinkAncestor(t *testing.T) {
 					t.Fatalf("unexpected command: %+v", spec)
 					return CommandResult{ExitCode: 1}
 				}
-				path, err := service.createDetachedWorktree(root, RepositoryIdentity{Owner: "acme", Name: "iro"}, detachedWorkspacePattern(operation, 89), foundationHEAD)
+				path, err := service.createDetachedWorktree(root, githubRuntimeNamespace(RepositoryIdentity{Owner: "acme", Name: "iro"}), detachedWorkspacePattern(operation, 89), foundationHEAD)
 				if err != nil || path != workspace || workspace == registeredPath {
 					t.Fatalf("symlink producer paths = %q, %q, %q; err=%v", path, workspace, registeredPath, err)
 				}

@@ -82,6 +82,8 @@ flowchart LR
 
 ## Local workspace responsibilities
 
+concrete GitHub `RepositoryIdentity` は remote parsing / equality / API binding / push destination verification を担う。GitHub 用 namespace encoder が既存 `Key()` と同じ opaque `runtimeNamespaceKey` を供給し、workspace / log path mechanism はこの型だけを受け取る。将来の provider は独自 key を供給できるが、path mechanism は provider / host / repository の意味を解釈しない。key や remote identity は local Git lifecycle authority ではなく、Status / Cleanup は current common-directory inventory と runtime path recognition に依存する。共通 Repository semantic interface や Gitea encoding は導入しない。
+
 ```mermaid
 flowchart TB
     subgraph RUNPATH["Run"]
