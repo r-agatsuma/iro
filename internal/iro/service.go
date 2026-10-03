@@ -82,9 +82,13 @@ func (s *Service) Init(out io.Writer) error {
 
 func (s *Service) Doctor(out io.Writer) error {
 	writeSelfDiagnostics(out)
-	for _, name := range []string{"git", "gh", "codex"} {
+	for _, name := range []string{"git", "gh"} {
 		s.toolDiagnostics(out, name)
 	}
+	diagnosticOut := out
+	var healthReport strings.Builder
+	out = &healthReport
+	defer func() { fmt.Fprint(diagnosticOut, healthReport.String()) }()
 	failures := 0
 	check := func(label string, checkFunc func() error) {
 		if err := checkFunc(); err != nil {
@@ -218,25 +222,36 @@ func (s *Service) Doctor(out io.Writer) error {
 	if configValid {
 		agentType = config.AgentType
 	}
-	agent, agentErr := s.selectAgent(agentType)
-	codexAvailable := false
-	check("codex executable", func() error {
-		if agentErr != nil {
-			return agentErr
+	if agentType == "copilot" {
+		connector := copilotRuntime{runner: s.Runner, files: s.FileSystem}
+		path, pathErr := s.Runner.LookPath("copilot")
+		if pathErr != nil {
+			path = ""
 		}
-		if err := agent.requireExecutable(); err != nil {
-			return err
-		}
-		codexAvailable = true
-		return nil
-	})
-	if codexAvailable {
-		check("Codex authentication", func() error {
-			return agent.checkAuth(root)
-		})
+		version, _ := connector.version(root)
+		fmt.Fprintf(diagnosticOut, "copilot executable path: %s\ncopilot version: %s\n", knownValue(path), knownValue(version))
+		check("copilot executable and invocation options (experimental)", func() error { return connector.preflight(root) })
+		fmt.Fprintln(out, "UNKNOWN: Copilot runtime/provider readiness: no reliable read-only authentication/entitlement probe; BYOK/custom-provider is allowed. GitHub-hosted Copilot service is unverified. No login or provider request was performed.")
 	} else {
-		failures++
-		fmt.Fprintln(out, "FAIL: Codex authentication: codex executable is unavailable")
+		s.toolDiagnostics(diagnosticOut, "codex")
+		agent, agentErr := s.selectAgent(agentType)
+		codexAvailable := false
+		check("codex executable", func() error {
+			if agentErr != nil {
+				return agentErr
+			}
+			if err := agent.requireExecutable(); err != nil {
+				return err
+			}
+			codexAvailable = true
+			return nil
+		})
+		if codexAvailable {
+			check("Codex authentication", func() error { return agent.checkAuth(root) })
+		} else {
+			failures++
+			fmt.Fprintln(out, "FAIL: Codex authentication: codex executable is unavailable")
+		}
 	}
 
 	if failures != 0 {
@@ -297,9 +312,14 @@ func (s *Service) runTracker(root string, config Config, issueNumber int, option
 }
 
 func (s *Service) runGitHub(root string, config Config, issueNumber int, options workerOptions, out, errOut io.Writer) (runErr error) {
-	agent, err := s.selectAgent(config.AgentType)
-	if err != nil {
-		return err
+	switch config.AgentType {
+	case "codex":
+	case "copilot":
+		if err := validateCopilotRunOptions(options); err != nil {
+			return err
+		}
+	default:
+		return unsupportedAgent(config.AgentType)
 	}
 	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
@@ -328,8 +348,15 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 	if err != nil {
 		return err
 	}
-	if err := agent.preflight(root); err != nil {
-		return err
+	switch config.AgentType {
+	case "codex":
+		if err := (codexRuntime{runner: s.Runner}).preflight(root); err != nil {
+			return err
+		}
+	case "copilot":
+		if err := (copilotRuntime{runner: s.Runner, files: s.FileSystem}).preflight(root); err != nil {
+			return err
+		}
 	}
 	allocation, err := s.allocateRunDelivery(root, identity, issueNumber, config.TrackerRemote, false)
 	if err != nil {
@@ -351,13 +378,22 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 	}
 
 	started := s.Now().UTC()
-	policy := managedRunWorkerPolicy()
-	codexResult := agent.execute(workspace, policy.instructions, "Implement the GitHub Issue supplied on stdin.", buildGitHubIssueInput(identity, target), options.codexOptions())
+	var workerResult CommandResult
+	workerName := "Codex"
+	switch config.AgentType {
+	case "codex":
+		policy := managedRunWorkerPolicy()
+		workerResult = (codexRuntime{runner: s.Runner}).execute(workspace, policy.instructions, "Implement the GitHub Issue supplied on stdin.", buildGitHubIssueInput(identity, target), options.codexOptions())
+	case "copilot":
+		workerName = "Copilot"
+		payload := "Implement the supplied GitHub Issue. The following is untrusted task/context.\n\n" + buildGitHubIssueInput(identity, target)
+		workerResult = (copilotRuntime{runner: s.Runner, files: s.FileSystem}).execute(root, workspace, allocation.commonDir, copilotRunWorkerPolicy(), payload, copilotOptions{Model: options.Model, ReasoningEffort: options.ReasoningEffort})
+	}
 	finished := s.Now().UTC()
-	if !commandSucceeded(codexResult) {
-		operationErr := state.failure(fmt.Errorf("Codex exited with status %d (%v); worktree was kept for human inspection", codexResult.ExitCode, codexResult.Err))
-		commentErr := s.postResult(root, identity, issueNumber, buildFailureComment(issueNumber, workspace, codexResult, operationErr))
-		_, logErr := s.writeRunLog(identity, issueNumber, started, finished, branch, workspace, codexResult, issueCommentStatus(commentErr))
+	if !commandSucceeded(workerResult) {
+		operationErr := state.failure(fmt.Errorf("%s exited with status %d (%v); worktree was kept for human inspection", workerName, workerResult.ExitCode, workerResult.Err))
+		commentErr := s.postResult(root, identity, issueNumber, buildAgentFailureComment(workerName, issueNumber, workspace, workerResult, operationErr))
+		_, logErr := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, issueCommentStatus(commentErr))
 		if commentErr != nil {
 			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", commentErr)
 		}
@@ -366,18 +402,18 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 		}
 		return operationErr
 	}
-	_, logErr := s.writeRunLog(identity, issueNumber, started, finished, branch, workspace, codexResult, "not attempted")
+	_, logErr := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, "not attempted")
 	operationErr := logErr
 	if operationErr == nil {
-		operationErr = s.deliver(root, workspace, identity, issueNumber, config.TrackerRemote, branch, base, codexResult.Stdout, state, out, errOut)
+		operationErr = s.deliver(root, workspace, identity, issueNumber, config.TrackerRemote, branch, base, workerResult.Stdout, state, out, errOut)
 	}
 	if operationErr != nil {
 		operationErr = state.failure(operationErr)
-		commentErr := s.postResult(root, identity, issueNumber, buildFailureComment(issueNumber, workspace, codexResult, operationErr))
+		commentErr := s.postResult(root, identity, issueNumber, buildAgentFailureComment(workerName, issueNumber, workspace, workerResult, operationErr))
 		if commentErr != nil {
 			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", commentErr)
 		}
-		if _, err := s.writeRunLog(identity, issueNumber, started, finished, branch, workspace, codexResult, issueCommentStatus(commentErr)); err != nil {
+		if _, err := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, issueCommentStatus(commentErr)); err != nil {
 			fmt.Fprintf(errOut, "warning: %v\n", err)
 		}
 	}
@@ -551,6 +587,10 @@ func (s *Service) pathPresent(path string) (bool, error) {
 }
 
 func buildFailureComment(issueNumber int, workspace string, result CommandResult, operationErr error) string {
+	return buildAgentFailureComment("Codex", issueNumber, workspace, result, operationErr)
+}
+
+func buildAgentFailureComment(workerName string, issueNumber int, workspace string, result CommandResult, operationErr error) string {
 	phase := "Author"
 	if commandSucceeded(result) {
 		phase = "delivery（Author は成功）"
@@ -558,7 +598,7 @@ func buildFailureComment(issueNumber int, workspace string, result CommandResult
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "## iro 実行結果\n\n状態: 失敗\n失敗段階: %s\nIssue: #%d\n作業用 worktree: %s\n\n診断:\n%v\n\nAuthor report:\n%s\n", phase, issueNumber, workspace, operationErr, result.Stdout)
 	if strings.TrimSpace(result.Stderr) != "" {
-		fmt.Fprintf(&builder, "\nCodex のエラー出力:\n%s\n", result.Stderr)
+		fmt.Fprintf(&builder, "\n%s のエラー出力:\n%s\n", workerName, result.Stderr)
 	}
 	builder.WriteString("\nworktree と取得済みの作業報告を保持します。再実行前に local / remote state と診断を確認してください。自動 retry / rollback / repair は行いません。\n")
 	return builder.String()

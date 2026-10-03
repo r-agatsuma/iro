@@ -54,7 +54,7 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.TrackerRemote) == "" {
 		return fmt.Errorf("tracker.remote must be non-empty")
 	}
-	if c.AgentType != "codex" {
+	if c.AgentType != "codex" && c.AgentType != "copilot" {
 		return unsupportedAgent(c.AgentType)
 	}
 	if c.WorkspaceStrategy != "git-worktree" {

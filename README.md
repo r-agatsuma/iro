@@ -39,7 +39,7 @@ codex login status
 
 現在、managed operation が対象とする tracker host は `github.com` である。
 
-なお、`iro init` だけは Git リポジトリと `git` executable があれば実行できる。GitHub remote、`gh`、Codex、network access は `iro init` 自体の前提ではない。`run` / `review` / `revise` では GitHub access に加えて Codex CLI と Codex authentication が必要である。`land` は GitHub access を必要とするが Codex は起動しない。
+なお、`iro init` だけは Git リポジトリと `git` executable があれば実行できる。GitHub remote、`gh`、Codex、network access は `iro init` 自体の前提ではない。Codex を使う `run` / `review` / `revise` では GitHub access に加えて Codex CLI と Codex authentication が必要である。managed Run は後述の experimental Copilot も選択できる。`land` は GitHub access を必要とするが agent を起動しない。
 
 ### 2. iro を install する
 
@@ -541,14 +541,14 @@ AI の役割は不足仕様を勝手に埋めることではなく、複数の�
 
 ### `--model <model>` / `-m <model>`
 
-その invocation で Codex へ requested model を渡す。
+その invocation で選択した runtime へ requested model を渡す。managed Copilot Run は native `--model` を使い、Codex catalog では検証しない。requested value は resolved runtime provenance ではない。
 
 ```bash
 iro run 123 --model <model>
 iro review 456 -m <model>
 ```
 
-model 名は iro が catalog から選択・検証するものではない。Codex が受け付けない値であれば worker failure になる。fallback は行わない。
+model 名は iro が catalog から選択・検証するものではない。選択 runtime が受け付けない値であれば worker failure になる。fallback は行わない。
 
 ### `--reasoning-effort <effort>`
 
@@ -558,7 +558,7 @@ reasoning effort だけを operation 単位で override する。
 iro run 123 --reasoning-effort <effort>
 ```
 
-model と reasoning effort は独立した option であり、iro は synthetic model name を生成しない。
+model と reasoning effort は独立した option であり、iro は synthetic model name を生成しない。managed Copilot Run は native `--reasoning-effort` を使い、`none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` を受け付ける。それ以外は副作用前に拒否し、model / effort pair の runtime rejection は failure とする。
 
 ### `--no-sandbox`
 
@@ -568,7 +568,7 @@ model と reasoning effort は独立した option であり、iro は synthetic 
 iro run 123 --no-sandbox
 ```
 
-通常の worker は sandbox を使用する。`--no-sandbox` は、container / VM 等で外側の isolation と権限境界を用意している場合や、sandbox が実行環境と干渉する場合に利用者が明示的に選択する。
+通常の Codex worker は sandbox を使用する。Copilot では `--no-sandbox` を workspace 作成・worker 起動・remote mutation 前に拒否する。Copilot の permission flag へ変換しない。`--no-sandbox` は、container / VM 等で外側の isolation と権限境界を用意している場合や、sandbox が実行環境と干渉する場合に利用者が明示的に選択する。
 
 この option は OS、container、network、Codex のその他の policy を解除するものではない。
 
@@ -576,7 +576,7 @@ iro run 123 --no-sandbox
 
 worker option は operand より後ろに置く。同じ option の重複、empty value、unsupported extra argument は usage error となる。
 
-model / reasoning effort を省略した場合、その項目の選択は Codex configuration / default に委ねる。`iro.toml` に worker model default は保持しない。
+model / reasoning effort を省略した場合、その項目の選択は選択 runtime の configuration / default に委ねる。`iro.toml` に worker model default は保持しない。
 
 ## Tips / Advanced usage
 
@@ -598,13 +598,45 @@ type = "codex"
 strategy = "git-worktree"
 ```
 
-現在 support する組み合わせは version 1、GitHub tracker、Codex agent、Git worktree strategy である。
+通常の組み合わせは version 1、GitHub tracker、Codex agent、Git worktree strategy である。managed GitHub Run / Author に限り、以下の experimental Copilot selection も利用できる。`iro init` の生成値は引き続き Codex である。
 
 `tracker.remote` は managed operation が repository identity を解決する Git remote 名である。別 remote を推測して fallback しない。
 
 model / reasoning effort、retry policy、merge authorization 等をこの file に暗黙保存しない。
 
 exact schema と operation ごとの normative semantics は [docs/behavior.md](docs/behavior.md) を参照する。
+
+### Experimental Copilot Run
+
+managed project の `iro.toml` で次を指定する。
+
+```toml
+[agent]
+type = "copilot"
+```
+
+対応するのは **managed GitHub Run / Author のみ**。Review / Revise は worker / workspace / remote mutation 前に unsupported error となる。Land は agent-independent であり、この config でも実行できる。Status / Cleanup は agent dependency を持たず、unmanaged Run / Review / Revise は config を読まず built-in Codex のままである。Copilot selector を unmanaged に追加しない。
+
+```bash
+iro doctor
+iro run 123 --model <copilot-model> --reasoning-effort high
+```
+
+Human environment の公式 [BYOK/custom-provider](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#environment-variables) 設定を許可する。有料 GitHub-hosted Copilot account はこの connector の実装・テストに必要ない。project environment で GitHub-hosted Copilot service は未 acceptance であり、production support / Codex parity を主張しない。agent / account / provider / model の自動 fallback は行わない。
+
+Copilot CLI 1.0.91 の実行を確認している。exact patch pin はせず、必要な native flags と JSONL completion を検証する。auto-update を disabled にし、stdin の complete task/context と外部 private custom-agent profile の controlling policy を分離する。Human の native config を private home にコピーし、auto routing fallback / memory / hooks / plugins を無効化する。repository hooks / extensions / workspace MCP の有効化環境変数 `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS` / `GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS` / `GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP` は子プロセスで明示的に false に上書きする。Human の config / credential は変更せず、session を resume / adopt しない。repository instruction files には Copilot の semantics が適用される。
+
+shell / file tools を制限し、非対話 approval、ask-user / built-in MCP / remote export の無効化、Git / gh deny patterns を使う。これらは **hard OS sandbox ではない**。allowed shell は path / command heuristics を回避でき、Human が許可した development VM と behavioral policy が trust boundary となる。`--no-sandbox` は Copilot で使用できない。
+
+Doctor は Copilot executable / version / invocation flags を read-only で診断する。provider readiness / hosted entitlement は zero-side-effect probe がないため `UNKNOWN` と表示し、Doctor の成功が provider 認証の成功を意味することはない。login / logout や provider request は行わない。
+
+実 CLI の loopback BYOK harness は、有料 account / 実 provider credentials を使わず次で再現できる。
+
+```bash
+IRO_TEST_COPILOT_CLI=1 go test ./internal/iro -run TestCopilotLocalBYOKAcceptance -v
+```
+
+worker timeout は 30 分。終了コード、非空 final response、JSONL completion を検証し、unknown / malformed output、未完了 tool、tool failure、timeout、CLI が公開する permission / provider rejection は failure とする。観測境界は Copilot CLI であり、CLI が破棄した provider 終了理由を HTTP proxy 等で復元しない。例えば BYOK の `finish_reason=length` / `finish_reason=content_filter` が正常な CLI completion に変換され、理由が出力に残らなければ、iro は成功として扱う場合がある。これは experimental な制約である。Git commit / push / PR create と result / failure comments は既存 Run 同様に iro が所有する。詳細は [Copilot の runtime contract](docs/behavior.md#run-copilot-001-experimental-selection-and-option-matrix) を参照する。
 
 ### `WORKFLOW.md`
 
