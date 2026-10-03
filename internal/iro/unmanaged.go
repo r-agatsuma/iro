@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -219,11 +220,11 @@ func (s *Service) revalidateUnmanagedRun(root string, identity RepositoryIdentit
 }
 
 func (s *Service) createUnmanagedWorktree(root string, identity RepositoryIdentity, number int, head string) (string, error) {
-	return s.createDetachedWorktree(root, identity, fmt.Sprintf("run-issue-%d-*", number), head)
+	return s.createDetachedWorktree(root, identity, detachedWorkspacePattern("run", number), head)
 }
 
 func (s *Service) createDetachedWorktree(root string, identity RepositoryIdentity, pattern, head string) (string, error) {
-	parent := cleanAbsolutePath(filepath.Join(s.Dirs.DataRoot, "unmanaged-workspaces", identity.Key()))
+	parent := cleanAbsolutePath(runtimeWorkspaceParent(s.Dirs, identity, unmanagedWorkspace))
 	if err := s.FileSystem.MkdirAll(parent, 0755); err != nil {
 		return "", fmt.Errorf("create unmanaged workspace parent: %w", err)
 	}
@@ -251,6 +252,59 @@ func (s *Service) verifyDetachedHead(workspace, expected string) error {
 }
 
 func (s *Service) removeUnmanagedWorktree(root, workspace string) error {
+	kind, ok, err := s.recognizeRuntimeWorkspace(workspace)
+	if err != nil {
+		return err
+	}
+	if !ok || kind != unmanagedWorkspace {
+		return fmt.Errorf("path is not an iro unmanaged runtime workspace: %s", workspace)
+	}
+	// Callers supply only the fresh workspace created by this invocation after
+	// their operation's cleanup boundary. Naming alone is not authorization.
+	inventory, err := s.localInventory(root)
+	if err != nil {
+		return err
+	}
+	info, err := s.FileSystem.Lstat(workspace)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("unmanaged cleanup requires an existing directory at %s", workspace)
+	}
+	var target *registeredWorktree
+	for i := range inventory.Worktrees {
+		entry := &inventory.Worktrees[i]
+		// Git registers a real path, while the producer may return a path through
+		// symlink ancestors. Compare directory identity without rewriting inventory.
+		registeredInfo, err := s.FileSystem.Stat(entry.Path)
+		if os.IsNotExist(err) {
+			// Unrelated stale registrations need not have an existing directory.
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect registered worktree path %s: %w", entry.Path, err)
+		}
+		if os.SameFile(info, registeredInfo) {
+			if target != nil {
+				return fmt.Errorf("unmanaged worktree registration is ambiguous at %s", workspace)
+			}
+			target = entry
+		}
+	}
+	if target == nil || !target.Detached || target.Branch != "" || target.Bare || target.Locked || target.Prunable {
+		return fmt.Errorf("unmanaged cleanup requires a registered detached, unlocked, non-prunable worktree at %s", workspace)
+	}
+	common, err := s.gitCommonDir(workspace)
+	if err != nil {
+		return err
+	}
+	if common != inventory.CommonDir {
+		return fmt.Errorf("unmanaged worktree does not share the invoking Git common directory")
+	}
+	if err := s.verifyDetachedHead(workspace, target.HEAD); err != nil {
+		return err
+	}
+	if err := s.checkoutClean(workspace); err != nil {
+		return fmt.Errorf("unmanaged cleanup requires a clean worktree: %w", err)
+	}
 	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"worktree", "remove", "--", workspace}, Dir: root})
 	if !commandSucceeded(result) {
 		return fmt.Errorf("Git rejected normal worktree removal")
@@ -264,7 +318,7 @@ func (s *Service) removeUnmanagedWorktree(root, workspace string) error {
 		return err
 	}
 	for _, worktree := range worktrees {
-		if cleanAbsolutePath(worktree.Path) == cleanAbsolutePath(workspace) {
+		if cleanAbsolutePath(worktree.Path) == cleanAbsolutePath(workspace) || cleanAbsolutePath(worktree.Path) == cleanAbsolutePath(target.Path) {
 			return fmt.Errorf("Git still registers the worktree")
 		}
 	}

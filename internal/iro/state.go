@@ -48,7 +48,7 @@ func ownershipPath(dirs RuntimeDirs, identity RepositoryIdentity, issueNumber in
 }
 
 func worktreePath(dirs RuntimeDirs, identity RepositoryIdentity, issueNumber int) string {
-	return filepath.Join(dirs.DataRoot, "workspaces", identity.Key(), fmt.Sprintf("issue-%d", issueNumber))
+	return filepath.Join(runtimeWorkspaceParent(dirs, identity, managedWorkspace), fmt.Sprintf("issue-%d", issueNumber))
 }
 
 func (s *Service) readOwnership(path string) (ownershipMapping, bool, error) {

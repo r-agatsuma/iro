@@ -61,6 +61,9 @@ func (f *unmanagedFixture) run(spec CommandSpec) CommandResult {
 			return result
 		}
 	}
+	if result, ok := unmanagedInventoryResult(spec, f.root, f.workspace, f.head, !containsString(f.stages, "worktree-remove")); ok {
+		return result
+	}
 	switch spec.Name {
 	case "git":
 		switch command {
@@ -152,7 +155,7 @@ func TestUnmanagedRunScenarioA(t *testing.T) {
 	if code, out, diagnostic := f.execute(); code != 0 || diagnostic != "" || !strings.Contains(out, "PR #42") || strings.Contains(out, "iro land") {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, out, diagnostic)
 	}
-	want := []string{"remote-check", "worktree-add", "worker", "add", "remote-check", "commit", "remote-check", "push", "pr-create", "worktree-remove", "worktree-list"}
+	want := []string{"remote-check", "worktree-add", "worker", "add", "remote-check", "commit", "remote-check", "push", "pr-create", "worktree-list", "worktree-remove", "worktree-list"}
 	if !reflect.DeepEqual(f.stages, want) {
 		t.Fatalf("stages=%v want=%v", f.stages, want)
 	}
@@ -509,7 +512,7 @@ func TestUnmanagedCleanupAndReportFailureRemainSuccess(t *testing.T) {
 						return CommandResult{}, true
 					}
 				}
-				if failure == "registration remains" && spec.Name == "git" && containsArgs(spec.Args, "worktree", "list") {
+				if failure == "registration remains" && containsString(f.stages, "worktree-remove") && spec.Name == "git" && containsArgs(spec.Args, "worktree", "list") {
 					return CommandResult{Stdout: "worktree " + f.workspace + "\ndetached\n"}, true
 				}
 				return CommandResult{ExitCode: 1}, failure == "comment" && spec.Name == "gh" && containsArgs(spec.Args, "pr", "comment")

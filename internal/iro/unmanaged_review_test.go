@@ -87,6 +87,9 @@ func TestUnmanagedReviewScenarioBAndFailureMatrix(t *testing.T) {
 						}
 						os.RemoveAll(workspace)
 						return CommandResult{}
+					case args == "rev-parse --path-format=absolute --git-common-dir", strings.HasPrefix(args, "for-each-ref"), args == "worktree list --porcelain -z":
+						result, _ := unmanagedInventoryResult(spec, root, workspace, reviewHeadForTest, cleanups == 0)
+						return result
 					case strings.HasPrefix(args, "worktree list"):
 						return CommandResult{}
 					}
@@ -252,6 +255,13 @@ func TestUnmanagedReviewEligibilityAndSnapshotFailures(t *testing.T) {
 						cleanup = true
 						os.RemoveAll(workspace)
 						return CommandResult{}
+					case args == "rev-parse --path-format=absolute --git-common-dir", strings.HasPrefix(args, "for-each-ref"), args == "worktree list --porcelain -z":
+						head := reviewHeadForTest
+						if stage == "mismatched HEAD" {
+							head = reviewBaseForTest
+						}
+						result, _ := unmanagedInventoryResult(spec, root, workspace, head, !cleanup)
+						return result
 					case strings.HasPrefix(args, "worktree list"):
 						return CommandResult{}
 					}
@@ -265,8 +275,16 @@ func TestUnmanagedReviewEligibilityAndSnapshotFailures(t *testing.T) {
 			if err := service.reviewUnmanaged(42, 123, workerOptions{}, io.Discard, io.Discard); err == nil {
 				t.Fatal("expected failure")
 			}
-			if workspace != "" && !cleanup {
+			if workspace != "" && !cleanup && stage != "attached HEAD" {
 				t.Fatal("missing cleanup")
+			}
+			if stage == "attached HEAD" {
+				if cleanup {
+					t.Fatal("cleanup removed an attached worktree")
+				}
+				if _, err := os.Stat(workspace); err != nil {
+					t.Fatalf("attached worktree was not retained: %v", err)
+				}
 			}
 		})
 	}
@@ -305,10 +323,18 @@ func TestUnmanagedReviewCleanupConfirmsDirectoryAndRegistration(t *testing.T) {
 	for _, state := range []string{"removed", "directory remains", "registration remains"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
-			workspace := filepath.Join(root, "review-workspace")
-			os.Mkdir(workspace, 0700)
+			workspace := ""
 			runner := &fakeCommandRunner{}
 			runner.fn = func(spec CommandSpec) CommandResult {
+				if result, ok := unmanagedInventoryResult(spec, root, workspace, reviewHeadForTest, true); ok {
+					return result
+				}
+				if strings.Join(spec.Args, " ") == "symbolic-ref --quiet HEAD" {
+					return CommandResult{ExitCode: 1}
+				}
+				if strings.Join(spec.Args, " ") == "rev-parse HEAD" {
+					return CommandResult{Stdout: reviewHeadForTest}
+				}
 				if containsArgs(spec.Args, "worktree", "remove") {
 					if state != "directory remains" {
 						os.RemoveAll(workspace)
@@ -321,7 +347,12 @@ func TestUnmanagedReviewCleanupConfirmsDirectoryAndRegistration(t *testing.T) {
 				return CommandResult{}
 			}
 			service := newTestService(t, runner, root)
-			err := service.removeUnmanagedWorktree(root, workspace)
+			var err error
+			workspace, err = service.createDetachedWorktree(root, RepositoryIdentity{Owner: "acme", Name: "iro"}, detachedWorkspacePattern("review", 42), reviewHeadForTest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = service.removeUnmanagedWorktree(root, workspace)
 			if (err == nil) != (state == "removed") {
 				t.Fatalf("%s: %v", state, err)
 			}
