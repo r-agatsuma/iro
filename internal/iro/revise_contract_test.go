@@ -458,7 +458,7 @@ func TestRunProducerFixturesRoundTripThroughManagedRevise(t *testing.T) {
 			consumer.root = root
 			consumer.service.Dirs = service.Dirs
 			consumer.branchName = produced["head"].(string)
-			consumer.workspace = deliveryWorktreePath(service.Dirs, consumer.identity, 123, deliveryID(strings.Repeat("a", 32)))
+			consumer.workspace = deliveryWorktreePath(service.Dirs, githubRuntimeNamespace(consumer.identity), 123, deliveryID(strings.Repeat("a", 32)))
 			consumer.target = reviseMetadata(t, consumer.target, func(repo, pr map[string]any) {
 				delete(repo, "defaultBranchRef")
 				delete(pr, "closingIssuesReferences")

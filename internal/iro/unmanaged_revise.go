@@ -81,7 +81,7 @@ func (s *Service) reviseUnmanaged(number, specificationIssue int, options worker
 	if !commandSucceeded(result) || strings.TrimSpace(result.Stdout) != "commit" {
 		return fmt.Errorf("selected PR HEAD commit was not obtained; no worktree created")
 	}
-	workspace, err := s.createDetachedWorktree(root, identity, detachedWorkspacePattern("revise", number), target.HeadRefOID)
+	workspace, err := s.createDetachedWorktree(root, githubRuntimeNamespace(identity), detachedWorkspacePattern("revise", number), target.HeadRefOID)
 	if workspace == "" {
 		return err
 	}
@@ -273,7 +273,7 @@ func (c codexRuntime) runUnmanagedRevisionAuthor(workspace string, identity Repo
 }
 
 func (s *Service) writeUnmanagedReviseLog(identity RepositoryIdentity, target reviewPullRequest, workspace string, result CommandResult) (string, error) {
-	dir := filepath.Join(s.Dirs.StateRoot, "unmanaged-revisions", identity.Key())
+	dir := runtimeLogDir(s.Dirs, githubRuntimeNamespace(identity), "unmanaged-revisions")
 	if err := s.FileSystem.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}

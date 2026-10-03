@@ -78,7 +78,7 @@ func (s *Service) allocateRunDelivery(root string, identity RepositoryIdentity, 
 	if generate == nil {
 		generate = generateDeliveryID
 	}
-	if err := s.selectDelivery(root, identity, allocation, generate); err != nil {
+	if err := s.selectDelivery(root, githubRuntimeNamespace(identity), allocation, generate); err != nil {
 		return nil, err
 	}
 	return allocation, nil
@@ -150,7 +150,7 @@ func (s *Service) finishRunDelivery(identity RepositoryIdentity, state *runDeliv
 	} else {
 		fmt.Fprintln(out, diagnostic)
 	}
-	dir := filepath.Join(s.Dirs.StateRoot, "deliveries", identity.Key())
+	dir := runtimeLogDir(s.Dirs, githubRuntimeNamespace(identity), "deliveries")
 	content := diagnostic + "\n"
 	if operationErr != nil {
 		content += operationErr.Error() + "\n"

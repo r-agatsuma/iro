@@ -392,9 +392,9 @@ func TestRunAllocationCollisionsBeforeAndAfterCreation(t *testing.T) {
 					return foundationOtherID, nil
 				}
 				identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
-				path := deliveryWorktreePath(service.Dirs, identity, 123, foundationID)
+				path := deliveryWorktreePath(service.Dirs, githubRuntimeNamespace(identity), 123, foundationID)
 				if unmanaged {
-					path = filepath.Join(runtimeWorkspaceParent(service.Dirs, identity, unmanagedWorkspace), detachedWorkspaceStem("run", 123)+string(foundationID))
+					path = filepath.Join(runtimeWorkspaceParent(service.Dirs, githubRuntimeNamespace(identity), unmanagedWorkspace), detachedWorkspaceStem("run", 123)+string(foundationID))
 				}
 				if collision == "path" {
 					if err := os.MkdirAll(path, 0755); err != nil {

@@ -278,7 +278,7 @@ func (s *Service) selectReviseWorkspace(root string, identity RepositoryIdentity
 		if err := id.validate(); err != nil {
 			return local, err
 		}
-		local.Path = cleanAbsolutePath(deliveryWorktreePath(s.Dirs, identity, target.OriginIssue, id))
+		local.Path = cleanAbsolutePath(deliveryWorktreePath(s.Dirs, githubRuntimeNamespace(identity), target.OriginIssue, id))
 		if present, err := s.inspectRevisePath(local.Path, true); err != nil || present {
 			return local, fmt.Errorf("revision workspace path is occupied or unreadable at %s; no repair attempted", local.Path)
 		}
@@ -293,7 +293,7 @@ func (s *Service) selectReviseWorkspace(root string, identity RepositoryIdentity
 		return local, fmt.Errorf("remote PR HEAD commit was not obtained")
 	}
 	if local.Branch == "" {
-		local.Path, err = s.createDetachedWorktree(root, identity, detachedWorkspacePattern("revise", target.Number), target.HeadRefOID)
+		local.Path, err = s.createDetachedWorktree(root, githubRuntimeNamespace(identity), detachedWorkspacePattern("revise", target.Number), target.HeadRefOID)
 	} else {
 		// Check registrations and local tip again before reserving a new path.
 		current, inspectErr := s.localInventory(root)
@@ -453,7 +453,7 @@ func (c codexRuntime) runRevisionAuthor(workspace string, identity RepositoryIde
 }
 
 func (s *Service) writeReviseLog(identity RepositoryIdentity, target reviewPullRequest, workspace string, started time.Time, result CommandResult) (string, error) {
-	dir := filepath.Join(s.Dirs.StateRoot, "revisions", identity.Key())
+	dir := runtimeLogDir(s.Dirs, githubRuntimeNamespace(identity), "revisions")
 	if err := s.FileSystem.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}

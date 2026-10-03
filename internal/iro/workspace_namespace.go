@@ -15,12 +15,12 @@ const (
 	unmanagedWorkspace runtimeWorkspaceKind = "unmanaged-workspaces"
 )
 
-func runtimeWorkspaceParent(dirs RuntimeDirs, identity RepositoryIdentity, kind runtimeWorkspaceKind) string {
-	return filepath.Join(dirs.DataRoot, string(kind), identity.Key())
+func runtimeWorkspaceParent(dirs RuntimeDirs, namespace runtimeNamespaceKey, kind runtimeWorkspaceKind) string {
+	return filepath.Join(dirs.DataRoot, string(kind), string(namespace))
 }
 
-func deliveryWorktreePath(dirs RuntimeDirs, identity RepositoryIdentity, issueNumber int, id deliveryID) string {
-	return filepath.Join(runtimeWorkspaceParent(dirs, identity, managedWorkspace), deliveryLeaf(issueNumber, id))
+func deliveryWorktreePath(dirs RuntimeDirs, namespace runtimeNamespaceKey, issueNumber int, id deliveryID) string {
+	return filepath.Join(runtimeWorkspaceParent(dirs, namespace, managedWorkspace), deliveryLeaf(issueNumber, id))
 }
 
 func deliveryLeaf(issueNumber int, id deliveryID) string {

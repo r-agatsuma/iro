@@ -48,7 +48,7 @@ func ownershipPath(dirs RuntimeDirs, identity RepositoryIdentity, issueNumber in
 }
 
 func worktreePath(dirs RuntimeDirs, identity RepositoryIdentity, issueNumber int) string {
-	return filepath.Join(runtimeWorkspaceParent(dirs, identity, managedWorkspace), fmt.Sprintf("issue-%d", issueNumber))
+	return filepath.Join(runtimeWorkspaceParent(dirs, githubRuntimeNamespace(identity), managedWorkspace), fmt.Sprintf("issue-%d", issueNumber))
 }
 
 func (s *Service) readOwnership(path string) (ownershipMapping, bool, error) {
@@ -90,7 +90,7 @@ func (s *Service) writeOwnership(path string, mapping ownershipMapping) error {
 }
 
 func (s *Service) writeRunLog(identity RepositoryIdentity, issueNumber int, started, finished time.Time, branch, worktree string, codexResult CommandResult, commentStatus string) (string, error) {
-	logDir := filepath.Join(s.Dirs.StateRoot, "runs", identity.Key())
+	logDir := runtimeLogDir(s.Dirs, githubRuntimeNamespace(identity), "runs")
 	if err := s.FileSystem.MkdirAll(logDir, 0755); err != nil {
 		return "", fmt.Errorf("create run log directory: %w", err)
 	}

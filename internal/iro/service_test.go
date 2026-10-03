@@ -871,7 +871,7 @@ func containsArgs(args []string, key, value string) bool {
 }
 
 func identityKeyForTest() string {
-	return (RepositoryIdentity{Owner: "acme", Name: "iro"}).Key()
+	return "acme-iro-5f858f6c7d45"
 }
 
 func TestExecuteRejectsNonPositiveIssueNumber(t *testing.T) {

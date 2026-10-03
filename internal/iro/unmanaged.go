@@ -229,8 +229,8 @@ func (s *Service) revalidateUnmanagedRun(root string, identity RepositoryIdentit
 	return nil
 }
 
-func (s *Service) createDetachedWorktree(root string, identity RepositoryIdentity, pattern, head string) (string, error) {
-	parent := cleanAbsolutePath(runtimeWorkspaceParent(s.Dirs, identity, unmanagedWorkspace))
+func (s *Service) createDetachedWorktree(root string, namespace runtimeNamespaceKey, pattern, head string) (string, error) {
+	parent := cleanAbsolutePath(runtimeWorkspaceParent(s.Dirs, namespace, unmanagedWorkspace))
 	if err := s.FileSystem.MkdirAll(parent, 0755); err != nil {
 		return "", fmt.Errorf("create unmanaged workspace parent: %w", err)
 	}
@@ -332,7 +332,7 @@ func (s *Service) removeUnmanagedWorktree(root, workspace string) error {
 }
 
 func (s *Service) writeUnmanagedRunLog(identity RepositoryIdentity, number int, base, head, workspace string, result CommandResult, allocation *deliveryAllocation) error {
-	dir := filepath.Join(s.Dirs.StateRoot, "unmanaged-runs", identity.Key())
+	dir := runtimeLogDir(s.Dirs, githubRuntimeNamespace(identity), "unmanaged-runs")
 	if err := s.FileSystem.MkdirAll(dir, 0700); err != nil {
 		return err
 	}

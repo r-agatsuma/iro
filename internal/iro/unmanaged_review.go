@@ -56,7 +56,7 @@ func (s *Service) reviewUnmanaged(number, specificationIssue int, options worker
 	if !commandSucceeded(result) {
 		return fmt.Errorf("could not fetch PR #%d snapshot %s from origin", number, target.HeadRefOID)
 	}
-	workspace, err := s.createDetachedWorktree(root, identity, detachedWorkspacePattern("review", number), target.HeadRefOID)
+	workspace, err := s.createDetachedWorktree(root, githubRuntimeNamespace(identity), detachedWorkspacePattern("review", number), target.HeadRefOID)
 	if workspace == "" {
 		return err
 	}

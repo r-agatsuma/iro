@@ -36,7 +36,7 @@ func newReviseFixture(t *testing.T, existing bool) *reviseFixture {
 	f.runner = &fakeCommandRunner{}
 	f.service = newTestService(t, f.runner, f.root)
 	f.service.newDeliveryID = func() (deliveryID, error) { return deliveryID(strings.Repeat("a", 32)), nil }
-	f.workspace = deliveryWorktreePath(f.service.Dirs, f.identity, 123, deliveryID(strings.Repeat("a", 32)))
+	f.workspace = deliveryWorktreePath(f.service.Dirs, githubRuntimeNamespace(f.identity), 123, deliveryID(strings.Repeat("a", 32)))
 	f.target = strings.NewReplacer(`"human-feature"`, `"iro/issue-123"`, `"contributor/iro"`, `"acme/iro"`, reviewHeadForTest, revisionHead).Replace(reviewResponseForTest)
 	f.active = strings.Replace(deliveryResponseForTest, `"nodes":[]`, `"nodes":[`+activeRevisionPR+`]`, 1)
 	if existing {

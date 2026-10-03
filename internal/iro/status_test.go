@@ -130,6 +130,37 @@ func TestLocalLifecycleExcludesSeparateCommonDirectory(t *testing.T) {
 	}
 }
 
+func TestLocalLifecycleRecognizesOpaqueNamespaceWithoutProviderIdentity(t *testing.T) {
+	for _, cleanup := range []bool{false, true} {
+		for _, kind := range []runtimeWorkspaceKind{managedWorkspace, unmanagedWorkspace} {
+			t.Run(strconv.FormatBool(cleanup)+"/"+string(kind), func(t *testing.T) {
+				f := newLocalLifecycleFixture(t)
+				leaf := "issue-7-00112233445566778899aabbccddeeff"
+				if kind == unmanagedWorkspace {
+					leaf = "run-issue-7-00112233445566778899aabbccddeeff"
+				}
+				// No provider identity, config, tracker or agent is available here.
+				path := filepath.Join(f.service.Dirs.DataRoot, string(kind), "opaque-provider-host-repository-key", leaf)
+				f.addWorktree(t, path, "")
+				var output strings.Builder
+				var err error
+				if cleanup {
+					err = f.service.Cleanup(7, &output)
+				} else {
+					err = f.service.Status(&output)
+				}
+				if err != nil || !strings.Contains(output.String(), strconv.Quote(path)) {
+					t.Fatalf("opaque local namespace = %v: %s", err, output.String())
+				}
+				_, statErr := os.Lstat(path)
+				if cleanup && !os.IsNotExist(statErr) || !cleanup && statErr != nil {
+					t.Fatalf("unexpected local workspace state: %v", statErr)
+				}
+			})
+		}
+	}
+}
+
 func TestStatusAndCleanupIgnoreProjectFilesMappingsAndLogs(t *testing.T) {
 	for _, cleanup := range []bool{false, true} {
 		t.Run(strconv.FormatBool(cleanup), func(t *testing.T) {
