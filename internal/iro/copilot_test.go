@@ -23,6 +23,13 @@ func copilotCompletionForTest(report string) string {
 	return `{"type":"assistant.turn_start","data":{}}` + "\n" + string(message) + "\n" + `{"type":"assistant.turn_end","data":{}}` + "\n" + `{"type":"assistant.idle","data":{}}` + "\n" + `{"type":"result","exitCode":0,"sessionId":"disposable"}` + "\n"
 }
 
+func copilotToolCompletionForTest(toolName, completion string) string {
+	start, _ := json.Marshal(map[string]any{"type": "tool.execution_start", "data": map[string]any{"toolCallId": "x", "toolName": toolName}})
+	return `{"type":"assistant.turn_start","data":{}}` + "\n" + string(start) + "\n" +
+		`{"type":"tool.execution_complete","data":` + completion + "}\n" +
+		`{"type":"assistant.turn_end","data":{}}` + "\n" + copilotCompletionForTest("完了")
+}
+
 func writeCopilotConfig(t *testing.T, root string) {
 	t.Helper()
 	data := strings.Replace(configTemplate, `type = "codex"`, `type = "copilot"`, 1)
@@ -144,13 +151,14 @@ func TestManagedCopilotRunUsesExistingDeliveryOwner(t *testing.T) {
 
 func TestCopilotWorkerFailuresNeverDeliverOrFallback(t *testing.T) {
 	for name, result := range map[string]CommandResult{
-		"provider":    {ExitCode: 1, Stderr: "provider denied"},
-		"permission":  {Stdout: `{"type":"session.error","data":{"message":"permission denied"}}`},
-		"empty":       {},
-		"malformed":   {Stdout: "not JSON"},
-		"timeout":     {Stdout: copilotCompletionForTest("response"), Err: context.DeadlineExceeded},
-		"termination": {ExitCode: -1, Err: context.Canceled},
-		"incomplete":  {Stdout: `{"type":"assistant.message","data":{"content":"partial"}}`},
+		"provider":       {ExitCode: 1, Stderr: "provider denied"},
+		"permission":     {Stdout: `{"type":"session.error","data":{"message":"permission denied"}}`},
+		"empty":          {},
+		"malformed":      {Stdout: "not JSON"},
+		"timeout":        {Stdout: copilotCompletionForTest("response"), Err: context.DeadlineExceeded},
+		"termination":    {ExitCode: -1, Err: context.Canceled},
+		"incomplete":     {Stdout: `{"type":"assistant.message","data":{"content":"partial"}}`},
+		"detached shell": {Stdout: copilotToolCompletionForTest("bash", `{"toolCallId":"x","success":true}`)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("COPILOT_HOME", t.TempDir())
@@ -313,10 +321,10 @@ func TestCopilotParserFailsClosed(t *testing.T) {
 		"missing start":         strings.Replace(valid, `{"type":"assistant.turn_start","data":{}}`+"\n", "", 1),
 		"unknown event":         `{"type":"future.event","data":{}}` + "\n" + valid,
 		"unknown schema":        `{"type":"assistant.message","data":{"content":9}}` + "\n" + valid,
-		"tool denial":           `{"type":"tool.execution_start","data":{"toolCallId":"x"}}` + "\n" + `{"type":"tool.execution_complete","data":{"toolCallId":"x","success":false}}` + "\n" + valid,
-		"shell failure":         `{"type":"tool.execution_start","data":{"toolCallId":"x"}}` + "\n" + `{"type":"tool.execution_complete","data":{"toolCallId":"x","success":true,"shellExecution":{"exitCode":9}}}` + "\n" + valid,
-		"shell termination":     `{"type":"tool.execution_start","data":{"toolCallId":"x"}}` + "\n" + `{"type":"tool.execution_complete","data":{"toolCallId":"x","success":true,"shellExecution":{}}}` + "\n" + valid,
-		"outstanding tool":      `{"type":"tool.execution_start","data":{"toolCallId":"x"}}` + "\n" + valid,
+		"tool denial":           `{"type":"tool.execution_start","data":{"toolCallId":"x","toolName":"bash"}}` + "\n" + `{"type":"tool.execution_complete","data":{"toolCallId":"x","success":false}}` + "\n" + valid,
+		"shell failure":         `{"type":"tool.execution_start","data":{"toolCallId":"x","toolName":"bash"}}` + "\n" + `{"type":"tool.execution_complete","data":{"toolCallId":"x","success":true,"shellExecution":{"exitCode":9}}}` + "\n" + valid,
+		"shell termination":     `{"type":"tool.execution_start","data":{"toolCallId":"x","toolName":"bash"}}` + "\n" + `{"type":"tool.execution_complete","data":{"toolCallId":"x","success":true,"shellExecution":{}}}` + "\n" + valid,
+		"outstanding tool":      `{"type":"tool.execution_start","data":{"toolCallId":"x","toolName":"bash"}}` + "\n" + valid,
 		"provider failure":      `{"type":"model.call_failure","data":{}}` + "\n" + valid,
 		"failed model result":   `{"type":"model.call_final_result","data":{"result":"error"}}` + "\n" + valid,
 	} {
@@ -330,6 +338,66 @@ func TestCopilotParserFailsClosed(t *testing.T) {
 				t.Fatal("ambiguous stream accepted", report)
 			}
 		})
+	}
+}
+
+func TestCopilotShellCompletionRequiresExitStatus(t *testing.T) {
+	for _, toolName := range []string{"bash", "powershell"} {
+		for _, shell := range []struct {
+			name    string
+			field   string
+			success bool
+		}{
+			{"launch only", "", false},
+			{"null execution", `,"shellExecution":null`, false},
+			{"missing exit code", `,"shellExecution":{}`, false},
+			{"null exit code", `,"shellExecution":{"exitCode":null}`, false},
+			{"nonzero exit code", `,"shellExecution":{"exitCode":1}`, false},
+			{"completed", `,"shellExecution":{"exitCode":0}`, true},
+		} {
+			t.Run(toolName+"/"+shell.name, func(t *testing.T) {
+				stream := copilotToolCompletionForTest(toolName, `{"toolCallId":"x","success":true`+shell.field+`}`)
+				report, err := parseCopilotOutput(stream)
+				if shell.success {
+					if err != nil || report != "完了" {
+						t.Fatal(report, err)
+					}
+				} else if err == nil || report != "" {
+					t.Fatalf("unconfirmed shell accepted: report=%q err=%v", report, err)
+				}
+			})
+		}
+	}
+	// File and shell-management tools have no shellExecution of their own.
+	for _, toolName := range []string{"view", "edit", "read_bash", "stop_bash", "read_powershell"} {
+		t.Run(toolName, func(t *testing.T) {
+			report, err := parseCopilotOutput(copilotToolCompletionForTest(toolName, `{"toolCallId":"x","success":true}`))
+			if err != nil || report != "完了" {
+				t.Fatal(report, err)
+			}
+		})
+	}
+	for _, toolName := range []string{"", "future_tool"} {
+		if _, err := parseCopilotOutput(copilotToolCompletionForTest(toolName, `{"toolCallId":"x","success":true}`)); err == nil {
+			t.Fatalf("unknown tool accepted: %q", toolName)
+		}
+	}
+}
+
+func TestCopilotConcurrentToolsPreserveShellIdentity(t *testing.T) {
+	stream := `{"type":"assistant.turn_start","data":{}}
+{"type":"tool.execution_start","data":{"toolCallId":"shell","toolName":"bash"}}
+{"type":"tool.execution_start","data":{"toolCallId":"file","toolName":"edit"}}
+{"type":"tool.execution_complete","data":{"toolCallId":"file","success":true}}
+{"type":"tool.execution_complete","data":{"toolCallId":"shell","success":true}}
+{"type":"assistant.turn_end","data":{}}
+` + copilotCompletionForTest("完了")
+	if report, err := parseCopilotOutput(stream); err == nil || report != "" {
+		t.Fatal("unconfirmed concurrent shell accepted", report, err)
+	}
+	stream = strings.Replace(stream, `"toolCallId":"shell","success":true`, `"toolCallId":"shell","success":true,"shellExecution":{"exitCode":0}`, 1)
+	if report, err := parseCopilotOutput(stream); err != nil || report != "完了" {
+		t.Fatal(report, err)
 	}
 }
 
@@ -442,6 +510,12 @@ func TestCopilotLocalBYOKAcceptance(t *testing.T) {
 	if os.Getenv("IRO_TEST_COPILOT_CLI") != "1" {
 		t.Skip("set IRO_TEST_COPILOT_CLI=1 to exercise the installed CLI with a local BYOK provider")
 	}
+	t.Run("synchronous edit", func(t *testing.T) { testCopilotLocalBYOKAcceptance(t, false) })
+	t.Run("detached shell rejected", func(t *testing.T) { testCopilotLocalBYOKAcceptance(t, true) })
+}
+
+func testCopilotLocalBYOKAcceptance(t *testing.T, detached bool) {
+	t.Helper()
 	for _, name := range []string{"COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_API_KEY_COMMAND", "COPILOT_PROVIDER_BEARER_TOKEN", "COPILOT_PROVIDER_HEADERS", "COPILOT_PROVIDER_WIRE_MODEL", "COPILOT_PROVIDER_MODEL_ID", "COPILOT_PROVIDER_WIRE_API", "COPILOT_PROVIDER_TRANSPORT", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
 		t.Setenv(name, "")
 	}
@@ -482,7 +556,13 @@ func TestCopilotLocalBYOKAcceptance(t *testing.T) {
 		calls++
 		message := map[string]any{"role": "assistant", "content": "ローカル provider による検証に成功しました。"}
 		if calls == 1 {
-			args, _ := json.Marshal(map[string]any{"command": "cat WORKFLOW.md && printf 'fixture change' > result.txt", "description": "Read policy and edit a fixture", "timeout": 10000})
+			arguments := map[string]any{"command": "cat WORKFLOW.md && printf 'fixture change' > result.txt", "description": "Read policy and edit a fixture", "timeout": 10000}
+			if detached {
+				arguments["mode"] = "async"
+				arguments["detach"] = true
+				arguments["command"] = `cat WORKFLOW.md; attempt=0; while [ ! -f release.txt ] && [ "$attempt" -lt 200 ]; do sleep 0.05; attempt=$((attempt+1)); done; printf 'fixture change' > result.txt; exit 1`
+			}
+			args, _ := json.Marshal(arguments)
 			message = map[string]any{"role": "assistant", "content": "", "tool_calls": []any{map[string]any{"id": "local-edit", "type": "function", "function": map[string]any{"name": "bash", "arguments": string(args)}}}}
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -493,6 +573,9 @@ func TestCopilotLocalBYOKAcceptance(t *testing.T) {
 	var raw string
 	actualRunner := NewOSCommandRunner()
 	capturing := &fakeCommandRunner{fn: func(spec CommandSpec) CommandResult {
+		if len(spec.Stdin) > 0 {
+			spec.Timeout = 30 * time.Second
+		}
 		result := actualRunner.Run(spec)
 		if len(spec.Stdin) > 0 {
 			raw = result.Stdout
@@ -503,13 +586,53 @@ func TestCopilotLocalBYOKAcceptance(t *testing.T) {
 	if err := c.preflight(root); err != nil {
 		t.Fatal(err)
 	}
-	result := c.execute(root, workspace, filepath.Join(root, ".git"), copilotRunWorkerPolicy(), "LOCAL_TASK_MARKER: Read WORKFLOW.md, edit result.txt, and return the Japanese report.", copilotOptions{Model: "iro-local-test", ReasoningEffort: "high"})
-	if !commandSucceeded(result) || !strings.Contains(result.Stdout, "検証に成功") {
-		t.Fatalf("result=%+v; raw=%s", result, raw)
+	if detached {
+		// Keep the fixture shell unfinished until execute returns, then release
+		// it even on test failure. It edits only this temporary workspace.
+		defer func() {
+			if err := os.WriteFile(filepath.Join(workspace, "release.txt"), nil, 0600); err != nil {
+				t.Error(err)
+				return
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, err := os.Stat(filepath.Join(workspace, "result.txt")); err == nil {
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Error("detached fixture did not finish after release")
+		}()
 	}
-	data, err := os.ReadFile(filepath.Join(workspace, "result.txt"))
-	if err != nil || string(data) != "fixture change" {
-		t.Fatal(string(data), err)
+	result := c.execute(root, workspace, filepath.Join(root, ".git"), copilotRunWorkerPolicy(), "LOCAL_TASK_MARKER: Read WORKFLOW.md, edit result.txt, and return the Japanese report.", copilotOptions{Model: "iro-local-test", ReasoningEffort: "high"})
+	if detached {
+		launchOnly := false
+		for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+			var event struct {
+				Type string `json:"type"`
+				Data struct {
+					Success        bool            `json:"success"`
+					ShellExecution json.RawMessage `json:"shellExecution"`
+				} `json:"data"`
+			}
+			if json.Unmarshal([]byte(line), &event) == nil && event.Type == "tool.execution_complete" && event.Data.Success && len(event.Data.ShellExecution) == 0 {
+				launchOnly = true
+			}
+		}
+		if !launchOnly || result.ExitCode != 0 || result.Err == nil || result.Stdout != "" || !strings.Contains(raw, "検証に成功") {
+			t.Fatalf("detached shell was not rejected after successful CLI completion: result=%+v; raw=%s", result, raw)
+		}
+		if _, err := os.Stat(filepath.Join(workspace, "result.txt")); !os.IsNotExist(err) {
+			t.Fatal("detached fixture finished before release", err)
+		}
+	} else {
+		if !commandSucceeded(result) || !strings.Contains(result.Stdout, "検証に成功") {
+			t.Fatalf("result=%+v; raw=%s", result, raw)
+		}
+		data, err := os.ReadFile(filepath.Join(workspace, "result.txt"))
+		if err != nil || string(data) != "fixture change" {
+			t.Fatal(string(data), err)
+		}
 	}
 	mu.Lock()
 	defer mu.Unlock()

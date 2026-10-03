@@ -926,6 +926,8 @@ worker deadline は 30 分とする。iro-owned timeout / cancellation、process
 
 1.0.91 で確認した JSONL の `assistant.message.data.content` のうち、tool requests を伴わない final turn の非空 response を抽出する。`assistant.turn_end` と `assistant.idle`、最後の `result`（non-empty sessionId と exitCode 0）を要求する。未完了 tool、success false の tool、nonzero または不明な shell exitCode を拒否し、既知 informational events は completion evidence に使わない。未知 event は推測で成功へ変換しない。process exit code 0 単独では success を立証しない。raw JSONL を final report として転送しない。
 
+`tool.execution_start` の tool name と call ID を対応づけ、`bash` / `powershell` の completion は `shellExecution.exitCode = 0` を必須とする。async / detached shell の起動成功だけを示す `success = true` は処理完了の証拠にせず、終了コードを確認できなければ worker failure とする。後続の final response / result や shell-management tool の応答で代用しない。この拒否は detached process の停止を保証しないため、保持された worktree を扱う前に Human が残存処理を確認する。
+
 connector success 後も既存 Run delivery validation が authoritative である。GitHub operation が log、Git add / commit、delivery branch push、通常 PR create、Author report comment と failure-report を引き続き所有する。log path は既存 per-delivery Run path、status / error key は `copilot_exit_status` / `copilot_error` とし、抽出 response と redacted stderr を保存する。session ID は保存しない。worker failure では既存 Run 同様に worktree を保持して Issue failure comment を試み、non-zero で終了する。Copilot、provider、comment failure を理由に自動 retry / fallback しない。
 
 ## 9a. `iro run <issue-number> --unmanaged`

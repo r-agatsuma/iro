@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -217,7 +218,7 @@ func parseCopilotOutput(output string) (string, error) {
 	scanner.Buffer(make([]byte, 4096), 16*1024*1024)
 	final := ""
 	ended, idle, terminal, inTurn := false, false, false, false
-	pending := map[string]bool{}
+	pending := map[string]string{}
 	for scanner.Scan() {
 		var event struct {
 			Type      string          `json:"type"`
@@ -286,19 +287,23 @@ func parseCopilotOutput(output string) (string, error) {
 			}
 			idle = true
 		case "tool.execution_start":
-			var id string
-			if json.Unmarshal(data["toolCallId"], &id) != nil || id == "" || pending[id] {
+			var id, toolName string
+			if json.Unmarshal(data["toolCallId"], &id) != nil || id == "" || pending[id] != "" ||
+				json.Unmarshal(data["toolName"], &toolName) != nil || !slices.Contains(strings.Split(copilotAuthorTools, ","), toolName) {
 				return fail()
 			}
-			pending[id] = true
+			pending[id] = toolName
 			final, ended, idle = "", false, false
 		case "tool.execution_complete":
 			var id string
 			var success bool
-			if json.Unmarshal(data["toolCallId"], &id) != nil || !pending[id] || json.Unmarshal(data["success"], &success) != nil || !success {
+			if json.Unmarshal(data["toolCallId"], &id) != nil || pending[id] == "" || json.Unmarshal(data["success"], &success) != nil || !success {
 				return fail()
 			}
-			if raw, present := data["shellExecution"]; present {
+			// Detached/async shell completion can mean only that a process was
+			// launched. Require an actual exit status for each shell invocation;
+			// a later final response or read_bash result cannot prove it finished.
+			if raw, present := data["shellExecution"]; present || pending[id] == "bash" || pending[id] == "powershell" {
 				var shell struct {
 					ExitCode *int `json:"exitCode"`
 				}
