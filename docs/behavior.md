@@ -824,7 +824,7 @@ Issue comment の結果を local run log へ反映する際は、一時ファイ
 
 unmanaged Run は config-free な明示 operation とする。`iro.toml` / `WORKFLOW.md` を config / worker policy として read、validate、reconcile してはならない。存在、欠落、不正な内容、読取不能、non-regular のいずれも mode / policy selection を変えない。ただし、これらの file の通常の tracked / untracked 変更も checkout cleanliness の対象となる。
 
-mode は CLI invocation にのみ適用し、project setting、ownership mapping、adoption state として永続化しない。unmanaged Review / Revise / Land はそれぞれの節に定義する。汎用 adoption / status / cleanup command は提供しない。
+mode は CLI invocation にのみ適用し、project setting、ownership mapping、adoption state として永続化しない。unmanaged Review / Revise / Land はそれぞれの節に定義する。unmanaged state を managed authority へ採用する汎用 adoption command は提供しない。Status / Cleanup は STATUS-001〜006 / CLEANUP-001〜008 に従う current-local-repository lifecycle operation であり、registered unmanaged runtime workspace を local evidence に基づいて inventory / purge 対象にし得る。これは mode / policy / provenance の adoption ではない。
 
 ### UNMANAGED-RUN-002: origin identity and push destination
 
@@ -896,7 +896,7 @@ confirmed delivery の後だけ、今回作成した detached worktree を通常
 
 unmanaged Run の成功・作成者・delivery comment・local log は後続 managed Review / Revise / Land の eligibility を付与しない。managed Review / Revise は現在の default base / native closing relation / remote delivery relation、および必要な local ownership / worker policy を通常どおり検証する。managed Land は configured repository の選択 PR / HEAD integrity と merge policy を検証し、origin relation や delivery topology を要求しない。一方、Human が現在の state をその contract に合わせた場合、unmanaged 由来という provenance だけを理由に永続的に reject しない（G2）。
 
-managed `tracker.remote` が R1、`origin` が別 repository R2 の場合、managed operation は R1、unmanaged Run は R2 を対象とする。identity の migration / fallback は行わない（G4）。managed status / cleanup は ownership mapping の対象だけを扱い、unmanaged workspace を推測で管理・削除しない。
+managed `tracker.remote` が R1、`origin` が別 repository R2 の場合、managed operation は R1、unmanaged Run は R2 を対象とする。identity の migration / fallback は行わない（G4）。Status / Cleanup は STATUS-003 / CLEANUP-002 の current-local-repository evidence に従い、v1 ownership mapping や remote provenance を authority としない。current repository に registered され、LOCAL-003 で iro runtime workspace path と認識できる unmanaged workspace は inventory 対象となり、Cleanup の selection rule を満たす場合は purge 対象になり得る。これは unmanaged state を managed authority へ adopt することを意味せず、registration / ref / known-candidate evidence を失った filesystem-only residue の完全発見は保証しない。
 
 ## 10. `iro review <pr-number>`
 
