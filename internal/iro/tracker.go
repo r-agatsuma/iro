@@ -121,7 +121,12 @@ func sortIssueComments(comments []issueComment) error {
 	return nil
 }
 
-func (s *Service) postResult(root string, identity RepositoryIdentity, number int, body string) error {
+func (s *Service) postIssueReport(root string, identity RepositoryIdentity, report automaticReport) error {
+	body, err := buildAutomaticReport(report)
+	if err != nil {
+		return err
+	}
+	number := report.issue
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
 		Args: []string{"issue", "comment", strconv.Itoa(number), "--repo", identity.Selector(), "--body", body},

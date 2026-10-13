@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -155,19 +154,21 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 	result = agent.execute(workspace, policy.instructions, "Implement the GitHub Issue supplied on stdin.", buildGitHubIssueInput(identity, target), options.codexOptions())
 	logErr := s.writeUnmanagedRunLog(identity, number, base, head, workspace, result, allocation)
 	var operationErr error
+	stage := reportDelivery
 	if !commandSucceeded(result) {
+		stage = reportAuthor
 		operationErr = fmt.Errorf("Author exited with status %d (%v)", result.ExitCode, result.Err)
 	} else if logErr != nil {
 		operationErr = logErr
 	} else {
-		operationErr = s.deliverUnmanaged(root, workspace, identity, number, base, head, branch, result.Stdout, state, out, errOut)
+		operationErr = s.deliverUnmanaged(root, workspace, identity, number, base, head, branch, state, out, errOut)
 	}
 	if operationErr != nil {
 		if logErr != nil {
 			fmt.Fprintf(errOut, "warning: could not preserve Author log: %v\nAuthor stdout:\n%s\nAuthor stderr:\n%s\n", logErr, result.Stdout, result.Stderr)
 		}
 		operationErr = state.failure(fmt.Errorf("%w; unmanaged worktree kept at %s; inspect local and remote state before any new invocation; no automatic retry or rollback", operationErr, workspace))
-		if err := s.postResult(root, identity, number, buildFailureComment(number, workspace, result, operationErr)); err != nil {
+		if err := s.postIssueReport(root, identity, automaticReport{issue: number, stage: stage, status: reportFailed, prNumber: state.prNumber}); err != nil {
 			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", err)
 		}
 		return operationErr
@@ -338,7 +339,7 @@ func (s *Service) writeUnmanagedRunLog(identity RepositoryIdentity, number int, 
 	return file.Close()
 }
 
-func (s *Service) deliverUnmanaged(root, workspace string, identity RepositoryIdentity, number int, base, head, branch, authorReport string, state *runDeliveryState, out, errOut io.Writer) error {
+func (s *Service) deliverUnmanaged(root, workspace string, identity RepositoryIdentity, number int, base, head, branch string, state *runDeliveryState, out, errOut io.Writer) error {
 	if err := s.verifyDetachedHead(workspace, head); err != nil {
 		return err
 	}
@@ -396,8 +397,7 @@ func (s *Service) deliverUnmanaged(root, workspace string, identity RepositoryId
 	}
 	state.prNumber = pr.Number
 	fmt.Fprintf(out, "Created PR #%d (head %s, base %s; Refs #%d)\n", pr.Number, branch, base, number)
-	report := fmt.Sprintf("## iro delivery\n\nAuthor report (pre-delivery):\n\n%s\n", authorReport)
-	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"pr", "comment", strconv.Itoa(pr.Number), "--repo", identity.Selector(), "--body", report}, Dir: root})
+	result = s.postDeliveryReport(root, identity, automaticReport{issue: number, stage: reportDelivery, status: reportDelivered, prNumber: pr.Number})
 	state.report = mutationOutcome(result)
 	if !commandSucceeded(result) {
 		fmt.Fprintln(errOut, state.diagnostic())

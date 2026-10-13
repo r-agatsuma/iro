@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 )
 
@@ -134,7 +133,7 @@ func (s *Service) verifyPushRemote(root, remote string, identity RepositoryIdent
 	return nil
 }
 
-func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, number int, remote, branch, base, authorReport string, state *runDeliveryState, out, errOut io.Writer) error {
+func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, number int, remote, branch, base string, state *runDeliveryState, out, errOut io.Writer) error {
 	// Stage only worker changes in the previously verified clean, owned worktree.
 	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"add", "--all"}, Dir: workspace})
 	if !commandSucceeded(result) {
@@ -177,8 +176,7 @@ func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, n
 	}
 	state.prNumber = pr.Number
 	fmt.Fprintf(out, "Created PR #%d\nLand: iro land %d\n", pr.Number, pr.Number)
-	report := fmt.Sprintf("## iro delivery\n\nAuthor report (pre-delivery):\n\n%s\n\nLand:\n\n`iro land %d`\n", authorReport, pr.Number)
-	result = s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"pr", "comment", strconv.Itoa(pr.Number), "--repo", identity.Selector(), "--body", report}, Dir: root})
+	result = s.postDeliveryReport(root, identity, automaticReport{issue: number, stage: reportDelivery, status: reportDelivered, prNumber: pr.Number, land: true})
 	state.report = mutationOutcome(result)
 	if !commandSucceeded(result) {
 		fmt.Fprintln(errOut, state.diagnostic())

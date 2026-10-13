@@ -322,8 +322,8 @@ func TestRunUsesConfiguredIdentityAndNormativeCodexInvocation(t *testing.T) {
 			t.Errorf("Codex payload does not contain %q: %s", want, codexCall.Stdin)
 		}
 	}
-	if !strings.Contains(commentCall.Args[len(commentCall.Args)-1], "Author report (pre-delivery):\n\n変更しました。テスト成功。") {
-		t.Fatalf("delivery comment is missing the Author report: %v", commentCall.Args)
+	if body := commentCall.Args[len(commentCall.Args)-1]; !strings.Contains(body, "Status: DELIVERED") || !strings.Contains(body, "Source Issue: #123") || strings.Contains(body, "変更しました。テスト成功。") {
+		t.Fatalf("invalid bounded delivery comment: %v", commentCall.Args)
 	}
 }
 
@@ -549,7 +549,7 @@ func TestRunFailureKeepsWorktreeAndPostsFailureResult(t *testing.T) {
 			}
 			if call.Name == "gh" && len(call.Args) >= 2 && call.Args[0] == "issue" && call.Args[1] == "comment" {
 				commentFound = true
-				if !strings.Contains(call.Args[len(call.Args)-1], "状態: 失敗") {
+				if !strings.Contains(call.Args[len(call.Args)-1], "Status: FAILED") {
 					t.Fatalf("failure result comment has wrong status: %s", call.Args[len(call.Args)-1])
 				}
 			}
