@@ -126,7 +126,7 @@ func TestManagedCopilotRunUsesExistingDeliveryOwner(t *testing.T) {
 		}
 		if spec.Name == "gh" && containsArgs(spec.Args, "pr", "comment") {
 			stages = append(stages, "report")
-			if report := spec.Args[len(spec.Args)-1]; !strings.Contains(report, "変更しました。テスト成功。") || strings.Contains(report, "assistant.message") {
+			if report := spec.Args[len(spec.Args)-1]; !strings.Contains(report, "Status: DELIVERED") || strings.Contains(report, "変更しました。テスト成功。") || strings.Contains(report, "assistant.message") {
 				t.Fatalf("raw stream forwarded: %s", report)
 			}
 		}

@@ -67,7 +67,7 @@ func TestRunDeliveryStages(t *testing.T) {
 					}
 					if spec.Name == "gh" && spec.Args[0] == "pr" {
 						stage = "hint"
-						if !containsArgs(spec.Args, "--repo", "github.com/acme/iro") || !strings.Contains(spec.Args[len(spec.Args)-1], "iro land 456") || !strings.Contains(spec.Args[len(spec.Args)-1], "Author report (pre-delivery):\n\n"+standardFakeResult(CommandSpec{Name: "codex", Args: []string{"--cd"}}, root, "", false, false).Stdout) {
+						if !containsArgs(spec.Args, "--repo", "github.com/acme/iro") || !strings.Contains(spec.Args[len(spec.Args)-1], "iro land 456") || !strings.Contains(spec.Args[len(spec.Args)-1], "Status: DELIVERED") || !strings.Contains(spec.Args[len(spec.Args)-1], "Source Issue: #123") || !strings.Contains(spec.Args[len(spec.Args)-1], "PR: #456") {
 							t.Fatal(spec.Args)
 						}
 					}
@@ -104,8 +104,8 @@ func TestRunDeliveryStages(t *testing.T) {
 					t.Fatalf("successful delivery posted to Issue: %v", failureComments)
 				}
 				if !tc.success {
-					if len(failureComments) != 1 || !strings.Contains(failureComments[0], tc.want) || !strings.Contains(failureComments[0], "delivery（Author は成功）") {
-						t.Fatalf("missing delivery failure diagnostic: %v", failureComments)
+					if len(failureComments) != 1 || !strings.Contains(failureComments[0], "Status: FAILED") || !strings.Contains(failureComments[0], "Stage: delivery") {
+						t.Fatalf("missing bounded delivery failure report: %v", failureComments)
 					}
 					if commentFailure && !strings.Contains(errOut.String(), "failure report comment failed") {
 						t.Fatal(errOut.String())
@@ -117,7 +117,7 @@ func TestRunDeliveryStages(t *testing.T) {
 				}
 				data, err := os.ReadFile(logs[0])
 				report := standardFakeResult(CommandSpec{Name: "codex", Args: []string{"--cd"}}, root, "", false, false).Stdout
-				if err != nil || report == "" || !strings.Contains(string(data), report) || (!tc.success && !strings.Contains(failureComments[0], report)) {
+				if err != nil || report == "" || !strings.Contains(string(data), report) {
 					t.Fatalf("Author report was not retained: %s, %v", data, err)
 				}
 				expected := []string{"add", "empty", "commit", "push", "create", "hint"}

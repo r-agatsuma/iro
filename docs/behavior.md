@@ -47,9 +47,9 @@ managed `iro run` が行う GitHub operation は次とする。
 - target Issue への Author / delivery failure report comment の create
 - configured remote の現在の source branch tip と、今回の delivery ref の read
 - invocation ごとの delivery branch から現在の source branch を base とする通常の open PR の create
-- 作成した PR への Author report と Land hint を含む delivery comment の best-effort create
+- 作成した PR への bounded delivery report と Land hint を含む comment の best-effort create
 
-`iro run --unmanaged` は origin-derived repository の Issue / comments を read し、invocation branch を base とする PR を create する。Author / delivery failure 時の Issue comment と、成功時の Author report の PR comment も同じ repository に限定する。default branch / native closing relation の取得や Land hint は要求しない。詳細は UNMANAGED-RUN-001 以降に従う。
+`iro run --unmanaged` は origin-derived repository の Issue / comments を read し、invocation branch を base とする PR を create する。Author / delivery failure 時の Issue comment と、成功時の bounded delivery report の PR comment も同じ repository に限定する。default branch / native closing relation の取得や Land hint は要求しない。詳細は UNMANAGED-RUN-001 以降に従う。
 
 managed `iro review` が行う GitHub operation は次とする。
 
@@ -267,7 +267,7 @@ exit status
 ```
 
 人間向け CLI output は英語とする。
-Issue へ投稿する result comment と Codex の最終作業報告は日本語とする。
+Issue / PR への自動 result comment は bounded な英語 field / enum と固定の日本語 operator guidance で構成する。Codex の最終作業報告は日本語とし、Run / Revise では local-only、Review では意図的な remote artifact として扱う。
 
 stable detailed exit code registry と `iro --json` は MVP に含めない。
 
@@ -823,13 +823,13 @@ Codex が Git state-changing command を試みて失敗しても、`iro` は san
 
 MVP は Codex JSONL event stream、thread ID、resume metadata を解析・保存する必要はない。
 
-Codex の final stdout は local log に保持し、成功時は delivery PR comment、失敗時は Issue failure comment の作業報告として利用する。
+Codex の final stdout / stderr と実行 error は local log / terminal にのみ保持する。成功時の delivery PR comment と失敗時の Issue comment は RUN-019 の bounded iro-owned state だけから生成し、Author report を展開してはならない。
 
 Author の final report responsibility は、実際に行った material な変更、実際に実行した validation とその結果、および correctness または Issue の acceptance criteria に material な影響を与える既知の制約に限る。commit / push / PR などの Git lifecycle state は Author report の責務外であり、Author 終了後の delivery とともに iro が所有する。Author は実行しなかった optional / unrequested validation を網羅的に列挙しない。ただし、その未実施によって acceptance criteria または具体的な correctness risk が material に unresolved となる場合は報告してよい。
 
 ### RUN-016: Codex success
 
-Codex exit status が 0 の場合、stdout の validation / 作業報告を回収し、delivery 前に local log に保存する。Issue へ成功 report は投稿しない。log 保存失敗時は delivery を開始せず Issue へ診断と Author report の投稿を試みる。worker が行った validation の内容はその報告に依存し、iro 自身が test の成功を解析・保証するものではない。
+Codex exit status が 0 の場合、stdout の validation / 作業報告を回収し、delivery 前に local log に保存する。Issue へ成功 report は投稿しない。log 保存失敗時は delivery を開始せず Issue へ bounded な delivery failure report の投稿を試み、診断と Author report は local terminal に残す。worker が行った validation の内容はその報告に依存し、iro 自身が test の成功を解析・保証するものではない。
 
 その後 iro orchestration が次を順に行う。
 
@@ -839,15 +839,15 @@ Codex exit status が 0 の場合、stdout の validation / 作業報告を回�
 4. configured push destination を再検証し、今回の remote ref の不在を再確認して、`refs/heads/iro/issue-N-D` を明示的な refspec で一度だけ通常 push する。`--no-follow-tags` / `--no-recurse-submodules` を指定し、追加の tag / submodule remote mutation を行わない。force push は禁止する。
 5. 通常の open PR を一度だけ作成する。head は `iro/issue-N-D`、base は source branch `B`、body は `Closes #N` を含む固定文面とする。worker output を body に展開して追加の closing relation を導入してはならない。
 6. create response の PR number `M` を取得し、stdout に PR number と `iro land M` を表示する。
-7. PR に `## iro delivery` header、`Author report (pre-delivery):`、Author final stdout、`Land:`、コード表記の `iro land M` を順に含む単一 comment を best-effort で投稿する。これは delivery 前に capture した report であることを label で示す。Author final stdout は opaque に保持し、意味を解釈・parse・filter・rewrite・再生成せず、固定 header / footer の間にそのまま配置する。
+7. PR に `Status: DELIVERED`、`Stage: delivery`、`Source Issue: #N`、`Delivery confirmed: true`、`PR: #M`、`Land:`、コード表記の `iro land M` を含む単一の bounded report comment を best-effort で投稿する。Author stdout / stderr は comment に含めず、local log に保持する。
 
 PR create 成功と number の取得を required remote delivery の完了境界とする。delivery comment 失敗は warning を stderr に出すが exit success を維持する。PR body の post-create update、Issue closing relation の作成直後の再取得は要求しない。`run` は Draft PR / Draft option、merge、Issue close API を提供しない。merge は Human が明示する `iro land`（LAND-001 以降）で行う。
 
-stage / commit failure 時は worktree と index を保持して failure とする。push failure 時は local commit の存在と remote 更新の可能性を明示する。push 後の PR creation / response decode failure 時は remote branch が publish 済みであり PR が存在する可能性を明示して failure とする。これらの failure と staged diff の検査失敗・空 diff では、origin Issue へ Author report と失敗 step を識別できる diagnostic を含む delivery failure report の投稿を試みる。取得済み Author report は local log に保持する。original operation failure を主原因として non-zero で終了し、自動 rollback / retry / repair は行わない。
+stage / commit failure 時は worktree と index を保持して failure とする。push failure 時は local commit の存在と remote 更新の可能性を明示する。push 後の PR creation / response decode failure 時は remote branch が publish 済みであり PR が存在する可能性を明示して failure とする。これらの failure と staged diff の検査失敗・空 diff では、origin Issue へ `Status: FAILED`、`Stage: delivery`、Issue number と delivery 確認有無を含む bounded failure report の投稿を試みる。具体的な失敗 step / error / path は local diagnostic にのみ残す。取得済み Author report は local log に保持する。original operation failure を主原因として non-zero で終了し、自動 rollback / retry / repair は行わない。
 
 ### RUN-016a: independent delivery relation
 
-Run は既存 PR / native closing relation の列挙や default branch の取得を precondition にしない。PR body は F1 の固定 writer を使い、managed は `Closes #N`、unmanaged は `Refs #N` とする。Author report は opaque な PR comment であり、body relation の authority に混入させない。
+Run は既存 PR / native closing relation の列挙や default branch の取得を precondition にしない。PR body は F1 の固定 writer を使い、managed は `Closes #N`、unmanaged は `Refs #N` とする。Author report は local-only とし、自動 PR comment は bounded delivery state のみを含む。body relation の authority に worker text を混入させない。
 
 read と push / PR create は atomic ではない。検出できた collision は拒否し、remote mutation failure / unknown は自動再試行しない。排他 lock、remote repair、PR body の post-create update、結果不明の PR 探索による adoption を導入しない。
 
@@ -877,6 +877,14 @@ Author / delivery failure の Issue comment 投稿に失敗した場合:
 Issue comment failure を理由に Codex を再実行してはならない。
 
 Issue comment の結果を local run log へ反映する際は、一時ファイルへの書き込み完了後にログを置き換える。書き込みまたは置き換えが失敗しても、保存済み Author report を含む既存ログを保持し、更新失敗を追加 diagnostic として表示する。
+
+### RUN-019: automatic publication boundary
+
+managed / unmanaged Run の自動 Issue failure comment と PR delivery comment は、Issue number、iro-owned な粗い stage（`author` / `delivery`）、bounded status（`FAILED` / `DELIVERED`）、delivery 確認有無、取得済みの PR number、固定の operator guidance / Land hint だけから生成しなければならない。`Delivery confirmed: false` は有効な PR create receipt を未取得であることを示し、remote branch / PR が存在しないという主張ではない。公開用 state は数値・closed enum・真偽値だけを持つ専用の型とし、formatter の入力と自動投稿 API の report 引数は `CommandResult`、arbitrary error、path、worker stdout / stderr、Author final response 等の unrestricted diagnostic value を受け取ってはならない。regex scrubbing、path redaction、deny-list、secret matching をこの境界の代わりにしてはならない。
+
+raw/full execution diagnostics、local workspace / ownership / state path、operation / subprocess error、delivery diagnostics は local log / terminal にのみ残す。log 保存失敗時は取得済み worker stdout / stderr を local terminal に残す。将来 pre-execution Inspector を導入する場合も、structured inspection result と公開用 report state は別責務とし、Inspector stdout / stderr / execution error / free-form rationale / final prose を自動 comment に展開してはならない。
+
+`iro review` の Reviewer final body は意図的に指定された publishable artifact であり、execution diagnostic / status report とは別の型と専用投稿経路で扱う（REVIEW-007）。raw command result を受けて自動 report と authored artifact のどちらを公開するか選ぶ汎用 helper を設けてはならない。Revise は引き続き Issue / PR comment を投稿せず、Author report を local log に保持する。
 
 ### RUN-COPILOT-001: experimental selection and option matrix
 
@@ -930,7 +938,7 @@ connector の success / failure authority は選択した Copilot CLI の観測�
 
 `tool.execution_start` の tool name と call ID を対応づけ、`bash` / `powershell` の completion は `shellExecution.exitCode = 0` を必須とする。async / detached shell の起動成功だけを示す `success = true` は処理完了の証拠にせず、終了コードを確認できなければ worker failure とする。後続の final response / result や shell-management tool の応答で代用しない。この拒否は detached process の停止を保証しないため、保持された worktree を扱う前に Human が残存処理を確認する。
 
-connector success 後も既存 Run delivery validation が authoritative である。GitHub operation が log、Git add / commit、delivery branch push、通常 PR create、Author report comment と failure-report を引き続き所有する。log path は既存 per-delivery Run path、status / error key は `copilot_exit_status` / `copilot_error` とし、抽出 response と redacted stderr を保存する。session ID は保存しない。worker failure では既存 Run 同様に worktree を保持して Issue failure comment を試み、non-zero で終了する。Copilot、provider、comment failure を理由に自動 retry / fallback しない。
+connector success 後も既存 Run delivery validation が authoritative である。GitHub operation が log、Git add / commit、delivery branch push、通常 PR create、bounded delivery comment と failure-report を引き続き所有する。log path は既存 per-delivery Run path、status / error key は `copilot_exit_status` / `copilot_error` とし、抽出 response と redacted stderr を保存する。session ID は保存しない。worker failure では既存 Run 同様に worktree を保持して Issue failure comment を試み、non-zero で終了する。Copilot、provider、comment failure を理由に自動 retry / fallback しない。
 
 ## 9a. `iro run <issue-number> --unmanaged`
 
@@ -990,7 +998,7 @@ iro は次を順に実施する。
 4. push 直前にも手順 2 の remote 条件を再検証する。base drift、競合する task ref、identity / destination の変更では non-zero failure とし、push / repair / target substitution を行わない。
 5. exact `C1` を explicit refspec `C1:refs/heads/iro/issue-N-D` で `origin` に通常 push する。`--no-follow-tags` と `--no-recurse-submodules` を明示し、`push.followTags=true` や `push.recurseSubmodules=on-demand` / `only` が設定されていても、到達可能な annotated tag の追加 push や submodule remote への再帰 push を行わない。ambient Git configuration による task ref 以外への追加 remote mutation を許可しない。force push は禁止する。push 直前に effective push URL 上の今回の delivery ref の不在も再確認する。
 6. head `iro/issue-N-D`、base `B`、固定 body に `Refs #N` を含む通常の open PR を作成する。worker text を body に展開しない。PR number の有効な create response を confirmed delivery の境界とする。
-7. PR number / head / base を表示し、Author report を PR comment として best-effort で投稿する。comment failure は warning に留める。managed Land の eligibility を保証する案内はしない。
+7. PR number / head / base を表示し、RUN-019 に従う bounded delivery report（`Status: DELIVERED`、Issue number、PR number、delivery 確認有無）を PR comment として best-effort で投稿する。comment failure は warning に留める。managed Land の eligibility を保証する案内はしない。
 
 `Refs #N` は textual traceability であり、native closing relation を保証・要求しない。closing relation の取得を目的に `B` を変更せず、Issue close API を呼ばない。
 
@@ -998,7 +1006,7 @@ remote read と push / PR create は単一 transaction ではない。検証で�
 
 ### UNMANAGED-RUN-006: failure and cleanup
 
-Author failure、stage / commit / revalidation failure、push failure、PR creation / response failure では useful な worktree / index / commit / report を保持し、path と診断を表示して non-zero とする。取得済み Author report と診断の Issue failure comment を best-effort で試み、その失敗は追加 warning とする。log 保存に失敗した場合も Author stdout / stderr を diagnostic に残す。
+Author failure、stage / commit / revalidation failure、push failure、PR creation / response failure では useful な worktree / index / commit / report を保持し、path と診断を表示して non-zero とする。RUN-019 に従う bounded Issue failure comment を best-effort で試み、その失敗は追加 warning とする。log 保存に失敗した場合も Author stdout / stderr を diagnostic に残す。
 
 RUN-006 / RUN-016a と同じ delivery identity と remote outcome の診断・ログを保持する。local 作成失敗にも fixed ID と把握している path / ref を表示する。F3 inventory の対象外となる filesystem-only residue の発見を Cleanup に保証させない。
 
@@ -1135,7 +1143,7 @@ output convention を生成する責任は Reviewer にある。iro は Reviewer
 - header 等の prepend / append による comment 本文の加工
 - verdict / provenance に基づく control flow branching
 
-Reviewer process が exit status 0 で non-empty final stdout を返した場合、iro は stdout 全体を byte-for-byte の同じ comment body として target PR へ 1 回投稿する。format 逸脱や `FINDING` は command failure にしてはならない。
+Reviewer final body は明示的な authored artifact として専用の型・投稿経路で扱い、RUN-019 の自動診断 report と混同してはならない。Reviewer process が exit status 0 で non-empty final stdout を返した場合、iro は stdout 全体を byte-for-byte の同じ comment body として target PR へ 1 回投稿する。format 逸脱や `FINDING` は command failure にしてはならない。
 
 ```text
 Reviewer process success != PASS

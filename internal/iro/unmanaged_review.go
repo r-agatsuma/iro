@@ -80,15 +80,15 @@ func (s *Service) reviewUnmanaged(number, specificationIssue int, options worker
 	if result.Stdout == "" {
 		return fmt.Errorf("Reviewer returned no final response; no PR comment was posted")
 	}
-	if err := s.postUnmanagedReview(root, identity, number, result.Stdout); err != nil {
+	if err := s.postUnmanagedReview(root, identity, number, reviewArtifact{body: result.Stdout}); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Posted independent review to PR #%d\n", number)
 	return nil
 }
 
-func (s *Service) postUnmanagedReview(root string, identity RepositoryIdentity, number int, body string) error {
-	payload, _ := json.Marshal(map[string]string{"body": body})
+func (s *Service) postUnmanagedReview(root string, identity RepositoryIdentity, number int, artifact reviewArtifact) error {
+	payload, _ := json.Marshal(map[string]string{"body": artifact.body})
 	result := s.Runner.Run(CommandSpec{Name: "gh", Args: []string{"api", "repos/" + identity.String() + "/issues/" + strconv.Itoa(number) + "/comments", "--hostname", identity.Host(), "--method", "POST", "--include", "--input", "-"}, Dir: root, Stdin: payload})
 	// Require a receipt; a transport error or malformed success response may hide a
 	// completed write. Never infer absence or retry from a process exit status.

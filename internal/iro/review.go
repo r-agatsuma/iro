@@ -164,7 +164,7 @@ func (s *Service) reviewGitHub(root string, config Config, prNumber int, configD
 	if result.Stdout == "" {
 		return fmt.Errorf("Reviewer returned no final response; no PR comment was posted")
 	}
-	if err := s.postReview(root, identity, prNumber, result.Stdout); err != nil {
+	if err := s.postReview(root, identity, prNumber, reviewArtifact{body: result.Stdout}); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Posted independent review to PR #%d\n", prNumber)
@@ -425,10 +425,10 @@ func (s *Service) materializeReviewWorkspace(root string, identity RepositoryIde
 	return workspace, nil
 }
 
-func (s *Service) postReview(root string, identity RepositoryIdentity, number int, body string) error {
+func (s *Service) postReview(root string, identity RepositoryIdentity, number int, artifact reviewArtifact) error {
 	result := s.Runner.Run(CommandSpec{
 		Name: "gh",
-		Args: []string{"pr", "comment", strconv.Itoa(number), "--repo", identity.Selector(), "--body", body},
+		Args: []string{"pr", "comment", strconv.Itoa(number), "--repo", identity.Selector(), "--body", artifact.body},
 		Dir:  root,
 	})
 	if !commandSucceeded(result) {

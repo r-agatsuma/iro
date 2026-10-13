@@ -392,29 +392,29 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 	finished := s.Now().UTC()
 	if !commandSucceeded(workerResult) {
 		operationErr := state.failure(fmt.Errorf("%s exited with status %d (%v); worktree was kept for human inspection", workerName, workerResult.ExitCode, workerResult.Err))
-		commentErr := s.postResult(root, identity, issueNumber, buildAgentFailureComment(workerName, issueNumber, workspace, workerResult, operationErr))
+		commentErr := s.postIssueReport(root, identity, automaticReport{issue: issueNumber, stage: reportAuthor, status: reportFailed})
 		_, logErr := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, issueCommentStatus(commentErr))
 		if commentErr != nil {
 			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", commentErr)
 		}
 		if logErr != nil {
-			fmt.Fprintf(errOut, "warning: %v\n", logErr)
+			fmt.Fprintf(errOut, "warning: %v\nAuthor stdout:\n%s\nAuthor stderr:\n%s\n", logErr, workerResult.Stdout, workerResult.Stderr)
 		}
 		return operationErr
 	}
 	_, logErr := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, "not attempted")
 	operationErr := logErr
 	if operationErr == nil {
-		operationErr = s.deliver(root, workspace, identity, issueNumber, config.TrackerRemote, branch, base, workerResult.Stdout, state, out, errOut)
+		operationErr = s.deliver(root, workspace, identity, issueNumber, config.TrackerRemote, branch, base, state, out, errOut)
 	}
 	if operationErr != nil {
 		operationErr = state.failure(operationErr)
-		commentErr := s.postResult(root, identity, issueNumber, buildAgentFailureComment(workerName, issueNumber, workspace, workerResult, operationErr))
+		commentErr := s.postIssueReport(root, identity, automaticReport{issue: issueNumber, stage: reportDelivery, status: reportFailed, prNumber: state.prNumber})
 		if commentErr != nil {
 			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", commentErr)
 		}
 		if _, err := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, issueCommentStatus(commentErr)); err != nil {
-			fmt.Fprintf(errOut, "warning: %v\n", err)
+			fmt.Fprintf(errOut, "warning: %v\nAuthor stdout:\n%s\nAuthor stderr:\n%s\n", err, workerResult.Stdout, workerResult.Stderr)
 		}
 	}
 	return operationErr
@@ -584,24 +584,6 @@ func (s *Service) pathPresent(path string) (bool, error) {
 		return false, nil
 	}
 	return false, err
-}
-
-func buildFailureComment(issueNumber int, workspace string, result CommandResult, operationErr error) string {
-	return buildAgentFailureComment("Codex", issueNumber, workspace, result, operationErr)
-}
-
-func buildAgentFailureComment(workerName string, issueNumber int, workspace string, result CommandResult, operationErr error) string {
-	phase := "Author"
-	if commandSucceeded(result) {
-		phase = "delivery（Author は成功）"
-	}
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "## iro 実行結果\n\n状態: 失敗\n失敗段階: %s\nIssue: #%d\n作業用 worktree: %s\n\n診断:\n%v\n\nAuthor report:\n%s\n", phase, issueNumber, workspace, operationErr, result.Stdout)
-	if strings.TrimSpace(result.Stderr) != "" {
-		fmt.Fprintf(&builder, "\n%s のエラー出力:\n%s\n", workerName, result.Stderr)
-	}
-	builder.WriteString("\nworktree と取得済みの作業報告を保持します。再実行前に local / remote state と診断を確認してください。自動 retry / rollback / repair は行いません。\n")
-	return builder.String()
 }
 
 func issueCommentStatus(err error) string {
