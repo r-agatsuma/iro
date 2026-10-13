@@ -24,10 +24,10 @@ func TestBuildInfo(t *testing.T) {
 		ok   bool
 		want string
 	}{
-		{"full", full, true, "iro\nversion: (devel)\nrevision: abcdef\nvcs-time: 2026-09-06T08:46:19Z\nmodified: false\ngo: go1.22.5\n"},
-		{"missing", &debug.BuildInfo{}, true, "iro\nversion: unknown\nrevision: unknown\nvcs-time: unknown\nmodified: unknown\ngo: unknown\n"},
-		{"unavailable", full, false, "iro\nversion: unknown\nrevision: unknown\nvcs-time: unknown\nmodified: unknown\ngo: unknown\n"},
-		{"nil", nil, true, "iro\nversion: unknown\nrevision: unknown\nvcs-time: unknown\nmodified: unknown\ngo: unknown\n"},
+		{"full", full, true, "iro\nversion: (devel)\nbuild-type: development\nrevision: abcdef\nvcs-time: 2026-09-06T08:46:19Z\nmodified: false\ngo: go1.22.5\n"},
+		{"missing", &debug.BuildInfo{}, true, "iro\nversion: unknown\nbuild-type: unknown\nrevision: unknown\nvcs-time: unknown\nmodified: unknown\ngo: unknown\n"},
+		{"unavailable", full, false, "iro\nversion: unknown\nbuild-type: unknown\nrevision: unknown\nvcs-time: unknown\nmodified: unknown\ngo: unknown\n"},
+		{"nil", nil, true, "iro\nversion: unknown\nbuild-type: unknown\nrevision: unknown\nvcs-time: unknown\nmodified: unknown\ngo: unknown\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var out strings.Builder
@@ -50,6 +50,37 @@ func TestVersionWithoutService(t *testing.T) {
 	out.Reset()
 	if code := Execute([]string{"version", "extra"}, &out, &errOut, nil); code != 2 || out.Len() != 0 {
 		t.Fatalf("extra argument: exit = %d, output = %q", code, out.String())
+	}
+}
+
+func TestBuildTypeFromEmbeddedModuleMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name, version, modified, want string
+		replacement                   *debug.Module
+	}{
+		{name: "tagged install", version: "v1.2.3", want: "release"},
+		{name: "prerelease tag", version: "v1.2.3-rc.1", want: "release"},
+		{name: "incompatible tag", version: "v2.0.0+incompatible", want: "release"},
+		{name: "source build", version: "(devel)", want: "development"},
+		{name: "pseudo version", version: "v0.0.0-20261014010203-abcdef123456", want: "development"},
+		{name: "pseudo after tag", version: "v1.2.4-0.20261014010203-abcdef123456", want: "development"},
+		{name: "pseudo after prerelease", version: "v1.2.3-rc.1.0.20261014010203-abcdef123456", want: "development"},
+		{name: "dirty tagged source", version: "v1.2.3", modified: "true", want: "development"},
+		{name: "replacement", version: "v1.2.3", replacement: &debug.Module{Path: "../local"}, want: "development"},
+		{name: "missing", want: "unknown"},
+		{name: "unrecognized", version: "custom-build", want: "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info := &debug.BuildInfo{Main: debug.Module{Version: tc.version, Replace: tc.replacement},
+				Settings: []debug.BuildSetting{{Key: "vcs.modified", Value: tc.modified}}}
+			var out strings.Builder
+			writeBuildInfo(&out, info, true)
+			for _, want := range []string{"version: " + knownValue(tc.version) + "\n", "build-type: " + tc.want + "\n", "revision: unknown\n"} {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("missing %q in %s", want, out.String())
+				}
+			}
+		})
 	}
 }
 
@@ -91,7 +122,7 @@ func TestDoctorDiagnosticsPreserveHealthAndReadOnlyCommands(t *testing.T) {
 			if err := newTestService(t, runner, root).Doctor(&out); err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{"iro executable path:", "revision:", "project repository root: " + root,
+			for _, want := range []string{"iro executable path:", "build-type:", "revision:", "project repository root: " + root,
 				"project iro.toml: " + root, "project WORKFLOW.md: " + root,
 				"repository configured remote: origin", "repository GitHub host: github.com",
 				"repository owner/repository: acme/iro", "OK: GitHub authentication", "OK: Codex authentication"} {

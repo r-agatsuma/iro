@@ -113,6 +113,11 @@ func (s *Service) writeAgentRunLog(agentType string, identity RepositoryIdentity
 	if deliveryErr == nil {
 		content = fmt.Sprintf("delivery_id: %s\n", id) + content
 	}
+	model := unknownModelIdentity
+	if agentType == "codex" {
+		model = (codexRuntime{runner: s.Runner}).resolvedModelIdentity()
+	}
+	content = localWorkerProvenance(agentType, model) + content
 	// Keep the previous report intact until the replacement is fully written.
 	tempDir, err := s.FileSystem.MkdirTemp(logDir, ".run-log-*")
 	if err != nil {

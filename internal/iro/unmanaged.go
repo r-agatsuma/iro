@@ -327,6 +327,7 @@ func (s *Service) writeUnmanagedRunLog(identity RepositoryIdentity, number int, 
 	}
 	content := fmt.Sprintf("repository: %s\nissue_number: %d\nbase: %s\nsource: %s\nworktree: %s\ncodex_exit_status: %d\ncodex_error: %v\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n", identity.String(), number, base, head, workspace, result.ExitCode, result.Err, result.Stdout, result.Stderr)
 	content = fmt.Sprintf("delivery_id: %s\nbranch: %s\n", allocation.id, allocation.branch) + content
+	content = localWorkerProvenance(unmanagedAgentType, (codexRuntime{runner: s.Runner}).resolvedModelIdentity()) + content
 	file, err := s.FileSystem.CreateNew(filepath.Join(dir, filepath.Base(workspace)+".log"), 0600)
 	if err != nil {
 		return fmt.Errorf("create unmanaged Author log: %w", err)

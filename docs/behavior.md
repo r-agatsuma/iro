@@ -468,6 +468,16 @@ context 検証結果を診断一覧の stdout に `OK: GitHub CLI context` ま�
 
 Go 標準 library の `runtime/debug.ReadBuildInfo()` から module/build version、VCS revision、VCS time、VCS modified state、Go toolchain version を取得可能な範囲で簡潔な human-readable text として表示しなければならない。未取得 field は推測せず `unknown` と表示する。`ReadBuildInfo()` 自体が利用不能でも panic せず結果を表示し、success とする。manual version constant や独自 release versioning は導入しない。
 
+`build-type` は embedded module version が `(devel)` または Go pseudo-version なら `development`、tag version（pre-release tag を含む）なら `release` と表示する。tag version でも source replacement または `vcs.modified = true` が明示されていれば `development` とする。version が未取得または認識できない場合は `unknown` とする。この分類は embedded source metadata の区別であり、公開済み artifact の証明や現在の checkout の状態を表さない。module version から未取得の VCS revision を補完せず、現在の Git HEAD / tag / main から binary の provenance を推測しない。
+
+## 6b. ローカル worker provenance
+
+### PROVENANCE-001: local worker observations
+
+managed / unmanaged Run および Revise の既存 local Author log は、iro が明示的に選択した runtime identifier（`codex` または experimental managed Run の `copilot`）と connector が確実に取得できる resolved model identity を記録する。現行 Codex / Copilot connector は trustworthy な resolved model identity を取得しないため、`model: (unknown; not exposed by runtime)` と表示する。requested model / reasoning effort、設定ファイル、環境変数、worker report、stdout / stderr の header から identity を推測しない。
+
+managed / unmanaged Review は selected runtime `codex` を既存 trusted provenance に含め、Reviewer へその値と取得できた model identity（取得不能なら明示的な unknown）の保持を要求する。Reviewer response は引き続き REVIEW-007 の opaque output として扱う。provenance の unknown 自体を成功条件にせず、追加 worker 起動、provider request、retry、fallback を行わない。tool version は DOC-005 の既存 diagnostic surface で表示する。
+
 ## 7. `iro status`
 
 ### STATUS-001: purpose
@@ -675,6 +685,8 @@ allocate ID -> create local execution state -> worker -> commit -> push -> creat
 ### RUN-007: managed delivery workspace
 
 managed Run は検証済み source HEAD `H` から毎回 fresh な attached delivery worktree を排他的に作成する。
+
+worker 起動前に、作成済み worktree の HEAD が検証済み `H` と一致することを確認する。取得不能または不一致なら worker を起動せず failure とし、workspace を保持して diagnostic を返す。
 
 ```text
 branch: iro/issue-N-D
@@ -1071,7 +1083,7 @@ Reviewer へ少なくとも次を渡す。
 - PR conversation comments、submitted reviews、inline review comments
 - status check information
 - verified PR HEAD 時点の repository contents
-- iro が supplied developer instruction として渡す trusted review provenance: model identity の明示値、preflight で観測した base branch / base OID、REVIEW-005 で workspace HEAD と一致検証した PR HEAD OID
+- iro が supplied developer instruction として渡す trusted review provenance: model identity の明示値、selected runtime `codex`、preflight で観測した base branch / base OID、REVIEW-005 で workspace HEAD と一致検証した PR HEAD OID
 
 base branch と base OID は同じ preflight の remote PR metadata `baseRefName` / `baseRefOid` から取得し、invoking checkout の HEAD から推測しない。base branch は default branch と一致する必要はない。report の `Base: <branch> @ <base OID>` と `Reviewed HEAD: <head OID>` は観測した endpoint を表し、`A..B` 等の厳密な Git diff range や merge-base を表さない。
 
@@ -1115,6 +1127,7 @@ Review provenance:
 - Model: <supplied Model>
 - Base: <supplied Base branch> @ <supplied Base OID>
 - Reviewed HEAD: <supplied Reviewed HEAD OID>
+- Runtime: <supplied Runtime>
 
 Summary:
 ...

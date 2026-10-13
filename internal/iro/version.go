@@ -4,9 +4,27 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"runtime/debug"
 	"strings"
 )
+
+var moduleVersionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+incompatible)?$`)
+var pseudoVersionPattern = regexp.MustCompile(`[-.][0-9]{14}-[0-9a-f]{12}(\+incompatible)?$`)
+
+// Build type describes embedded source metadata, not release authentication.
+func buildType(module debug.Module, modified string) string {
+	if module.Version == "(devel)" {
+		return "development"
+	}
+	if !moduleVersionPattern.MatchString(module.Version) {
+		return "unknown"
+	}
+	if module.Replace != nil || modified == "true" || pseudoVersionPattern.MatchString(module.Version) {
+		return "development"
+	}
+	return "release"
+}
 
 func knownValue(value string) string {
 	if strings.TrimSpace(value) == "" {
@@ -17,6 +35,7 @@ func knownValue(value string) string {
 
 func writeBuildInfo(out io.Writer, info *debug.BuildInfo, ok bool) {
 	version, revision, vcsTime, modified, goVersion := "", "", "", "", ""
+	kind := "unknown"
 	if ok && info != nil {
 		version, goVersion = info.Main.Version, info.GoVersion
 		for _, setting := range info.Settings {
@@ -29,9 +48,10 @@ func writeBuildInfo(out io.Writer, info *debug.BuildInfo, ok bool) {
 				modified = setting.Value
 			}
 		}
+		kind = buildType(info.Main, modified)
 	}
-	fmt.Fprintf(out, "iro\nversion: %s\nrevision: %s\nvcs-time: %s\nmodified: %s\ngo: %s\n",
-		knownValue(version), knownValue(revision), knownValue(vcsTime), knownValue(modified), knownValue(goVersion))
+	fmt.Fprintf(out, "iro\nversion: %s\nbuild-type: %s\nrevision: %s\nvcs-time: %s\nmodified: %s\ngo: %s\n",
+		knownValue(version), kind, knownValue(revision), knownValue(vcsTime), knownValue(modified), knownValue(goVersion))
 }
 
 func writeVersion(out io.Writer) {
