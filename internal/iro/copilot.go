@@ -75,6 +75,11 @@ func (c copilotRuntime) preflight(root string) error {
 	return nil
 }
 
+func (c copilotRuntime) inspectionPreflight(root string) error {
+	// Inspection uses the same native profile/options/JSONL completion contract.
+	return c.preflight(root)
+}
+
 func copilotRunWorkerPolicy() workerInstructions {
 	return workerInstructions(`You are the Author executing one managed iro Run task.
 Before modifying files, read WORKFLOW.md completely in the supplied worktree.
@@ -157,9 +162,9 @@ func (c copilotRuntime) privateHome(root, workspace, commonDir string, policy wo
 		return "", "", fmt.Errorf("create private Copilot profile directory")
 	}
 	id := filepath.Base(dir)
-	profile := "---\nname: " + id + "\ndescription: Private iro managed Run Author policy\ntools: [" + copilotAuthorTools + "]\n---\n\n" + string(policy) + "\n"
+	profile := "---\nname: " + id + "\ndescription: Private iro operation policy\ntools: [" + copilotAuthorTools + "]\n---\n\n" + string(policy) + "\n"
 	if err := c.files.WriteFile(filepath.Join(agentDir, id+".agent.md"), []byte(profile), 0600); err != nil {
-		return "", "", fmt.Errorf("write private Copilot Author profile")
+		return "", "", fmt.Errorf("write private Copilot operation profile")
 	}
 	failed = false
 	return dir, id, nil

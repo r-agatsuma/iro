@@ -13,6 +13,13 @@ func (s *Service) reviseUnmanaged(number, specificationIssue int, options worker
 	if number <= 0 || specificationIssue <= 0 {
 		return fmt.Errorf("PR and Issue numbers must be positive decimal integers")
 	}
+	agent, err := s.selectAgent(unmanagedAgentType)
+	if err != nil {
+		return err
+	}
+	if err := validateSelectedWorkerOptions(unmanagedAgentType, options); err != nil {
+		return err
+	}
 	if err := s.requireGit(); err != nil {
 		return err
 	}
@@ -53,13 +60,6 @@ func (s *Service) reviseUnmanaged(number, specificationIssue int, options worker
 	}
 	context, err := s.fetchReviewContext(root, identity, number)
 	if err != nil {
-		return err
-	}
-	agent, err := s.selectAgent(unmanagedAgentType)
-	if err != nil {
-		return err
-	}
-	if err := agent.preflight(root); err != nil {
 		return err
 	}
 	// Fetch the selected commit without moving any branch, tracking ref, or FETCH_HEAD.
@@ -108,8 +108,19 @@ func (s *Service) reviseUnmanaged(number, specificationIssue int, options worker
 	if err := s.requireUnmanagedReviseWorktree(root, workspace, gitDir, target.HeadRefOID, true); err != nil {
 		return err
 	}
-	stage = "Author"
 	policy := unmanagedReviseWorkerPolicy()
+	stage = "inspection"
+	if err := s.inspectIssue(inspectionInput{
+		root: root, workspace: workspace, head: target.HeadRefOID,
+		agentType: unmanagedAgentType, operation: "revise", unmanaged: true, identity: identity,
+		issue: specification, policy: policy, options: options,
+	}, out, errOut); err != nil {
+		return err
+	}
+	stage = "Author"
+	if err := agent.preflight(root); err != nil {
+		return err
+	}
 	input := buildGitHubPRInput(identity, target, specification, nil, policy, context, "Human-selected specification Issue")
 	result = agent.execute(workspace, policy.instructions, "Revise the selected GitHub pull request using the explicit Issue specification and PR feedback supplied on stdin.", input, options.codexOptions())
 	logPath, logErr := s.writeUnmanagedReviseLog(identity, target, workspace, result)

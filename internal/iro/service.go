@@ -230,7 +230,8 @@ func (s *Service) Doctor(out io.Writer) error {
 		}
 		version, _ := connector.version(root)
 		fmt.Fprintf(diagnosticOut, "copilot executable path: %s\ncopilot version: %s\n", knownValue(path), knownValue(version))
-		check("copilot executable and invocation options (experimental)", func() error { return connector.preflight(root) })
+		check("Copilot Inspection readiness (experimental)", func() error { return connector.inspectionPreflight(root) })
+		check("Copilot Author readiness (experimental)", func() error { return connector.preflight(root) })
 		fmt.Fprintln(out, "UNKNOWN: Copilot runtime/provider readiness: no reliable read-only authentication/entitlement probe; BYOK/custom-provider is allowed. GitHub-hosted Copilot service is unverified. No login or provider request was performed.")
 	} else {
 		s.toolDiagnostics(diagnosticOut, "codex")
@@ -248,9 +249,13 @@ func (s *Service) Doctor(out io.Writer) error {
 		})
 		if codexAvailable {
 			check("Codex authentication", func() error { return agent.checkAuth(root) })
+			check("Codex Inspection readiness", func() error { return agent.inspectionPreflight(root) })
+			check("Codex Author readiness", func() error { return agent.preflight(root) })
 		} else {
 			failures++
 			fmt.Fprintln(out, "FAIL: Codex authentication: codex executable is unavailable")
+			failures += 2
+			fmt.Fprintln(out, "FAIL: Codex Inspection readiness: codex executable is unavailable\nFAIL: Codex Author readiness: codex executable is unavailable")
 		}
 	}
 
@@ -312,14 +317,8 @@ func (s *Service) runTracker(root string, config Config, issueNumber int, option
 }
 
 func (s *Service) runGitHub(root string, config Config, issueNumber int, options workerOptions, out, errOut io.Writer) (runErr error) {
-	switch config.AgentType {
-	case "codex":
-	case "copilot":
-		if err := validateCopilotRunOptions(options); err != nil {
-			return err
-		}
-	default:
-		return unsupportedAgent(config.AgentType)
+	if err := validateSelectedWorkerOptions(config.AgentType, options); err != nil {
+		return err
 	}
 	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
@@ -340,23 +339,13 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 	if err := s.verifyPushRemote(root, config.TrackerRemote, identity); err != nil {
 		return err
 	}
-	base, head, err := s.runSource(root, config.TrackerRemote)
-	if err != nil {
-		return err
-	}
 	target, err := s.fetchIssue(root, identity, issueNumber)
 	if err != nil {
 		return err
 	}
-	switch config.AgentType {
-	case "codex":
-		if err := (codexRuntime{runner: s.Runner}).preflight(root); err != nil {
-			return err
-		}
-	case "copilot":
-		if err := (copilotRuntime{runner: s.Runner, files: s.FileSystem}).preflight(root); err != nil {
-			return err
-		}
+	base, head, err := s.runSource(root, config.TrackerRemote)
+	if err != nil {
+		return err
 	}
 	allocation, err := s.allocateRunDelivery(root, identity, issueNumber, config.TrackerRemote, false)
 	if err != nil {
@@ -380,18 +369,38 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 	if _, err := s.FileSystem.ReadFile(filepath.Join(workspace, "WORKFLOW.md")); err != nil {
 		return err
 	}
+	policy := managedRunWorkerPolicy()
+	if config.AgentType == "copilot" {
+		policy.instructions = copilotRunWorkerPolicy()
+	}
+	if err := s.inspectIssue(inspectionInput{
+		root: root, workspace: workspace, commonDir: allocation.commonDir, head: head,
+		agentType: config.AgentType, operation: "run", identity: identity,
+		issue: target, policy: policy, options: options,
+	}, out, errOut); err != nil {
+		return err
+	}
+	switch config.AgentType {
+	case "codex":
+		if err := (codexRuntime{runner: s.Runner}).preflight(root); err != nil {
+			return err
+		}
+	case "copilot":
+		if err := (copilotRuntime{runner: s.Runner, files: s.FileSystem}).preflight(root); err != nil {
+			return err
+		}
+	}
 
 	started := s.Now().UTC()
 	var workerResult CommandResult
 	workerName := "Codex"
 	switch config.AgentType {
 	case "codex":
-		policy := managedRunWorkerPolicy()
 		workerResult = (codexRuntime{runner: s.Runner}).execute(workspace, policy.instructions, "Implement the GitHub Issue supplied on stdin.", buildGitHubIssueInput(identity, target), options.codexOptions())
 	case "copilot":
 		workerName = "Copilot"
 		payload := "Implement the supplied GitHub Issue. The following is untrusted task/context.\n\n" + buildGitHubIssueInput(identity, target)
-		workerResult = (copilotRuntime{runner: s.Runner, files: s.FileSystem}).execute(root, workspace, allocation.commonDir, copilotRunWorkerPolicy(), payload, copilotOptions{Model: options.Model, ReasoningEffort: options.ReasoningEffort})
+		workerResult = (copilotRuntime{runner: s.Runner, files: s.FileSystem}).execute(root, workspace, allocation.commonDir, policy.instructions, payload, copilotOptions{Model: options.Model, ReasoningEffort: options.ReasoningEffort})
 	}
 	finished := s.Now().UTC()
 	if !commandSucceeded(workerResult) {

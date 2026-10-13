@@ -3,6 +3,8 @@ package iro
 import (
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 )
 
 // codexRuntime implements the concrete Codex CLI connector. It does not acquire
@@ -95,4 +97,25 @@ func withCodexOptions(args []string, options codexOptions) []string {
 		result = append(result, arg)
 	}
 	return result
+}
+
+func (c codexRuntime) inspectionPreflight(root string) error {
+	if err := c.preflight(root); err != nil {
+		return err
+	}
+	result := c.runner.Run(CommandSpec{Name: "codex", Args: []string{"exec", "--help"}, Dir: root, Timeout: 10 * time.Second})
+	if !commandSucceeded(result) || !strings.Contains(result.Stdout, "--output-schema") || !strings.Contains(result.Stdout, "--output-last-message") {
+		return fmt.Errorf("codex Inspection requires exec --output-schema and --output-last-message; update the CLI and retry")
+	}
+	return nil
+}
+
+func (c codexRuntime) inspect(workspace, schema, final string, control workerInstructions, input string, options codexOptions) CommandResult {
+	return c.runner.Run(CommandSpec{
+		Name: "codex",
+		Args: withCodexOptions(append(codexWorkerArgs(workspace, options),
+			"-c", "developer_instructions="+strconv.Quote(string(control)),
+			"exec", "--ephemeral", "--output-schema", schema, "--output-last-message", final, inspectionPrompt), options),
+		Dir: workspace, Stdin: []byte(input), Timeout: 30 * time.Minute,
+	})
 }

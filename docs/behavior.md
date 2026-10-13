@@ -431,8 +431,10 @@ MVP では automatic repair と `--force` を実装しない。
 - configured identity と `GH_HOST` / `GH_REPO` の整合性（INV-010）
 - `gh` executable
 - GitHub authentication
-- `agent.type = "codex"`（config unavailable / invalid 時の inventory も同じ）: 既存の Codex executable / `codex login status`
-- `agent.type = "copilot"`: selected Copilot executable、`--no-auto-update --version`、required invocation flags の read-only `--no-auto-update --help`
+- `agent.type = "codex"`（config unavailable / invalid 時の inventory も同じ）: Codex executable / `codex login status`、Inspection 用の `codex exec --help` による `--output-schema` / `--output-last-message` capability、Author readiness
+- `agent.type = "copilot"`: selected Copilot の Inspection と Author readiness をそれぞれ診断する。executable、`--no-auto-update --version`、required invocation flags の read-only `--no-auto-update --help` を使用する
+
+Doctor は Issue Inspection を実行しない。selected runtime だけの prerequisites を診断し、Copilot selection に Codex を要求するなどの cross-runtime dependency を追加しない。
 
 configured identity の解決または context validation が失敗した場合、GitHub authentication check を実行せず、その理由を failure として表示する。他の独立した診断は継続する。認証確認を実行するときは configured host を明示する。
 
@@ -588,6 +590,83 @@ discovery-snapshot target 以外の local refs / worktrees / paths、v1 ownershi
 
 operand 省略時は current-local-repository inventory のすべての iro target を deterministic order で処理する。別の local common directory の同名 ref / runtime worktree は対象外とする。Issue を識別できない runtime detached residue も含む。dirty skip を行わず、全体の failure / confirmed absence は CLEANUP-006 に従う。
 
+## 8a. Issue-driven Author 実行前の Inspection
+
+### INSPECTION-001: 適用範囲と verdict
+
+managed / unmanaged Run と Revise は、仕様 Issue と exact source / revision snapshot を確定した後、Author 起動前に iro-owned Inspection を実行する。Review（managed / unmanaged）、Land、Status、Cleanup、Doctor は対象外である。Review は意図的な remote artifact を作る Reviewer operation である。
+
+Revise の既存 relation / explicit binding validation を変更しない。exactly one specification Issue が確定しなければ既存の pre-worker validation failure とし、Inspection target を創作しない。
+
+Inspection verdict は `PASS` / `BLOCKER` とする。Inspector execution failure は `FAILED` と表示し、BLOCKER と区別する。worker outcome は従来の `success` / `failure` のままとし、第三の outcome を追加しない。PASS は実装成功の保証ではなく、後から発生した編集・tests・runtime・delivery failure を prior Issue BLOCKER に再分類しない。
+
+### INSPECTION-002: 入力と authority
+
+各 operation が入力を組み立て、同じ `inspectIssue(input)` に渡す。入力は取得済み仕様 Issue body / ordered comments、Author が受け取る exact snapshot、同じ iro worker policy と applicable repository instructions、bounded operation kind / mode に限定する。別 Issue / tracker state を探索して不足する authority を補わない。
+
+managed Run は検証済み H から作成した fresh delivery workspace と workspace-side WORKFLOW authority を使う。unmanaged Run は既存経路で選んだ exact H0 の detached workspace と built-in policy を使う。managed Revise は relation 解決済み Issue、fixed H1 の revision workspace、同じ starting H1 WORKFLOW blob を使う。unmanaged Revise は explicit specification Issue、fixed H1 の detached workspace、built-in policy を使う。repository guidance は各 selected runtime の既存 instruction semantics の範囲で適用する。
+
+unmanaged Inspection に `iro.toml` / managed WORKFLOW authority を導入しない。managed Revise は invoking / checkout WORKFLOW を fixed blob の代替にしない。snapshot materialization のための iro-owned worktree / source resolution は Inspection の前に完了させる。Inspector が BLOCKER / FAILED で停止した場合も、その local workspace は既存の failure resource boundary に従って保持する。
+
+### INSPECTION-003: selector、options、ordering
+
+managed は configured `agent.type`、unmanaged は既存の built-in Codex selection を使う。Inspector 専用 selector や backend fallback は追加しない。Copilot の supported managed operation は引き続き Run のみである。
+
+requested operation options を Inspection と Author の両方に同じ concrete runtime contract で渡す。`--model`、`--reasoning-effort`、`--no-sandbox` を orchestration が削除・変換・再解釈・置換してはならない。Codex の `--no-sandbox` は Inspection にも `danger-full-access` として渡す。Copilot の既存 unsupported option validation（`--no-sandbox` 等）は Inspection より前に明示的に失敗し、option を落として継続しない。Codex の model / effort は従来どおり native runtime validation に委譲し、Inspection invocation で拒否された場合は Inspection FAILED とする。
+
+順序は次のとおりである。
+
+1. command / config の parse と selected concrete runtime の解決。
+2. selected runtime contract による requested option の static validation。
+3. 既存 Issue binding / relation validation。
+4. exact source / revision snapshot と applicable policy の確定・materialization。
+5. selected runtime の Inspection preflight と Inspection 実行。
+6. PASS の場合だけ、別 operation check として Author / Revision Author preflight。
+7. Author / Revision Author と既存 delivery lifecycle。
+
+Codex Inspection preflight は executable / authentication と structured-output capability を確認する。Codex Inspector は ephemeral session、30 分 timeout、`--output-schema` と専用 `--output-last-message` を使う。Copilot Inspector は既存 private native profile / JSONL completion contract と timeout を使い、Inspector の non-authoring control policy を注入する。native options / authentication / completion が unusable な場合、別 runtime に fallback しない。Author-specific readiness は PASS 後だけ検査する。
+
+### INSPECTION-004: non-authoring role と検査責務
+
+Inspector は supplied execution unit を判定する。repository / worktree file edit、build/test artifact 作成、commit、Git metadata / index / refs / worktree mutation、fetch / push、tracker mutation、Issue / PR comment、新規 PR / close / merge / revise、remote service mutation、Author 起動・実装を行ってはならない。network / tools で unrelated tracker state や新しい product authority を探索しない。この role contract は sandbox mode と独立し、Human の `--no-sandbox` を弱める理由にしてはならない。
+
+少なくとも次を検査する。
+
+- 未解決の Human product / architecture 判断、material ambiguity、相互に矛盾する仕様、実行単位にない必須 normative context。
+- Author が commit / push / PR 作成など iro-owned delivery を自分で行う要求、remote mutation、上位 worker prohibition の拡張。
+- exact snapshot に存在しない明示的 predecessor capability、required structure / interface、実証可能な source prerequisite の不一致。
+- Author exit 後だけ存在する pushed exact artifact / PR の検証、pre-delivery Author 内での post-delivery verification、実行 lifecycle が供給できない context / state。
+
+runtime operation を実装する code change と Author 自身による operation 実行を混同しない。変更後にしか判明しない test / interface failure、race、tool / external service failure の予測は要求しない。
+
+### INSPECTION-005: structured result と publication boundary
+
+final result は exactly three string fields の JSON object とする。
+
+```json
+{"verdict":"PASS","reason_class":"none","rationale":"local diagnostic"}
+```
+
+BLOCKER の `reason_class` は iro-owned bounded value `specification_ambiguity`、`authority_conflict`、`missing_source_prerequisite`、`execution_lifecycle_mismatch`、`required_context_unavailable` のいずれか一つとする。rationale は日本語の local-only diagnostic である。
+
+Codex は専用 final result file、Copilot は validated JSONL completion の final message だけを parse する。stdout の自然言語や `STOP` / `blocked` 等から verdict を推測しない。unknown / missing / null / duplicate / extra fields、trailing output、unknown verdict / reason、PASS/BLOCKER と reason の不整合は fail closed として FAILED にする。crash、timeout、preflight / authentication failure、信頼可能な completion の欠落、diagnostic 保存失敗も FAILED である。
+
+stdout / stderr / error / final rationale は `inspections/<repository-key>/<operation>-issue-N-<unique>/` の private local diagnostic に保存する。保存できない場合は端末に診断し、remote report に混ぜない。preflight failure は端末で診断する。RUN-019 の publication boundary に従い、free-form prose / error / paths を automatic remote report に渡してはならない。
+
+### INSPECTION-006: 停止と report target
+
+BLOCKER / FAILED は non-zero で停止し、端末に次を表示する。
+
+```text
+INSPECTION: BLOCKER | FAILED
+AUTHOR: not started
+DELIVERY: not attempted
+```
+
+Author preflight / execution と delivery commit / push / PR を実行しない。Run（managed / unmanaged）は selected Issue に bounded automatic report を一度試行する。report は iro-owned Issue number、inspection stage、BLOCKER / FAILED、Author / delivery 未試行、BLOCKER の bounded reason class のみを含む。unmanaged の既存 tracker authority / target binding を維持する。Revise（managed / unmanaged）は local result のみで、新しい Issue / PR comment を投稿しない。
+
+PASS 後の Author preflight failure は ordinary startup failure とし、Inspection FAILED / BLOCKER に再分類しない。PASS 後の worker / delivery と report は従来の責務境界に従う。
+
 ## 9. `iro run <issue-number>`
 
 `--unmanaged` を指定しない場合は、この節の managed Run contract を適用する。指定した場合は UNMANAGED-RUN-001 以降を適用し、managed project / source / ownership / delivery contract へ fallback しない。
@@ -605,7 +684,7 @@ reasoning-effort-option := "--reasoning-effort" non-empty-string
 no-sandbox-option       := "--no-sandbox"
 ```
 
-worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。省略した model / reasoning effort は Codex configuration / default selection に委譲する。model と reasoning effort は synthetic model name に結合せず、reasoning effort は modelごとの catalog なしに指定値を requested configuration としてそのまま Codex に渡す。空値、重複指定、unsupported extra arguments は usage error とし、main side effect 前に reject する。unsupported model / effort の fallback は行わず、Codex 側の reject は通常の worker failure とする。MVP では Issue URL、owner/repo#number、複数 Issue を受け付けない。
+worker option は番号 operand の後に指定し、known worker configuration flags の順序は意味を持たない。`--model` は model だけを、`--reasoning-effort` は reasoning effort だけを独立して override する。省略した model / reasoning effort は Codex configuration / default selection に委譲する。model と reasoning effort は synthetic model name に結合せず、reasoning effort は modelごとの catalog なしに指定値を requested configuration としてそのまま Codex に渡す。空値、重複指定、unsupported extra arguments は usage error とし、main side effect 前に reject する。unsupported model / effort の fallback は行わず、Codex 側の reject は実行 role に従い Inspection FAILED または通常の Author failure とする（INSPECTION-003）。MVP では Issue URL、owner/repo#number、複数 Issue を受け付けない。
 
 `--unmanaged` は値を取らず、Issue operand の後に一度だけ指定できる。他の worker option との順序は意味を持たない。`--issue`、operand より前の option、`--unmanaged=true`、重複、余分な引数は Git / worker / remote side effect より前に usage error（exit status 2）とする。`review` / `revise` / `land` の unmanaged form はそれぞれの節に従う。
 
@@ -677,7 +756,7 @@ managed / unmanaged の各 explicit Run は LOCAL-001 の新しい delivery ID `
 conceptual stages は次とする。
 
 ```text
-allocate ID -> create local execution state -> worker -> commit -> push -> create PR -> report
+allocate ID -> create local execution state -> Inspection -> PASS -> Author preflight -> worker -> commit -> push -> create PR -> report
 ```
 
 最初の local side effect より前に、local branch、intended workspace path（登録済み path、filesystem path、dangling symlink を含む）、configured remote / origin の effective push URL 上の同じ intended remote ref の衝突を確認する。allocation 中の衝突は新しい ID で再試行できる。観測失敗は retry せず error とする。最初の directory 作成の直前に再検査し、衝突した場合は resource を作らず停止する。作成開始以後の ID は固定し、local / worker / push / PR-create / report の失敗・結果不明を理由に ID を変えない。
@@ -719,7 +798,7 @@ Status / Cleanup は STATUS-001 / CLEANUP-001 以降に定義する。Review / R
 
 ### RUN-010: precondition order
 
-main side effect 前に、少なくとも以下を検証する。
+source resolution から Author 起動まで、次の順序で検証・実行する。
 
 ```text
 argument / worker options
@@ -728,13 +807,15 @@ project files / config / configured repository identity
 source checkout cleanliness
 gh executable / GitHub authentication
 configured push destination / Git remote access
+target Issue binding / comments fetch
 current named branch B / local HEAD H == actual configured remote B tip
-target Issue and comments fetch
-selected Codex executable / authentication または Copilot executable / invocation flags (RUN-COPILOT-004)
 new delivery allocation / local and remote collisions
+exact workspace materialization / applicable policy
+Inspection preflight -> Inspection -> PASS
+Author preflight -> Author
 ```
 
-必要条件がすべて通過する前に branch / workspace を作成してはならない。新しい workspace 内の worker policy / cleanliness も worker 起動前に検査する。
+source / Issue / allocation の必要条件が通過する前に branch / workspace を作成してはならない。新しい workspace 内の worker policy / cleanliness を確認し、INSPECTION-003 に従って Inspection と Author の preflight を分ける。runtime readiness failure で materialized local workspace が残る場合は保持して診断する。
 
 ### RUN-011: Codex instruction layers
 
@@ -892,19 +973,19 @@ Issue comment の結果を local run log へ反映する際は、一時ファイ
 
 ### RUN-019: automatic publication boundary
 
-managed / unmanaged Run の自動 Issue failure comment と PR delivery comment は、Issue number、iro-owned な粗い stage（`author` / `delivery`）、bounded status（`FAILED` / `DELIVERED`）、delivery 確認有無、取得済みの PR number、固定の operator guidance / Land hint だけから生成しなければならない。`Delivery confirmed: false` は有効な PR create receipt を未取得であることを示し、remote branch / PR が存在しないという主張ではない。公開用 state は数値・closed enum・真偽値だけを持つ専用の型とし、formatter の入力と自動投稿 API の report 引数は `CommandResult`、arbitrary error、path、worker stdout / stderr、Author final response 等の unrestricted diagnostic value を受け取ってはならない。regex scrubbing、path redaction、deny-list、secret matching をこの境界の代わりにしてはならない。
+managed / unmanaged Run の自動 Issue failure comment と PR delivery comment は、Issue number、iro-owned な粗い stage（`inspection` / `author` / `delivery`）、bounded status（`BLOCKER` / `FAILED` / `DELIVERED`）、Inspection の bounded reason class、delivery 確認有無、取得済みの PR number、固定の operator guidance / Land hint だけから生成しなければならない。`Delivery confirmed: false` は有効な PR create receipt を未取得であることを示し、remote branch / PR が存在しないという主張ではない。公開用 state は数値・closed enum・真偽値だけを持つ専用の型とし、formatter の入力と自動投稿 API の report 引数は `CommandResult`、arbitrary error、path、worker stdout / stderr、Author final response 等の unrestricted diagnostic value を受け取ってはならない。regex scrubbing、path redaction、deny-list、secret matching をこの境界の代わりにしてはならない。
 
-raw/full execution diagnostics、local workspace / ownership / state path、operation / subprocess error、delivery diagnostics は local log / terminal にのみ残す。log 保存失敗時は取得済み worker stdout / stderr を local terminal に残す。将来 pre-execution Inspector を導入する場合も、structured inspection result と公開用 report state は別責務とし、Inspector stdout / stderr / execution error / free-form rationale / final prose を自動 comment に展開してはならない。
+raw/full execution diagnostics、local workspace / ownership / state path、operation / subprocess error、delivery diagnostics は local log / terminal にのみ残す。log 保存失敗時は取得済み worker stdout / stderr を local terminal に残す。pre-execution Inspector の場合も、structured inspection result と公開用 report state は別責務とし、Inspector stdout / stderr / execution error / free-form rationale / final prose を自動 comment に展開してはならない。
 
 `iro review` の Reviewer final body は意図的に指定された publishable artifact であり、execution diagnostic / status report とは別の型と専用投稿経路で扱う（REVIEW-007）。raw command result を受けて自動 report と authored artifact のどちらを公開するか選ぶ汎用 helper を設けてはならない。Revise は引き続き Issue / PR comment を投稿せず、Author report を local log に保持する。
 
 ### RUN-COPILOT-001: experimental selection and option matrix
 
-managed GitHub の `[agent] type = "copilot"` は experimental な Run / Author のみを選択する。production support / Codex parity を主張しない。
+managed GitHub の `[agent] type = "copilot"` は experimental な Run / Inspection と PASS 後の Author を選択する。production support / Codex parity を主張しない。
 
 | Mode / operation | Codex | Copilot |
 |---|---|---|
-| managed GitHub Run / Author | 既存どおり | experimental supported |
+| managed GitHub Run / Inspection + Author | 既存どおり | experimental supported |
 | managed GitHub Review / Revise | 既存どおり | unsupported |
 | managed GitHub Land | agent-independent | agent-independent |
 | unmanaged GitHub Run / Review / Revise | built-in Codex | selector なし |
@@ -922,7 +1003,7 @@ GitHub operation は Issue / ordered comments を含む一つの complete user t
 
 controlling policy は repository / worktree の外の private native custom-agent profile（`agents/<unique-id>.agent.md`）へ書き、`--agent <unique-id>` で明示選択する。profile は Issue text を含めず、task/context は policy authority にしない。profile は durable project authority ではなく、その invocation の disposable state とする。repository instruction files は Copilot 自身の concrete semantics で見えるままとし、Codex developer-instruction precedence を主張しない。
 
-policy は starting worktree の WORKFLOW 全文読取、material conflict の報告、scope discipline、iro の tracker / Git lifecycle ownership、uncommitted file edits、feasible な relevant tests、実施変更・検証結果・material limitations に絞った日本語 Author report を要求する。iro core boundary を project guidance / external task が拡張してはならない。
+Author policy は starting worktree の WORKFLOW 全文読取、material conflict の報告、scope discipline、iro の tracker / Git lifecycle ownership、uncommitted file edits、feasible な relevant tests、実施変更・検証結果・material limitations に絞った日本語 Author report を要求する。Inspection profile には INSPECTION-004 の non-authoring policy と structured final result contract を注入する。iro core boundary を project guidance / external task が拡張してはならない。
 
 private state は外部 temporary directory に排他的に作成する。TMPDIR が invoking repository / delivery worktree / shared Git common directory、またはその `.git` を持つ main checkout 内（symlink 経由を含む）なら拒否する。Human の `COPILOT_HOME`（省略時 `~/.copilot`）の native `config.json` があれば private copy に読み込み、credential / model / provider 設定を勝手に置換しない。malformed / unreadable config は failure とする。copy の `autoUpdate` / `continueOnAutoMode` / `memory` / `experimental` を false、`disableAllHooks` / `customAgents.defaultLocalOnly` を true、`enabledPlugins` / `enabledFeatureFlags` を空にする。Human home の MCP / plugin / session state は copy しない。private home を child process の `COPILOT_HOME` で選択し、Human の config / credential に書き戻さない。通常終了時に private state を破棄し、resume / adopt / retry authority に使わない。
 
@@ -936,9 +1017,9 @@ native tool availability と profile tools は shell（bash / powershell と lis
 
 ### RUN-COPILOT-004: executable and provider preflight
 
-研究・実 CLI acceptance baseline は GitHub Copilot CLI 1.0.91 とする。exact patch pin や根拠のない minimum version を導入しない。`copilot` の存在、non-empty successful `--no-auto-update --version`、successful `--no-auto-update --help` 内の required invocation flags を workspace 作成前に確認し、missing / unusable executable と必要 flag の欠落を actionable error にする。probe timeout はそれぞれ 10 秒とする。実行後の output contract は RUN-COPILOT-005 で別途検証する。
+研究・実 CLI acceptance baseline は GitHub Copilot CLI 1.0.91 とする。exact patch pin や根拠のない minimum version を導入しない。`copilot` の存在、non-empty successful `--no-auto-update --version`、successful `--no-auto-update --help` 内の required invocation flags を snapshot / policy materialization 後の Inspection preflight で確認し、PASS 後に Author preflight として再確認する。missing / unusable executable と必要 flag の欠落を actionable error にする。probe timeout はそれぞれ 10 秒とする。実行後の output contract は RUN-COPILOT-005 で別途検証する。
 
-Human environment の公式 BYOK/custom-provider path を許可する。GitHub-hosted Copilot service / subscription entitlement はこの project environment では未 acceptance である。pure read-only login status の共通 probe を発明せず、auth / entitlement の事前成功を主張しない。login / logout、account / credential / provider の探索や補完をしない。Copilot CLI が観測可能な failure として公開する runtime / provider rejection は worker failure とし、別 backend / account / provider / model へ自動 fallback しない。iro は worker invocation を一度だけ行う。CLI 内部の同一 request の transport retry は CLI の concrete behavior であり、iro の retry / fallback ではない。
+Human environment の公式 BYOK/custom-provider path を許可する。GitHub-hosted Copilot service / subscription entitlement はこの project environment では未 acceptance である。pure read-only login status の共通 probe を発明せず、auth / entitlement の事前成功を主張しない。login / logout、account / credential / provider の探索や補完をしない。Copilot CLI が観測可能な failure として公開する runtime / provider rejection は実行 role に従い Inspection FAILED または Author failure とし、別 backend / account / provider / model へ自動 fallback しない。iro は Inspector と PASS 後の Author をそれぞれ一度だけ実行し、失敗による再 invocation を行わない。CLI 内部の同一 request の transport retry は CLI の concrete behavior であり、iro の retry / fallback ではない。
 
 ### RUN-COPILOT-005: deterministic result and delivery
 
@@ -978,7 +1059,7 @@ invocation checkout は tracked / non-ignored untracked changes のない clean 
 
 local HEAD を full commit OID `H0` として固定する。remote `origin` を直接 read し、`refs/heads/B` が存在して `H0` と一致することを検証する。LOCAL-001 / RUN-006 により新しい ID を割り当て、effective origin push destination に今回の `refs/heads/iro/issue-N-D` が存在しないことを検証する。local remote-tracking ref の古い値を根拠にしない。自動 fetch / pull / reset や別の base への変更は行わない。
 
-Git / GitHub / Codex executable と認証、origin identity / push destination、source cleanliness / named HEAD / remote refs、origin repository の Issue N と comments の可読性を、worktree 作成と Author 起動より前に確認する。Issue payload と comments の検証・順序は RUN-004 と同じとする。GitHub default branch や native closing relation は Run の precondition にしない。
+Git / GitHub executable と認証、origin identity / push destination、source cleanliness / named HEAD / remote refs、origin repository の Issue N と comments の可読性を worktree 作成前に確認する。Codex Inspection / Author readiness は materialized snapshot に対する INSPECTION-003 の順序に従う。Issue payload と comments の検証・順序は RUN-004 と同じとする。GitHub default branch や native closing relation は Run の precondition にしない。
 
 既存 local `iro/issue-N` branch、canonical workspace、ownership mapping の有無を理由に reuse / adoption / repair してはならない。それらを読んで reconcile せず、既存 managed state を変更しない。
 
@@ -1235,7 +1316,7 @@ local workspace の作成と Author 起動より前に、少なくとも以下�
 - Git executable と invocation directory から解決した local Git repository
 - invoking repository root の readable regular file である valid supported `iro.toml`
 - configured `tracker.remote` だけから一意に解決した GitHub repository identity `R`
-- INV-010 の GitHub CLI context consistency、`gh` / Codex executable と authentication
+- INV-010 の GitHub CLI context consistency、`gh` executable と authentication
 - Human が選択した PR `M` が `R` に存在し、readable / `OPEN`（Draft を許可する）
 - current raw PR body が readable で、GH-ORIGIN-001 / GH-ORIGIN-002 の relation が resolved singleton の specification Issue `N`
 - actual head repository が `R`、head ref `F` が有効で starting HEAD `H1` が完全な commit OID
@@ -1243,7 +1324,7 @@ local workspace の作成と Author 起動より前に、少なくとも以下�
 - configured effective push destination が一つで `R` を識別し、Git remote が readable
 - Issue body / comments と PR context が readable、local workspace が REVISE-003 を満たす
 
-開始時に `R` / `M` / actual head repository・ref `R/F` / `H1` / selected PR base ref / `N` を bind する。base ref は開始時の context だけであり、mutation identity ではない。starting `H1` の regular `WORKFLOW.md` blob を REVISE-005 に従って固定 authority として bind してから Author を起動する。
+開始時に `R` / `M` / actual head repository・ref `R/F` / `H1` / selected PR base ref / `N` を bind する。base ref は開始時の context だけであり、mutation identity ではない。starting `H1` の regular `WORKFLOW.md` blob を REVISE-005 に従って固定 authority として bind してから INSPECTION-003 に従い Inspection preflight / execution、PASS 後の Codex Author preflight / execution を行う。
 
 F1 relation は metadata と同じ response の current raw body から invocation 開始時に一度だけ解決する。unresolved / ambiguous / validation failure は workspace 作成前に fail closed とする。worker 開始後に body / Issue を再取得・再解決して rebind しない。default base、canonical `iro/issue-N` naming、native closing relation、same-Issue active-PR uniqueness、shared-head exclusivity、PR creator / provenance / delivery hint は eligibility に使用せず、default branch / native closing references / 他の active PR を取得しない。
 
