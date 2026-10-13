@@ -44,7 +44,7 @@ func (c codexRuntime) preflight(root string) error {
 // The CLI exposes no stable pre-invocation resolved model identity. Requested
 // options are not provenance; do not infer from config or scrape CLI output.
 func (c codexRuntime) resolvedModelIdentity() string {
-	return "(unknown; not exposed by runtime)"
+	return unknownModelIdentity
 }
 
 // execute transports iro control instructions separately from tracker-rendered

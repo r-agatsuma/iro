@@ -7,9 +7,173 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestRunSourceFreshnessRejectsBeforeWorkspaceOrWorker(t *testing.T) {
+	other, diverged := strings.Repeat("b", 40), strings.Repeat("c", 40)
+	for _, unmanaged := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, head, advertisement string
+			detached, remoteFailure   bool
+		}{
+			{name: "detached", detached: true},
+			{name: "invalid HEAD", head: "invalid"},
+			{name: "missing same-named branch", head: foundationHEAD},
+			{name: "only default branch exists", head: foundationHEAD, advertisement: foundationHEAD + "\trefs/heads/main\n"},
+			{name: "ahead", head: other, advertisement: foundationHEAD + "\trefs/heads/release/topic\n"},
+			{name: "behind", head: foundationHEAD, advertisement: other + "\trefs/heads/release/topic\n"},
+			{name: "diverged", head: diverged, advertisement: other + "\trefs/heads/release/topic\n"},
+			{name: "remote unavailable", head: foundationHEAD, remoteFailure: true},
+			{name: "malformed remote OID", head: foundationHEAD, advertisement: "invalid\trefs/heads/release/topic\n"},
+			{name: "duplicate remote tip", head: foundationHEAD, advertisement: strings.Repeat(foundationHEAD+"\trefs/heads/release/topic\n", 2)},
+		} {
+			t.Run(fmt.Sprintf("unmanaged=%t/%s", unmanaged, tc.name), func(t *testing.T) {
+				var service *Service
+				var runner *fakeCommandRunner
+				var root string
+				var intercept *func(CommandSpec) (CommandResult, bool)
+				remote := "upstream"
+				if unmanaged {
+					f := newUnmanagedFixture(t)
+					service, runner, root, intercept = f.service, f.runner, f.root, &f.intercept
+					remote = "origin"
+				} else {
+					f := newManagedProducerFixture(t)
+					service, runner, root, intercept = f.service, f.runner, f.root, &f.intercept
+					data := strings.Replace(configTemplate, `remote = "origin"`, `remote = "upstream"`, 1)
+					if err := os.WriteFile(filepath.Join(root, "iro.toml"), []byte(data), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				remoteReads := 0
+				*intercept = func(spec CommandSpec) (CommandResult, bool) {
+					if spec.Name != "git" {
+						return CommandResult{}, false
+					}
+					switch spec.Args[0] {
+					case "symbolic-ref":
+						if tc.detached {
+							return CommandResult{ExitCode: 1}, true
+						}
+						return CommandResult{Stdout: "refs/heads/release/topic"}, true
+					case "rev-parse":
+						if reflect.DeepEqual(spec.Args, []string{"rev-parse", "HEAD"}) {
+							return CommandResult{Stdout: tc.head}, true
+						}
+					case "ls-remote":
+						if reflect.DeepEqual(spec.Args, []string{"ls-remote", "--", remote}) {
+							// The earlier push-remote access probe is independent of source freshness.
+							return CommandResult{}, true
+						}
+						remoteReads++
+						want := []string{"ls-remote", "--heads", "--", remote, "refs/heads/release/topic"}
+						if !reflect.DeepEqual(spec.Args, want) {
+							t.Fatalf("not the actual configured same-named remote branch: %v", spec.Args)
+						}
+						if tc.remoteFailure {
+							return CommandResult{ExitCode: 128}, true
+						}
+						return CommandResult{Stdout: tc.advertisement}, true
+					}
+					return CommandResult{}, false
+				}
+				if err := service.runWithOptions(123, workerOptions{Unmanaged: unmanaged}, io.Discard, io.Discard); err == nil {
+					t.Fatal("unvalidated source accepted")
+				}
+				if !tc.detached && tc.head != "invalid" && remoteReads != 1 {
+					t.Fatalf("remote source reads = %d", remoteReads)
+				}
+				for _, call := range runner.calls {
+					if call.Name == "git" && call.Args[0] == "rev-parse" && !reflect.DeepEqual(call.Args, []string{"rev-parse", "HEAD"}) && !containsString(call.Args, "--show-toplevel") {
+						t.Fatalf("unexpected local source/tracking ref lookup: %+v", call)
+					}
+					if call.Name == "codex" || call.Name == "git" && containsArgs(call.Args, "worktree", "add") {
+						t.Fatalf("source rejected after workspace/worker: %+v", call)
+					}
+				}
+				for _, dir := range []string{service.Dirs.DataRoot, service.Dirs.StateRoot} {
+					if _, err := os.Stat(dir); !os.IsNotExist(err) {
+						t.Fatalf("local side effect before source rejection: %s %v", dir, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRunWorktreeUsesValidatedSourceOID(t *testing.T) {
+	validated := strings.Repeat("b", 40)
+	for _, unmanaged := range []bool{false, true} {
+		for _, mismatch := range []bool{false, true} {
+			t.Run(fmt.Sprintf("unmanaged=%t/mismatch=%t", unmanaged, mismatch), func(t *testing.T) {
+				var service *Service
+				var root string
+				var intercept *func(CommandSpec) (CommandResult, bool)
+				if unmanaged {
+					f := newUnmanagedFixture(t)
+					service, root, intercept = f.service, f.root, &f.intercept
+				} else {
+					f := newManagedProducerFixture(t)
+					service, root, intercept = f.service, f.root, &f.intercept
+				}
+				created, verified, workers, sourceReads := false, false, 0, 0
+				*intercept = func(spec CommandSpec) (CommandResult, bool) {
+					if spec.Name == "git" {
+						if reflect.DeepEqual(spec.Args, []string{"rev-parse", "HEAD"}) {
+							if spec.Dir == root {
+								sourceReads++
+								return CommandResult{Stdout: validated}, true
+							}
+							if !created {
+								t.Fatal("workspace HEAD read before creation")
+							}
+							verified = true
+							if mismatch {
+								return CommandResult{Stdout: foundationHEAD}, true
+							}
+							return CommandResult{Stdout: validated}, true
+						}
+						if spec.Args[0] == "ls-remote" && containsString(spec.Args, "refs/heads/release/topic") {
+							return CommandResult{Stdout: validated + "\trefs/heads/release/topic\n"}, true
+						}
+						if containsArgs(spec.Args, "worktree", "add") {
+							if spec.Args[len(spec.Args)-1] != validated {
+								t.Fatalf("worktree did not use validated OID: %v", spec.Args)
+							}
+							created = true
+							return standardFakeResult(spec, root, "", false, false), true
+						}
+						if created && reflect.DeepEqual(spec.Args, []string{"symbolic-ref", "--quiet", "HEAD"}) {
+							return CommandResult{ExitCode: 1}, true
+						}
+					}
+					if spec.Name == "codex" && containsString(spec.Args, "--ephemeral") {
+						if !verified || mismatch {
+							t.Fatal("worker started before source OID verification")
+						}
+						workers++
+						// Stop at the worker boundary; delivery is covered separately.
+						return CommandResult{ExitCode: 1}, true
+					}
+					return CommandResult{}, false
+				}
+				if err := service.runWithOptions(123, workerOptions{Unmanaged: unmanaged}, io.Discard, io.Discard); err == nil {
+					t.Fatal("expected failure at workspace or worker boundary")
+				}
+				wantWorkers := 1
+				if mismatch {
+					wantWorkers = 0
+				}
+				if !created || !verified || sourceReads != 1 || workers != wantWorkers {
+					t.Fatalf("created=%t verified=%t sourceReads=%d workers=%d", created, verified, sourceReads, workers)
+				}
+			})
+		}
+	}
+}
 
 func validDeliveryHeadForTest(value any, number int) bool {
 	branch, ok := value.(string)
@@ -214,7 +378,11 @@ func TestRemoteCollisionUsesExpandedPushEndpointOnce(t *testing.T) {
 			script := `#!/bin/sh
 printf '%s\n' "$*" >> "$IRO_TEST_TRANSPORT_LOG"
 case "$*" in
-  *git@github.com*"git-upload-pack 'acme/iro.git'") cat "$IRO_TEST_ADVERTISEMENT" ;;
+  *git@github.com*"git-upload-pack 'acme/iro.git'")
+    cat "$IRO_TEST_ADVERTISEMENT"
+    # Consume the client flush before exiting to avoid a SIGPIPE race in Git.
+    cat >/dev/null
+    ;;
   *) echo "unexpected endpoint" >&2; exit 1 ;;
 esac
 `

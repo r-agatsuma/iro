@@ -263,6 +263,7 @@ func (s *Service) writeUnmanagedReviseLog(identity RepositoryIdentity, target re
 		return "", err
 	}
 	content := fmt.Sprintf("repository: %s\npr_number: %d\nspecification_issue: %d\nbranch: %s\nbase: %s\ninitial_head: %s\nworktree: %s\ncodex_exit_status: %d\ncodex_error: %v\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n", identity.String(), target.Number, target.OriginIssue, target.HeadRefName, target.BaseRefName, target.HeadRefOID, workspace, result.ExitCode, result.Err, result.Stdout, result.Stderr)
+	content = localWorkerProvenance(unmanagedAgentType, (codexRuntime{runner: s.Runner}).resolvedModelIdentity()) + content
 	if _, err := io.WriteString(file, content); err != nil {
 		_ = file.Close()
 		return "", err

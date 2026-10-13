@@ -7,7 +7,8 @@ import (
 	"testing"
 )
 
-// The hashes were captured from the pre-refactor GitHub+Codex invocations.
+// These snapshots protect GitHub+Codex invocations, including the selected
+// runtime added to Review provenance.
 // They protect the complete control text and legacy stdin bytes, including
 // policy labels, unknown provenance, comments, GitHub JSON and whitespace.
 func TestGitHubWorkerRenderingPreservesExistingInput(t *testing.T) {
@@ -23,8 +24,8 @@ func TestGitHubWorkerRenderingPreservesExistingInput(t *testing.T) {
 	for _, tc := range []struct{ mode, controlHash, inputHash string }{
 		{"managed-run", "bbd3763df773ecea4d417e9280a1e7fb49bfe7094a7bda91bd5450f8eae58912", "b254081deaeb2b2e8a9f12a3513eef2a336999477e8e8b0531a0a5e40a89dbd0"},
 		{"unmanaged-run", "f5d0fb9afd320a5024c78031bc81c4fb51ae313e76b2c7054721ce4cce9b988d", "b254081deaeb2b2e8a9f12a3513eef2a336999477e8e8b0531a0a5e40a89dbd0"},
-		{"managed-review", "0514f04a3a188999d40d68bf4324722e7746a05696208d4e13899884d7c04e10", "52b55630d5b7faac049a5d625bfdb15de215dfad5a166940964b4591ed40196d"},
-		{"unmanaged-review", "7f5bc66c61517f9adf62e69ceaaaa0959c6246ef9a338ec38b2b6eaf7e75d924", "f40f8876b0de206eea9b87e718f7c737a586e3363df2340350152da78a552955"},
+		{"managed-review", "81ec37f2f9e92834fc524d32865a53f0cdfa622d6d26db4e4665edbbc0b7488a", "52b55630d5b7faac049a5d625bfdb15de215dfad5a166940964b4591ed40196d"},
+		{"unmanaged-review", "5b2a9ea161d185331ab275f26d62117e389ffbadb0f91cd57bddb9a42659cb4d", "f40f8876b0de206eea9b87e718f7c737a586e3363df2340350152da78a552955"},
 		{"managed-revise", "da6c6ba35e93ed388d2a4e04f8898a24c9f764711d9f9103fc9b0c09b2c86da5", "6080070e63fec5728a49ebe5c924af8556caabef7bb5e5dc71253f92781c72a1"},
 		{"unmanaged-revise", "9d605f259d84a32294d3d3a817238a5bca743ae200674ad73d11a2dfa5c32b46", "3ce33f3f6b7b6b44604ad409c148a45504a364a01723780ac3c0e5fbe8ba65f6"},
 	} {

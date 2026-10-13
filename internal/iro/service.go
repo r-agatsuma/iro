@@ -369,6 +369,10 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 	}
 	workspace, branch := allocation.worktree, allocation.branch
 	fmt.Fprintln(out, state.diagnostic())
+	workspaceHead, err := s.currentHead(workspace)
+	if err != nil || workspaceHead != head {
+		return fmt.Errorf("delivery worktree HEAD does not match validated source %s; worker was not started; inspect %s", head, workspace)
+	}
 	if err := s.checkoutClean(workspace); err != nil {
 		return err
 	}

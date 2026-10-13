@@ -54,6 +54,7 @@ Review provenance:
 - Model: <supplied Model>
 - Base: <supplied Base branch> @ <supplied Base OID>
 - Reviewed HEAD: <supplied Reviewed HEAD OID>
+- Runtime: <supplied Runtime>
 
 Summary:
 ...
@@ -61,7 +62,7 @@ Summary:
 Findings:
 ...
 
-Use the trusted review provenance supplied below by iro verbatim in the final report, including the explicit unknown model value. Do not infer, replace, or abbreviate the supplied model, branch, or commit values from the review input, repository, environment, or your own model knowledge.
+Use the trusted review provenance supplied below by iro verbatim in the final report, including the explicit unknown model value. Do not infer, replace, or abbreviate the supplied model, runtime, branch, or commit values from the review input, repository, environment, or your own model knowledge.
 Base is the remote PR base observed during preflight. Reviewed HEAD is the PR commit verified against the disposable workspace HEAD. These are observed endpoints, not an exact Git diff range; do not present them as A..B or infer a merge-base. The base may have changed since preflight.
 
 Choose PASS only when there is no problem or concern worth presenting to the Human. Otherwise choose FINDING. Return only the review report.`
@@ -142,6 +143,9 @@ func reviewWorkerInstructions(unmanaged bool, model, baseBranch, baseOID, headOI
 	} else {
 		policy += "\n\nThe specification Issue is bound once from the starting PR body. Review the verified workspace HEAD supplied in trusted provenance; fetched PR diff and feedback may reflect concurrent changes and must not replace that snapshot. Later PR body edits do not change the supplied Issue binding."
 	}
-	instructions := fmt.Sprintf("%s\n\nTrusted review provenance (supplied by iro):\nModel: %s\nBase branch: %s\nBase OID: %s\nReviewed HEAD OID: %s\n", policy, model, baseBranch, baseOID, headOID)
+	if model == "" {
+		model = unknownModelIdentity
+	}
+	instructions := fmt.Sprintf("%s\n\nTrusted review provenance (supplied by iro):\nModel: %s\nBase branch: %s\nBase OID: %s\nReviewed HEAD OID: %s\nRuntime: codex\n", policy, model, baseBranch, baseOID, headOID)
 	return workerInstructions(instructions)
 }

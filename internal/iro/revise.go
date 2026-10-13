@@ -440,6 +440,7 @@ func (s *Service) writeReviseLog(identity RepositoryIdentity, target reviewPullR
 	}
 	path := filepath.Join(dir, fmt.Sprintf("pr-%d-%d.log", target.Number, started.UnixNano()))
 	content := fmt.Sprintf("repository: %s\npr_number: %d\nissue_number: %d\nbranch: %s\nworktree: %s\ninitial_head: %s\nstarted: %s\nfinished: %s\ncodex_exit_status: %d\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n", identity.String(), target.Number, target.OriginIssue, target.HeadRefName, workspace, target.HeadRefOID, started.Format(time.RFC3339Nano), s.Now().UTC().Format(time.RFC3339Nano), result.ExitCode, result.Stdout, result.Stderr)
+	content = localWorkerProvenance("codex", (codexRuntime{runner: s.Runner}).resolvedModelIdentity()) + content
 	if err := s.FileSystem.WriteFile(path, []byte(content), 0600); err != nil {
 		return "", err
 	}

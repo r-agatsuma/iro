@@ -250,6 +250,10 @@ iro version
 
 Git リポジトリ、project file、外部 command、認証を必要とせず、現在実行されている iro binary の build 情報を表示する。
 
+`version`、`build-type`、`revision`、`vcs-time`、`modified`、Go toolchain version を確認できる。`build-type` は embedded module version に基づき、tag version は `release`、`(devel)` / pseudo-version は `development`、情報が足りなければ `unknown` と表示する。tag version でも source replacement や modified source が明示されていれば `development` となる。公開済み artifact であることの証明ではない。
+
+実行中の binary と比較対象の source revision / release version を照合する。`go install ...@<tag>` 等では version を取得できても VCS revision が埋め込まれていない場合がある。取得できない field は `unknown` と表示する。`iro doctor` は同じ build 情報と iro / tool の executable path、選択 runtime の CLI version を表示する。
+
 source 更新後に古い binary を参照していないか確認する場合は、次も併用する。
 
 ```bash
@@ -542,6 +546,8 @@ AI の役割は不足仕様を勝手に埋めることではなく、複数の�
 ### `--model <model>` / `-m <model>`
 
 その invocation で選択した runtime へ requested model を渡す。managed Copilot Run は native `--model` を使い、Codex catalog では検証しない。requested value は resolved runtime provenance ではない。
+
+Run / Revise の local Author log は選択 runtime と resolved model の取得状況を記録する。現行 Codex / Copilot connector で model identity は `(unknown; not exposed by runtime)` と表示する。Review の trusted provenance も選択 runtime と model の取得状況を含む。requested value や worker 本文から実モデルを推測せず、unknown 自体を実行失敗の理由にしない。
 
 ```bash
 iro run 123 --model <model>
