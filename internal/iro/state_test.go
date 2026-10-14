@@ -17,7 +17,7 @@ type failingRunLogUpdateFS struct {
 }
 
 func (fs *failingRunLogUpdateFS) WriteFile(name string, data []byte, perm os.FileMode) error {
-	if strings.HasSuffix(name, ".log") {
+	if strings.HasSuffix(name, ".log") && strings.Contains(name, string(filepath.Separator)+"runs"+string(filepath.Separator)) {
 		fs.writes++
 		if fs.writes == 2 && fs.failure == "write" {
 			if err := fs.FileSystem.WriteFile(name, data[:len(data)/2], perm); err != nil {

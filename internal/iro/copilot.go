@@ -26,6 +26,21 @@ type copilotOptions struct {
 const copilotWorkerTimeout = 30 * time.Minute
 const copilotProbeTimeout = 10 * time.Second
 const copilotAuthorTools = "bash,list_bash,read_bash,stop_bash,powershell,list_powershell,read_powershell,stop_powershell,view,create,edit,apply_patch,glob,grep"
+const copilotInspectionTools = "view,glob,grep"
+
+type copilotRole uint8
+
+const (
+	copilotAuthor copilotRole = iota
+	copilotInspector
+)
+
+func (r copilotRole) tools() string {
+	if r == copilotInspector {
+		return copilotInspectionTools
+	}
+	return copilotAuthorTools
+}
 
 func validateCopilotRunOptions(options workerOptions) error {
 	if options.NoSandbox {
@@ -58,6 +73,14 @@ func (c copilotRuntime) version(root string) (string, error) {
 }
 
 func (c copilotRuntime) preflight(root string) error {
+	return c.preflightRole(root, copilotAuthor)
+}
+
+func (c copilotRuntime) inspectionPreflight(root string) error {
+	return c.preflightRole(root, copilotInspector)
+}
+
+func (c copilotRuntime) preflightRole(root string, role copilotRole) error {
 	if _, err := c.version(root); err != nil {
 		return err
 	}
@@ -67,7 +90,11 @@ func (c copilotRuntime) preflight(root string) error {
 	if !commandSucceeded(result) {
 		return fmt.Errorf("copilot help is unavailable; verify the CLI installation and retry")
 	}
-	for _, flag := range []string{"--no-auto-update", "--agent", "--model", "--reasoning-effort", "--allow-all-tools", "--allow-all-urls", "--available-tools", "--deny-tool", "--no-ask-user", "--no-experimental", "--disable-builtin-mcps", "--no-remote", "--no-remote-export", "--output-format", "--stream", "--secret-env-vars"} {
+	flags := []string{"--no-auto-update", "--agent", "--model", "--reasoning-effort", "--allow-all-tools", "--available-tools", "--deny-tool", "--no-ask-user", "--no-experimental", "--disable-builtin-mcps", "--no-remote", "--no-remote-export", "--output-format", "--stream", "--secret-env-vars"}
+	if role == copilotAuthor {
+		flags = append(flags, "--allow-all-urls")
+	}
+	for _, flag := range flags {
 		if !strings.Contains(result.Stdout, flag) {
 			return fmt.Errorf("copilot lacks required option %s; install a CLI supporting the experimental connector flags and retry", flag)
 		}
@@ -88,7 +115,7 @@ If a new product or architecture decision is required, stop dependent work and r
 // privateHome preserves Human native configuration (including the selected
 // credential/provider) in a disposable copy, disabling routing fallback and
 // persistent integrations. It never writes back to the Human's Copilot home.
-func (c copilotRuntime) privateHome(root, workspace, commonDir string, policy workerInstructions) (string, string, error) {
+func (c copilotRuntime) privateHome(root, workspace, commonDir string, policy workerInstructions, tools string) (string, string, error) {
 	paths := &Service{FileSystem: c.files}
 	tempRoot, err := paths.resolveLocalPath(os.TempDir())
 	if err != nil {
@@ -157,25 +184,39 @@ func (c copilotRuntime) privateHome(root, workspace, commonDir string, policy wo
 		return "", "", fmt.Errorf("create private Copilot profile directory")
 	}
 	id := filepath.Base(dir)
-	profile := "---\nname: " + id + "\ndescription: Private iro managed Run Author policy\ntools: [" + copilotAuthorTools + "]\n---\n\n" + string(policy) + "\n"
+	profile := "---\nname: " + id + "\ndescription: Private iro operation policy\ntools: [" + tools + "]\n---\n\n" + string(policy) + "\n"
 	if err := c.files.WriteFile(filepath.Join(agentDir, id+".agent.md"), []byte(profile), 0600); err != nil {
-		return "", "", fmt.Errorf("write private Copilot Author profile")
+		return "", "", fmt.Errorf("write private Copilot operation profile")
 	}
 	failed = false
 	return dir, id, nil
 }
 
 func (c copilotRuntime) execute(root, workspace, commonDir string, policy workerInstructions, payload string, options copilotOptions) CommandResult {
-	dir, agentID, err := c.privateHome(root, workspace, commonDir, policy)
+	return c.executeRole(root, workspace, commonDir, policy, payload, options, copilotAuthor)
+}
+
+func (c copilotRuntime) inspect(root, workspace, commonDir string, policy workerInstructions, payload string, options copilotOptions) CommandResult {
+	return c.executeRole(root, workspace, commonDir, policy, payload, options, copilotInspector)
+}
+
+func (c copilotRuntime) executeRole(root, workspace, commonDir string, policy workerInstructions, payload string, options copilotOptions, role copilotRole) CommandResult {
+	tools := role.tools()
+	dir, agentID, err := c.privateHome(root, workspace, commonDir, policy, tools)
 	if err != nil {
 		return CommandResult{ExitCode: -1, Err: err}
 	}
 	defer c.files.RemoveAll(dir)
 	args := []string{"--no-auto-update", "--agent", agentID,
-		"--allow-all-tools", "--allow-all-urls", "--available-tools=" + copilotAuthorTools,
+		"--allow-all-tools", "--available-tools=" + tools,
 		"--no-ask-user", "--no-experimental", "--disable-builtin-mcps", "--no-remote", "--no-remote-export",
 		"--output-format", "json", "--stream", "off",
 		"--secret-env-vars=COPILOT_PROVIDER_API_KEY,COPILOT_PROVIDER_BEARER_TOKEN,COPILOT_PROVIDER_HEADERS,COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN"}
+	// Inspection has no shell, editing, network or delegation tools. The native
+	// profile and CLI availability must agree, without granting URL access.
+	if role == copilotAuthor {
+		args = append(args, "--allow-all-urls")
+	}
 	for _, command := range []string{"gh", "git add", "git commit", "git fetch", "git pull", "git push", "git reset", "git clean", "git stash", "git checkout", "git switch", "git restore", "git merge", "git rebase", "git cherry-pick", "git branch", "git tag", "git update-ref", "git worktree"} {
 		args = append(args, "--deny-tool=shell("+command+":*)")
 	}
@@ -199,8 +240,8 @@ func (c copilotRuntime) execute(root, workspace, commonDir string, policy worker
 		"GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP": "false",
 	}, Timeout: copilotWorkerTimeout})
 	// Raw events include task echoes and tool details. Forward only a deterministic
-	// Author report, never a whole event stream as an apparent final response.
-	report, parseErr := parseCopilotOutput(result.Stdout)
+	// final response, never a whole event stream as an apparent final response.
+	report, parseErr := parseCopilotOutputWithTools(result.Stdout, tools)
 	result.Stdout = redactCopilotSecrets(report)
 	result.Stderr = redactCopilotSecrets(result.Stderr)
 	if commandSucceeded(result) && parseErr != nil {
@@ -223,6 +264,10 @@ func redactCopilotSecrets(value string) string {
 // fail closed, even if the CLI's process status is zero.
 // Provider finish reasons discarded by the CLI are outside this boundary.
 func parseCopilotOutput(output string) (string, error) {
+	return parseCopilotOutputWithTools(output, copilotAuthorTools)
+}
+
+func parseCopilotOutputWithTools(output, tools string) (string, error) {
 	fail := func() (string, error) {
 		return "", fmt.Errorf("Copilot returned malformed, failed, empty, or incomplete JSONL completion; inspect the runtime/provider configuration before retrying")
 	}
@@ -301,7 +346,7 @@ func parseCopilotOutput(output string) (string, error) {
 		case "tool.execution_start":
 			var id, toolName string
 			if json.Unmarshal(data["toolCallId"], &id) != nil || id == "" || pending[id] != "" ||
-				json.Unmarshal(data["toolName"], &toolName) != nil || !slices.Contains(strings.Split(copilotAuthorTools, ","), toolName) {
+				json.Unmarshal(data["toolName"], &toolName) != nil || !slices.Contains(strings.Split(tools, ","), toolName) {
 				return fail()
 			}
 			pending[id] = toolName

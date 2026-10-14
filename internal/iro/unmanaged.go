@@ -89,6 +89,13 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 	if number <= 0 {
 		return fmt.Errorf("issue number must be a positive decimal integer")
 	}
+	agent, err := s.selectAgent(unmanagedAgentType)
+	if err != nil {
+		return err
+	}
+	if err := validateSelectedWorkerOptions(unmanagedAgentType, options); err != nil {
+		return err
+	}
 	if err := s.requireGit(); err != nil {
 		return err
 	}
@@ -100,7 +107,20 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 	if err != nil {
 		return err
 	}
+	if err := s.validateOriginPushDestination(root, identity); err != nil {
+		return err
+	}
 	if err := s.checkoutClean(root); err != nil {
+		return err
+	}
+	if err := s.requireExecutable("gh"); err != nil {
+		return err
+	}
+	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
+		return err
+	}
+	target, err := s.fetchIssue(root, identity, number)
+	if err != nil {
 		return err
 	}
 	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"symbolic-ref", "--quiet", "HEAD"}, Dir: root})
@@ -114,23 +134,6 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 		return fmt.Errorf("source checkout has no valid HEAD commit")
 	}
 	if err := s.revalidateUnmanagedRun(root, identity, base, head, ""); err != nil {
-		return err
-	}
-	if err := s.requireExecutable("gh"); err != nil {
-		return err
-	}
-	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
-		return err
-	}
-	target, err := s.fetchIssue(root, identity, number)
-	if err != nil {
-		return err
-	}
-	agent, err := s.selectAgent(unmanagedAgentType)
-	if err != nil {
-		return err
-	}
-	if err := agent.preflight(root); err != nil {
 		return err
 	}
 	allocation, err := s.allocateRunDelivery(root, identity, number, "origin", true)
@@ -151,6 +154,16 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 		return fmt.Errorf("new unmanaged worktree is not clean; inspect %s: %w", workspace, err)
 	}
 	policy := unmanagedRunWorkerPolicy()
+	if err := s.inspectIssue(inspectionInput{
+		root: root, workspace: workspace, commonDir: allocation.commonDir, head: head,
+		agentType: unmanagedAgentType, operation: "run", unmanaged: true, identity: identity,
+		issue: target, policy: policy, options: options,
+	}, out, errOut); err != nil {
+		return err
+	}
+	if err := agent.preflight(root); err != nil {
+		return err
+	}
 	result = agent.execute(workspace, policy.instructions, "Implement the GitHub Issue supplied on stdin.", buildGitHubIssueInput(identity, target), options.codexOptions())
 	logErr := s.writeUnmanagedRunLog(identity, number, base, head, workspace, result, allocation)
 	var operationErr error

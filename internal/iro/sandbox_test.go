@@ -67,8 +67,12 @@ func TestWorkerSandboxInvocations(t *testing.T) {
 						t.Fatalf("unexpected workspace network override: %v", call.Args)
 					}
 				}
-				if workers != 1 {
-					t.Fatalf("worker invocations = %d, want 1", workers)
+				wantWorkers := 2 // Inspection and Author.
+				if command == "review" {
+					wantWorkers = 1
+				}
+				if workers != wantWorkers {
+					t.Fatalf("runtime invocations = %d, want %d", workers, wantWorkers)
 				}
 				if tc.overrides {
 					assertWorkerOptions(t, runner.calls, "gpt-test", "low")

@@ -59,6 +59,9 @@ func (s *Service) reviseGitHub(root string, config Config, prNumber int, configD
 	if err != nil {
 		return err
 	}
+	if err := validateSelectedWorkerOptions(config.AgentType, options); err != nil {
+		return err
+	}
 	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
 		return err
@@ -90,10 +93,6 @@ func (s *Service) reviseGitHub(root string, config Config, prNumber int, configD
 	if err != nil {
 		return err
 	}
-	if err := agent.preflight(root); err != nil {
-		return err
-	}
-
 	local, err := s.selectReviseWorkspace(root, identity, config, target)
 	if local.Path != "" {
 		defer func() {
@@ -116,8 +115,18 @@ func (s *Service) reviseGitHub(root string, config Config, prNumber int, configD
 		return err
 	}
 
-	started := s.Now().UTC()
 	policy := managedReviseWorkerPolicy(target.HeadRefOID, workflowData)
+	if err := s.inspectIssue(inspectionInput{
+		root: root, workspace: workspace, commonDir: local.CommonDir, head: target.HeadRefOID,
+		agentType: config.AgentType, operation: "revise", identity: identity,
+		issue: origin, policy: policy, options: options,
+	}, out, os.Stderr); err != nil {
+		return err
+	}
+	if err := agent.preflight(root); err != nil {
+		return err
+	}
+	started := s.Now().UTC()
 	input := buildGitHubPRInput(identity, target, origin, configData, policy, context, "Origin Issue")
 	result := agent.execute(workspace, policy.instructions, "Revise the existing GitHub pull request using the Issue specification and PR feedback supplied on stdin.", input, options.codexOptions())
 	logPath, err := s.writeReviseLog(identity, target, workspace, started, result)

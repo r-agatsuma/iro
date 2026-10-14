@@ -165,7 +165,7 @@ func (f *reviseFixture) respond(spec CommandSpec) CommandResult {
 func revisionMutations(calls []CommandSpec) []string {
 	var stages []string
 	for _, call := range calls {
-		if call.Name == "codex" && containsString(call.Args, "--ephemeral") {
+		if call.Name == "codex" && containsString(call.Args, "--ephemeral") && !isInspectionCommand(call) {
 			stages = append(stages, "worker")
 		}
 		if call.Name == "git" && len(call.Args) > 0 {
@@ -262,7 +262,7 @@ func TestReviseMaterializesOrReusesHumanPRAndPushesSameBranch(t *testing.T) {
 				t.Fatalf("mutations=%s, want=%s", got, want)
 			}
 			for _, call := range f.runner.calls {
-				if call.Name != "codex" || !containsString(call.Args, "--ephemeral") {
+				if call.Name != "codex" || !containsString(call.Args, "--ephemeral") || isInspectionCommand(call) {
 					continue
 				}
 				if call.Dir != f.workspace || !containsArgs(call.Args, "--sandbox", "workspace-write") || !containsArgs(call.Args, "--ask-for-approval", "never") || !containsString(call.Args, "sandbox_workspace_write.network_access=true") {
@@ -354,6 +354,12 @@ func TestReviseRejectsUnavailablePreconditionsBeforeMutation(t *testing.T) {
 			}
 			if err := f.service.Revise(42, io.Discard); err == nil {
 				t.Fatal("unexpected success")
+			}
+			if strings.HasPrefix(kind, "codex ") {
+				if stages := strings.Join(revisionMutations(f.runner.calls), ","); stages != "fetch,worktree add" {
+					t.Fatal("Inspection failure reached Author/delivery", stages)
+				}
+				return
 			}
 			if stages := revisionMutations(f.runner.calls); len(stages) != 0 {
 				t.Fatal("mutation before rejection", stages)
