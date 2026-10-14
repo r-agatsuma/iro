@@ -118,6 +118,7 @@ type inspectionInput struct {
 	issue                            issue
 	policy                           workerPolicy
 	options                          workerOptions
+	result                           *invocationResult
 }
 
 func (s *Service) inspectIssue(input inspectionInput, out, errOut io.Writer) error {
@@ -125,20 +126,33 @@ func (s *Service) inspectIssue(input inspectionInput, out, errOut io.Writer) err
 	var final string
 	var verdict inspectionVerdict
 	var inspectionErr error
-	switch input.agentType {
-	case "codex":
-		inspectionErr = (codexRuntime{runner: s.Runner}).inspectionPreflight(input.root)
-	case "copilot":
-		inspectionErr = (copilotRuntime{runner: s.Runner, files: s.FileSystem}).inspectionPreflight(input.root)
-	default:
-		inspectionErr = unsupportedAgent(input.agentType)
+	r := input.result
+	r.active = true
+	r.Operation, r.Unmanaged, r.Repository = input.operation, input.unmanaged, input.identity.String()
+	r.Issue, r.Source = input.issue.Number, input.head
+	r.Worker, r.Delivery, r.RemoteReport = "not started", "not attempted", "not attempted"
+	if input.operation == "revise" {
+		r.RemoteReport = "not applicable (local only)"
 	}
 	dir := ""
+	parent, inspectionErr := filepath.Abs(runtimeLogDir(s.Dirs, githubRuntimeNamespace(input.identity), "inspections"))
 	if inspectionErr == nil {
-		parent := runtimeLogDir(s.Dirs, githubRuntimeNamespace(input.identity), "inspections")
 		inspectionErr = s.FileSystem.MkdirAll(parent, 0700)
-		if inspectionErr == nil {
-			dir, inspectionErr = s.FileSystem.MkdirTemp(parent, fmt.Sprintf("%s-issue-%d-*", input.operation, input.issue.Number))
+	}
+	if inspectionErr == nil {
+		dir, inspectionErr = s.FileSystem.MkdirTemp(parent, fmt.Sprintf("%s-issue-%d-*", input.operation, input.issue.Number))
+	}
+	if dir != "" {
+		r.LocalLog = filepath.Join(dir, "result.json")
+	}
+	if inspectionErr == nil {
+		switch input.agentType {
+		case "codex":
+			inspectionErr = (codexRuntime{runner: s.Runner}).inspectionPreflight(input.root)
+		case "copilot":
+			inspectionErr = (copilotRuntime{runner: s.Runner, files: s.FileSystem}).inspectionPreflight(input.root)
+		default:
+			inspectionErr = unsupportedAgent(input.agentType)
 		}
 	}
 	if inspectionErr == nil {
@@ -174,8 +188,9 @@ func (s *Service) inspectIssue(input inspectionInput, out, errOut io.Writer) err
 		}
 	}
 	// Free-form diagnostics stay exclusively in local storage/terminal output.
+	content := fmt.Sprintf("operation: %s\nunmanaged: %t\nissue: %d\nsource: %s\nruntime: %s\nexit_status: %d\nruntime_error: %v\nerror: %v\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n--- final ---\n%s\n", input.operation, input.unmanaged, input.issue.Number, input.head, input.agentType, result.ExitCode, result.Err, inspectionErr, result.Stdout, result.Stderr, final)
+	r.InspectionDiagnostic = content
 	if dir != "" {
-		content := fmt.Sprintf("operation: %s\nunmanaged: %t\nissue: %d\nsource: %s\nruntime: %s\nexit_status: %d\nruntime_error: %v\nerror: %v\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n--- final ---\n%s\n", input.operation, input.unmanaged, input.issue.Number, input.head, input.agentType, result.ExitCode, result.Err, inspectionErr, result.Stdout, result.Stderr, final)
 		path := filepath.Join(dir, "diagnostic.log")
 		if err := s.FileSystem.WriteFile(path, []byte(content), 0600); err != nil {
 			fmt.Fprintf(errOut, "Inspection diagnostic could not be saved: %v\n%s", err, content)
@@ -192,6 +207,7 @@ func (s *Service) inspectIssue(input inspectionInput, out, errOut io.Writer) err
 	} else if verdict.blocker {
 		status = "BLOCKER"
 	}
+	r.Inspection, r.InspectionReason = status, verdict.reason.name()
 	fmt.Fprintf(out, "INSPECTION: %s\n", status)
 	if status == "PASS" {
 		return nil
@@ -202,7 +218,9 @@ func (s *Service) inspectIssue(input inspectionInput, out, errOut io.Writer) err
 		if status == "BLOCKER" {
 			report.status, report.reason = reportBlocker, verdict.reason
 		}
-		if err := s.postIssueReport(input.root, input.identity, report); err != nil {
+		publication, err := s.postIssueReport(input.root, input.identity, report)
+		r.issueReportFinished(publication, err)
+		if err != nil {
 			fmt.Fprintf(errOut, "warning: inspection report comment failed: %v\n", err)
 		}
 	}

@@ -651,7 +651,7 @@ BLOCKER の `reason_class` は iro-owned bounded value `specification_ambiguity`
 
 Codex は専用 final result file、Copilot は validated JSONL completion の final message だけを parse する。stdout の自然言語や `STOP` / `blocked` 等から verdict を推測しない。unknown / missing / null / duplicate / extra fields、trailing output、unknown verdict / reason、PASS/BLOCKER と reason の不整合は fail closed として FAILED にする。crash、timeout、preflight / authentication failure、信頼可能な completion の欠落、diagnostic 保存失敗も FAILED である。
 
-stdout / stderr / error / final rationale は `inspections/<repository-key>/<operation>-issue-N-<unique>/` の private local diagnostic に保存する。保存できない場合は端末に診断し、remote report に混ぜない。preflight failure は端末で診断する。RUN-019 の publication boundary に従い、free-form prose / error / paths を automatic remote report に渡してはならない。
+stdout / stderr / error / final rationale は `inspections/<repository-key>/<operation>-issue-N-<unique>/` の private local diagnostic に保存する。保存できない場合は端末に診断し、remote report に混ぜない。Inspection preflight failure も今回の local record に保存する。RUN-019 の publication boundary に従い、free-form prose / error / paths を automatic remote report に渡してはならない。
 
 ### INSPECTION-006: 停止と report target
 
@@ -666,6 +666,28 @@ DELIVERY: not attempted
 Author preflight / execution と delivery commit / push / PR を実行しない。Run（managed / unmanaged）は selected Issue に bounded automatic report を一度試行する。report は iro-owned Issue number、inspection stage、BLOCKER / FAILED、Author / delivery 未試行、BLOCKER の bounded reason class のみを含む。unmanaged の既存 tracker authority / target binding を維持する。Revise（managed / unmanaged）は local result のみで、新しい Issue / PR comment を投稿しない。
 
 PASS 後の Author preflight failure は ordinary startup failure とし、Inspection FAILED / BLOCKER に再分類しない。PASS 後の worker / delivery と report は従来の責務境界に従う。
+
+### INSPECTION-007: invocation 終了時の authoritative final status
+
+Inspection に到達した managed / unmanaged Run、managed / unmanaged Revise は、command 終了時に次の独立した dimensions を持つ compact final status を stdout に表示する。Inspection 前の既存 precondition failure、および Review / Land / Status / Cleanup / Doctor へこの契約を拡張しない。
+
+```text
+INSPECTION: PASS | BLOCKER | FAILED
+WORKER: not started | success | failed (exit N)
+DELIVERY: not attempted | PR #M created | PR #M updated | failed (...)
+REMOTE REPORT: not attempted | published | failed (...) | not applicable (local only)
+LOCAL LOG: <今回の result.json の exact absolute path>
+```
+
+Inspection status は INSPECTION-005 の結果、worker result は選択 runtime の結果、Run delivery は既存の delivery receipt / remote outcome を直接反映する。Author preflight failure は `WORKER: not started` とし、Revise の正常終了でも work report が空なら worker failure とする。Revise は既存 PR ref の confirmed push success だけを `PR #M updated` とし、PR create や新しい comment lifecycle を導入しない。未確認の push / PR outcome は unknown と表示し、未試行と区別する。
+
+Run の Issue failure report / PR delivery report の投稿結果は Inspection / worker / delivery と独立する。report failure を main operation の成否へ置き換えない。投稿失敗・結果未確認の場合は `REMOTE REPORT: failed (...)` とともに、既存 tracker comment が stale の可能性を持ち、今回の local result が authoritative であることを表示する。自動 retry は行わない。managed Run で PR create が確認できた場合は final status にも `LAND: iro land M` を表示する。unmanaged Run は既存の managed Land eligibility を保証しない案内を維持する。Revise の remote report は常に `not applicable (local only)` であり、Issue / PR comment を投稿しない。
+
+今回の Inspection directory 内の private `result.json` は local-only な最終 metadata とし、operation / mode、repository と Issue / 選択・作成 PR、exact source / revision snapshot、Inspection status / reason、worker exit / result、delivery / push / PR outcome、remote-report status、operation / publication error を記録する。Inspector diagnostics と取得済み worker stdout / stderr / error を保持し、保存できた既存の operation-specific Author log path も記録する。既存の raw diagnostic / Author / delivery log は維持する。Inspection preflight 前に invocation directory を確保し、preflight failure でも同じ identity を表示する。
+
+final metadata の保存失敗時は、取得済み metadata / raw diagnostics を local stderr に残し、`LOCAL LOG` に保存失敗を明示する。directory を確保できなければ `unavailable` と表示する。保存失敗を理由に worker / remote mutation を再試行せず、既に確認した execution result を維持する。
+
+この record は今回の終了結果を再構成するためだけに使用する。latest pointer / manifest、durable index、履歴の filesystem ordering semantics、latest-run lookup command、汎用 job database は設けない。
 
 ## 9. `iro run <issue-number>`
 

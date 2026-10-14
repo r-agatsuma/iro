@@ -62,6 +62,8 @@ func (s *Service) reviseUnmanaged(number, specificationIssue int, options worker
 	if err != nil {
 		return err
 	}
+	final := &invocationResult{PRNumber: target.Number}
+	defer func() { s.finishInvocation(final, operationErr, out, errOut) }()
 	// Fetch the selected commit without moving any branch, tracking ref, or FETCH_HEAD.
 	result = s.Runner.Run(CommandSpec{Name: "git", Args: []string{"fetch", "--no-tags", "--no-write-fetch-head", "--refmap=", "--", "origin", target.HeadRefOID}, Dir: root})
 	if !commandSucceeded(result) {
@@ -113,7 +115,7 @@ func (s *Service) reviseUnmanaged(number, specificationIssue int, options worker
 	if err := s.inspectIssue(inspectionInput{
 		root: root, workspace: workspace, head: target.HeadRefOID,
 		agentType: unmanagedAgentType, operation: "revise", unmanaged: true, identity: identity,
-		issue: specification, policy: policy, options: options,
+		issue: specification, policy: policy, options: options, result: final,
 	}, out, errOut); err != nil {
 		return err
 	}
@@ -123,11 +125,16 @@ func (s *Service) reviseUnmanaged(number, specificationIssue int, options worker
 	}
 	input := buildGitHubPRInput(identity, target, specification, nil, policy, context, "Human-selected specification Issue")
 	result = agent.execute(workspace, policy.instructions, "Revise the selected GitHub pull request using the explicit Issue specification and PR feedback supplied on stdin.", input, options.codexOptions())
+	final.workerFinished(result)
+	if commandSucceeded(result) && strings.TrimSpace(result.Stdout) == "" {
+		final.Worker = "failed (no work report)"
+	}
 	logPath, logErr := s.writeUnmanagedReviseLog(identity, target, workspace, result)
 	if logErr != nil {
 		fmt.Fprintf(errOut, "warning: could not preserve Author log: %v\nAuthor stdout:\n%s\nAuthor stderr:\n%s\n", logErr, result.Stdout, result.Stderr)
 	} else {
 		fmt.Fprintf(out, "Author report: %s\n", logPath)
+		final.WorkerLog = logPath
 	}
 	if !commandSucceeded(result) {
 		return fmt.Errorf("Author exited with status %d (%v)", result.ExitCode, result.Err)
@@ -140,6 +147,7 @@ func (s *Service) reviseUnmanaged(number, specificationIssue int, options worker
 		return fmt.Errorf("Author returned no work report; no commit or push attempted")
 	}
 	stage = "before commit"
+	final.Delivery = "failed"
 	if err := s.revalidateUnmanagedRevise(workspace, identity, target); err != nil {
 		return err
 	}
@@ -190,10 +198,13 @@ func (s *Service) reviseUnmanaged(number, specificationIssue int, options worker
 	}
 	stage, pushAttempted = "push", true
 	result = s.Runner.Run(CommandSpec{Name: "git", Args: []string{"push", "--no-follow-tags", "--no-recurse-submodules", "--", "origin", commit + ":refs/heads/" + target.HeadRefName}, Dir: workspace})
+	final.Push = mutationOutcome(result)
 	if !commandSucceeded(result) {
+		final.Delivery = "failed (remote outcome unknown)"
 		return fmt.Errorf("revision push failed or is uncertain; remote branch may have been updated")
 	}
 	delivered = true
+	final.Delivery = fmt.Sprintf("PR #%d updated", number)
 	fmt.Fprintf(out, "Updated existing PR #%d via %s (unmanaged; shared-head PRs may also observe this update)\n", number, target.HeadRefName)
 	return nil
 }

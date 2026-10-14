@@ -352,7 +352,11 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 		return err
 	}
 	state := newRunDeliveryState(allocation)
-	defer func() { runErr = s.finishRunDelivery(identity, state, runErr, out, errOut) }()
+	final := &invocationResult{run: state}
+	defer func() {
+		runErr = s.finishRunDelivery(identity, state, runErr, out, errOut)
+		s.finishInvocation(final, runErr, out, errOut)
+	}()
 	if err := s.createDeliveryWorktree(root, allocation, head); err != nil {
 		return err
 	}
@@ -376,7 +380,7 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 	if err := s.inspectIssue(inspectionInput{
 		root: root, workspace: workspace, commonDir: allocation.commonDir, head: head,
 		agentType: config.AgentType, operation: "run", identity: identity,
-		issue: target, policy: policy, options: options,
+		issue: target, policy: policy, options: options, result: final,
 	}, out, errOut); err != nil {
 		return err
 	}
@@ -403,10 +407,13 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 		workerResult = (copilotRuntime{runner: s.Runner, files: s.FileSystem}).execute(root, workspace, allocation.commonDir, policy.instructions, payload, copilotOptions{Model: options.Model, ReasoningEffort: options.ReasoningEffort})
 	}
 	finished := s.Now().UTC()
+	final.workerFinished(workerResult)
 	if !commandSucceeded(workerResult) {
 		operationErr := state.failure(fmt.Errorf("%s exited with status %d (%v); worktree was kept for human inspection", workerName, workerResult.ExitCode, workerResult.Err))
-		commentErr := s.postIssueReport(root, identity, automaticReport{issue: issueNumber, stage: reportAuthor, status: reportFailed})
-		_, logErr := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, issueCommentStatus(commentErr))
+		publication, commentErr := s.postIssueReport(root, identity, automaticReport{issue: issueNumber, stage: reportAuthor, status: reportFailed})
+		final.issueReportFinished(publication, commentErr)
+		logPath, logErr := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, issueCommentStatus(commentErr))
+		final.WorkerLog = logPath
 		if commentErr != nil {
 			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", commentErr)
 		}
@@ -415,14 +422,17 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 		}
 		return operationErr
 	}
-	_, logErr := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, "not attempted")
+	logPath, logErr := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, "not attempted")
+	final.WorkerLog = logPath
 	operationErr := logErr
 	if operationErr == nil {
+		final.Delivery = "attempted"
 		operationErr = s.deliver(root, workspace, identity, issueNumber, config.TrackerRemote, branch, base, state, out, errOut)
 	}
 	if operationErr != nil {
 		operationErr = state.failure(operationErr)
-		commentErr := s.postIssueReport(root, identity, automaticReport{issue: issueNumber, stage: reportDelivery, status: reportFailed, prNumber: state.prNumber})
+		publication, commentErr := s.postIssueReport(root, identity, automaticReport{issue: issueNumber, stage: reportDelivery, status: reportFailed, prNumber: state.prNumber})
+		final.issueReportFinished(publication, commentErr)
 		if commentErr != nil {
 			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", commentErr)
 		}
