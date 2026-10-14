@@ -121,10 +121,10 @@ func sortIssueComments(comments []issueComment) error {
 	return nil
 }
 
-func (s *Service) postIssueReport(root string, identity RepositoryIdentity, report automaticReport) (CommandResult, error) {
+func (s *Service) postIssueReport(root string, identity RepositoryIdentity, report automaticReport) error {
 	body, err := buildAutomaticReport(report)
 	if err != nil {
-		return CommandResult{}, err
+		return err
 	}
 	number := report.issue
 	result := s.Runner.Run(CommandSpec{
@@ -133,7 +133,7 @@ func (s *Service) postIssueReport(root string, identity RepositoryIdentity, repo
 		Dir:  root,
 	})
 	if !commandSucceeded(result) {
-		return result, fmt.Errorf("could not post the run result to GitHub Issue #%d", number)
+		return fmt.Errorf("could not post the run result to GitHub Issue #%d", number)
 	}
-	return result, nil
+	return nil
 }

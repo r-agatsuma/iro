@@ -193,7 +193,7 @@ func TestUnmanagedRunScenarioA(t *testing.T) {
 	assertWorkerHasNoModel(t, f.runner.calls)
 	assertWorkerHasNoReasoningEffort(t, f.runner.calls)
 	for _, call := range f.runner.calls {
-		if call.Name == "codex" && containsString(call.Args, "--ephemeral") && !isInspectionCommand(call) {
+		if call.Name == "codex" && containsString(call.Args, "--ephemeral") {
 			if !containsArgs(call.Args, "-c", "developer_instructions="+strconv.Quote(unmanagedDeveloperInstructions)) || !containsArgs(call.Args, "--sandbox", "workspace-write") || !containsArgs(call.Args, "--ask-for-approval", "never") {
 				t.Fatalf("incorrect worker policy: %v", call.Args)
 			}
@@ -273,7 +273,7 @@ func TestUnmanagedCLIOptions(t *testing.T) {
 		}
 		assertWorkerOptions(t, f.runner.calls, "test-model", "high")
 		for _, call := range f.runner.calls {
-			if call.Name == "codex" && containsString(call.Args, "--ephemeral") && !isInspectionCommand(call) && (!containsArgs(call.Args, "--sandbox", "danger-full-access") || containsString(call.Args, "sandbox_workspace_write.network_access=true")) {
+			if call.Name == "codex" && containsString(call.Args, "--ephemeral") && (!containsArgs(call.Args, "--sandbox", "danger-full-access") || containsString(call.Args, "sandbox_workspace_write.network_access=true")) {
 				t.Fatal(call.Args)
 			}
 		}
@@ -349,9 +349,6 @@ func TestUnmanagedPreconditions(t *testing.T) {
 				t.Fatal("remote refs were read before effective fetch URL rejection")
 			}
 			for _, stage := range f.stages {
-				if tc.name == "Codex auth" && (stage == "worktree-list" || stage == "worktree-add") {
-					continue
-				}
 				if stage != "remote-check" {
 					t.Fatalf("side effect before rejection: %s", stage)
 				}

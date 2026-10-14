@@ -200,7 +200,7 @@ func TestCopilotWorkerFailuresNeverDeliverOrFallback(t *testing.T) {
 	}
 }
 
-func TestCopilotInspectionPreflightFailurePreventsAuthor(t *testing.T) {
+func TestCopilotPreflightFailurePreventsWorkspace(t *testing.T) {
 	for _, kind := range []string{"missing", "unusable", "missing flags"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newManagedProducerFixture(t)
@@ -218,21 +218,16 @@ func TestCopilotInspectionPreflightFailurePreventsAuthor(t *testing.T) {
 					}
 					return CommandResult{}, true
 				}
-				if spec.Name == "git" && containsString([]string{"add", "commit", "push"}, spec.Args[0]) {
-					t.Fatal("delivery after Inspection preflight rejection")
+				if spec.Name == "git" && containsArgs(spec.Args, "worktree", "add") {
+					t.Fatal("created workspace before preflight rejection")
 				}
 				return CommandResult{}, false
 			}
 			if err := f.service.Run(123, io.Discard); err == nil || !strings.Contains(err.Error(), "copilot") {
 				t.Fatal(err)
 			}
-			if len(f.paths) != 1 {
+			if len(f.paths) != 0 {
 				t.Fatal(f.paths)
-			}
-			for _, call := range f.runner.calls {
-				if isInspectionCommand(call) || call.Name == "copilot" && containsString(call.Args, "--agent") {
-					t.Fatal("Inspector/Author started after Inspection preflight rejection")
-				}
 			}
 		})
 	}

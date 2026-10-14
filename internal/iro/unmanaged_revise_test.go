@@ -228,7 +228,7 @@ func TestUnmanagedReviseScenarioCAndWorkerOptions(t *testing.T) {
 			}
 			assertNormalizedFeedbackInput(t, f.runner.calls, 1)
 			for _, call := range f.runner.calls {
-				if call.Name != "codex" || !containsString(call.Args, "--ephemeral") || isInspectionCommand(call) {
+				if call.Name != "codex" || !containsString(call.Args, "--ephemeral") {
 					continue
 				}
 				if !containsArgs(call.Args, "-c", "developer_instructions="+strconv.Quote(unmanagedReviseDeveloperInstructions)) || !strings.Contains(string(call.Stdin), "Human-selected specification Issue:\nNumber: 123") || !strings.Contains(string(call.Stdin), "Head OID: "+revisionHead) || strings.Contains(string(call.Stdin), "Project configuration (iro.toml):") {
@@ -649,7 +649,7 @@ func TestUnmanagedReviseG3ExplicitIssueDoesNotReplaceManagedOrigin(t *testing.T)
 		if call.Name == "gh" && containsArgs(call.Args, "issue", "view") && call.Args[2] != "123" {
 			t.Fatal("managed reconciled body-bound Issue A with unmanaged Issue B")
 		}
-		if call.Name == "codex" && containsString(call.Args, "--ephemeral") && !isInspectionCommand(call) {
+		if call.Name == "codex" && containsString(call.Args, "--ephemeral") {
 			found = strings.Contains(string(call.Stdin), "Origin Issue:\nNumber: 123") && !strings.Contains(string(call.Stdin), "Explicit B")
 		}
 	}
@@ -726,7 +726,7 @@ func TestUnmanagedReviseG5BuiltInPolicyThenManagedStartingPolicy(t *testing.T) {
 		if call.Name == "git" && containsArgs(call.Args, "cat-file", "blob") {
 			policyReads++
 		}
-		if call.Name == "codex" && containsString(call.Args, "--ephemeral") && !isInspectionCommand(call) {
+		if call.Name == "codex" && containsString(call.Args, "--ephemeral") {
 			workers++
 			if !strings.Contains(string(call.Stdin), "Fixed starting PR HEAD "+revisionCommit+" worker policy (WORKFLOW.md):\n"+p2) || strings.Contains(string(call.Stdin), p1) || strings.Contains(string(call.Stdin), "Built-in unmanaged Author policy") {
 				t.Fatalf("later managed Author did not use P2 at delivered HEAD: %s", call.Stdin)

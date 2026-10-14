@@ -46,15 +46,3 @@ func (s *Service) checkTrackerAuth(trackerType, root string, identity Repository
 		return unsupportedTracker(trackerType)
 	}
 }
-
-func validateSelectedWorkerOptions(agentType string, options workerOptions) error {
-	switch agentType {
-	case "codex":
-		// Codex owns model/effort validation; there is no iro model catalog.
-		return nil
-	case "copilot":
-		return validateCopilotRunOptions(options)
-	default:
-		return unsupportedAgent(agentType)
-	}
-}

@@ -114,7 +114,6 @@ type runDeliveryState struct {
 	allocation       *deliveryAllocation
 	push, pr, report string
 	prNumber         int
-	reportDiagnostic *localCommandDiagnostic
 }
 
 func newRunDeliveryState(allocation *deliveryAllocation) *runDeliveryState {

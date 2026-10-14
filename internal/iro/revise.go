@@ -59,9 +59,6 @@ func (s *Service) reviseGitHub(root string, config Config, prNumber int, configD
 	if err != nil {
 		return err
 	}
-	if err := validateSelectedWorkerOptions(config.AgentType, options); err != nil {
-		return err
-	}
 	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
 		return err
@@ -93,8 +90,10 @@ func (s *Service) reviseGitHub(root string, config Config, prNumber int, configD
 	if err != nil {
 		return err
 	}
-	final := &invocationResult{PRNumber: target.Number}
-	defer func() { s.finishInvocation(final, operationErr, out, os.Stderr) }()
+	if err := agent.preflight(root); err != nil {
+		return err
+	}
+
 	local, err := s.selectReviseWorkspace(root, identity, config, target)
 	if local.Path != "" {
 		defer func() {
@@ -117,38 +116,22 @@ func (s *Service) reviseGitHub(root string, config Config, prNumber int, configD
 		return err
 	}
 
-	policy := managedReviseWorkerPolicy(target.HeadRefOID, workflowData)
-	if err := s.inspectIssue(inspectionInput{
-		root: root, workspace: workspace, commonDir: local.CommonDir, head: target.HeadRefOID,
-		agentType: config.AgentType, operation: "revise", identity: identity,
-		issue: origin, policy: policy, options: options, result: final,
-	}, out, os.Stderr); err != nil {
-		return err
-	}
-	if err := agent.preflight(root); err != nil {
-		return err
-	}
 	started := s.Now().UTC()
+	policy := managedReviseWorkerPolicy(target.HeadRefOID, workflowData)
 	input := buildGitHubPRInput(identity, target, origin, configData, policy, context, "Origin Issue")
 	result := agent.execute(workspace, policy.instructions, "Revise the existing GitHub pull request using the Issue specification and PR feedback supplied on stdin.", input, options.codexOptions())
-	final.workerFinished(result)
-	if commandSucceeded(result) && strings.TrimSpace(result.Stdout) == "" {
-		final.Worker = "failed (no work report)"
-	}
 	logPath, err := s.writeReviseLog(identity, target, workspace, started, result)
 	if err != nil {
 		return fmt.Errorf("Author finished with status %d, but its report could not be saved; changes kept at %s: %w", result.ExitCode, workspace, err)
 	}
 	fmt.Fprintf(out, "Author report: %s\n", logPath)
-	final.WorkerLog = logPath
 	if !commandSucceeded(result) {
 		return fmt.Errorf("Author exited with status %d; changes kept at %s; inspect the Author report before retrying", result.ExitCode, workspace)
 	}
 	if strings.TrimSpace(result.Stdout) == "" {
 		return fmt.Errorf("Author returned no work report; changes kept at %s; no commit or push attempted", workspace)
 	}
-	final.Delivery = "failed"
-	return s.deliverRevision(root, local, identity, config, target, final, out)
+	return s.deliverRevision(root, local, identity, config, target, out)
 }
 
 func (s *Service) inspectReviseTarget(root string, identity RepositoryIdentity, number int) (reviewPullRequest, error) {
@@ -464,7 +447,7 @@ func (s *Service) writeReviseLog(identity RepositoryIdentity, target reviewPullR
 	return path, nil
 }
 
-func (s *Service) deliverRevision(root string, local revisionWorkspace, identity RepositoryIdentity, config Config, target reviewPullRequest, final *invocationResult, out io.Writer) error {
+func (s *Service) deliverRevision(root string, local revisionWorkspace, identity RepositoryIdentity, config Config, target reviewPullRequest, out io.Writer) error {
 	workspace := local.Path
 	if err := s.requireRevisionWorkspace(root, local, target.HeadRefOID, false); err != nil {
 		return err
@@ -512,12 +495,9 @@ func (s *Service) deliverRevision(root string, local revisionWorkspace, identity
 		source = commits[0]
 	}
 	result = s.Runner.Run(CommandSpec{Name: "git", Args: []string{"push", "--no-follow-tags", "--no-recurse-submodules", "--", config.TrackerRemote, source + ":" + ref}, Dir: workspace})
-	final.Push = mutationOutcome(result)
 	if !commandSucceeded(result) {
-		final.Delivery = "failed (remote outcome unknown)"
 		return fmt.Errorf("revision push failed or is uncertain; local commit %s remains at %s; remote branch may have been updated; inspect remote state before any new invocation", commits[0], workspace)
 	}
-	final.Delivery = fmt.Sprintf("PR #%d updated", target.Number)
 	fmt.Fprintf(out, "Updated existing PR #%d via %s\n", target.Number, target.HeadRefName)
 	if local.Branch == "" {
 		fmt.Fprintf(out, "Operation-local detached workspace retained at %s\n", workspace)
