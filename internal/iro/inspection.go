@@ -163,7 +163,7 @@ func (s *Service) inspectIssue(input inspectionInput, out, errOut io.Writer) err
 				final, inspectionErr = string(data), err
 			}
 		case "copilot":
-			result = (copilotRuntime{runner: s.Runner, files: s.FileSystem}).execute(input.root, input.workspace, input.commonDir, control, inspectionPrompt+"\n\n"+payload, copilotOptions{Model: input.options.Model, ReasoningEffort: input.options.ReasoningEffort})
+			result = (copilotRuntime{runner: s.Runner, files: s.FileSystem}).inspect(input.root, input.workspace, input.commonDir, control, inspectionPrompt+"\n\n"+payload, copilotOptions{Model: input.options.Model, ReasoningEffort: input.options.ReasoningEffort})
 			final = result.Stdout
 		}
 		if !commandSucceeded(result) {

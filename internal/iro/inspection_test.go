@@ -152,6 +152,110 @@ func TestIssueInspectionPassInvokesSelectedAuthorWithSameOptions(t *testing.T) {
 	}
 }
 
+func TestCopilotInspectionExposesOnlyReadOnlyTools(t *testing.T) {
+	for _, blocker := range []bool{false, true} {
+		t.Run(map[bool]string{false: "PASS", true: "BLOCKER"}[blocker], func(t *testing.T) {
+			f := newInspectionOperationFixture(t, "Copilot Run")
+			inspections, authors := 0, 0
+			checkTools := func(spec CommandSpec, tools string, allowURLs bool) {
+				t.Helper()
+				var available []string
+				for _, arg := range spec.Args {
+					if strings.HasPrefix(arg, "--available-tools=") {
+						available = append(available, strings.TrimPrefix(arg, "--available-tools="))
+					}
+				}
+				if !reflect.DeepEqual(available, []string{tools}) || containsString(spec.Args, "--allow-all-urls") != allowURLs {
+					t.Fatal("incorrect role permissions", spec.Args)
+				}
+				for _, flag := range []string{"--allow-all", "--yolo", "--allow-all-paths"} {
+					if containsString(spec.Args, flag) {
+						t.Fatal("unexpected permission override", spec.Args)
+					}
+				}
+				profiles, err := filepath.Glob(filepath.Join(spec.Env["COPILOT_HOME"], "agents", "*.agent.md"))
+				if err != nil || len(profiles) != 1 {
+					t.Fatal("missing private role profile", profiles, err)
+				}
+				data, err := os.ReadFile(profiles[0])
+				if err != nil || !strings.Contains(string(data), "\ntools: ["+tools+"]\n") {
+					t.Fatal("profile tool permissions disagree with invocation", string(data), err)
+				}
+			}
+			f.runner.inspection = func(spec CommandSpec) CommandResult {
+				inspections++
+				checkTools(spec, "view,glob,grep", false)
+				final := `{"verdict":"PASS","reason_class":"none","rationale":"ok"}`
+				if blocker {
+					final = `{"verdict":"BLOCKER","reason_class":"authority_conflict","rationale":"local"}`
+				}
+				return inspectionResultForTest(spec, final, CommandResult{})
+			}
+			previous := f.runner.fn
+			f.runner.fn = func(spec CommandSpec) CommandResult {
+				if isAuthorCommand(spec) {
+					authors++
+					checkTools(spec, copilotAuthorTools, true)
+				}
+				return previous(spec)
+			}
+			err := f.execute(workerOptions{}, io.Discard, io.Discard)
+			if (err != nil) != blocker || inspections != 1 || authors != map[bool]int{false: 1, true: 0}[blocker] {
+				t.Fatal("incorrect role execution", inspections, authors, err)
+			}
+			if blocker {
+				assertNoAuthorOrDelivery(t, f.runner.calls)
+			}
+		})
+	}
+}
+
+func TestCopilotInspectionValidatesReadOnlyToolCompletion(t *testing.T) {
+	for _, tool := range append(strings.Split(copilotAuthorTools, ","), "web_fetch", "task") {
+		t.Run(tool, func(t *testing.T) {
+			f := newInspectionOperationFixture(t, "Copilot Run")
+			f.runner.inspection = func(spec CommandSpec) CommandResult {
+				stream := copilotToolCompletionForTest(tool, `{"toolCallId":"x","success":true,"shellExecution":{"exitCode":0}}`)
+				stream = strings.Replace(stream, copilotCompletionForTest("完了"), copilotCompletionForTest(`{"verdict":"PASS","reason_class":"none","rationale":"ok"}`), 1)
+				return CommandResult{Stdout: stream}
+			}
+			readOnly := containsString([]string{"view", "glob", "grep"}, tool)
+			err := f.execute(workerOptions{}, io.Discard, io.Discard)
+			if readOnly {
+				if err != nil {
+					t.Fatal("read-only inspection tool rejected", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), "INSPECTION: FAILED") {
+					t.Fatal("unexpected tool use accepted", tool, err)
+				}
+				assertNoAuthorOrDelivery(t, f.runner.calls)
+			}
+		})
+	}
+}
+
+func TestCopilotInspectionPreflightDoesNotRequireAuthorURLPermissions(t *testing.T) {
+	f := newInspectionOperationFixture(t, "Copilot Run")
+	previous := f.runner.fn
+	f.runner.fn = func(spec CommandSpec) CommandResult {
+		if spec.Name == "copilot" && containsString(spec.Args, "--help") {
+			return CommandResult{Stdout: strings.ReplaceAll(copilotHelpForTest, "--allow-all-urls", "")}
+		}
+		return previous(spec)
+	}
+	f.runner.inspection = func(spec CommandSpec) CommandResult {
+		return inspectionResultForTest(spec, `{"verdict":"BLOCKER","reason_class":"authority_conflict","rationale":"local"}`, CommandResult{})
+	}
+	if err := f.execute(workerOptions{}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "INSPECTION: BLOCKER") {
+		t.Fatal("Author capability blocked Inspector startup", err)
+	}
+	assertNoAuthorOrDelivery(t, f.runner.calls)
+	if err := (copilotRuntime{runner: f.runner, files: f.service.FileSystem}).preflight(""); err == nil || !strings.Contains(err.Error(), "--allow-all-urls") {
+		t.Fatal("Author preflight omitted its required capability", err)
+	}
+}
+
 func TestIssueInspectionStopsWithoutAuthorDeliveryOrDiagnosticPublication(t *testing.T) {
 	for _, mode := range inspectedModes {
 		for _, outcome := range []string{"BLOCKER", "crash", "timeout", "malformed", "unknown reason", "missing final", "unusable completion", "stdout PASS only"} {
