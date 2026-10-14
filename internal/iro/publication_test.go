@@ -215,12 +215,6 @@ func TestAutomaticPublicationRejectsInvalidFactsBeforeTrackerIO(t *testing.T) {
 		{issue: 123, stage: reportAuthor, status: reportDelivered, prNumber: 42},
 		{issue: 123, stage: reportDelivery, status: reportDelivered},
 		{issue: 123, stage: reportDelivery, status: reportFailed, land: true},
-		{issue: 123, stage: reportInspection, status: reportBlocker},
-		{issue: 123, stage: reportInspection, status: reportBlocker, reason: inspectionReason(255)},
-		{issue: 123, stage: reportAuthor, status: reportBlocker, reason: authorityConflict},
-		{issue: 123, stage: reportInspection, status: reportFailed, reason: authorityConflict},
-		{issue: 123, stage: reportInspection, status: reportBlocker, reason: authorityConflict, prNumber: 42},
-		{issue: 123, stage: reportInspection, status: reportDelivered, prNumber: 42},
 	} {
 		body, err := buildAutomaticReport(report)
 		if err == nil || body != "" {
@@ -229,7 +223,7 @@ func TestAutomaticPublicationRejectsInvalidFactsBeforeTrackerIO(t *testing.T) {
 		runner := &fakeCommandRunner{}
 		service := newTestService(t, runner, t.TempDir())
 		identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
-		if _, err := service.postIssueReport("", identity, report); err == nil {
+		if err := service.postIssueReport("", identity, report); err == nil {
 			t.Fatal("invalid Issue report accepted")
 		}
 		if result := service.postDeliveryReport("", identity, report); commandSucceeded(result) {

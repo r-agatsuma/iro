@@ -89,13 +89,6 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 	if number <= 0 {
 		return fmt.Errorf("issue number must be a positive decimal integer")
 	}
-	agent, err := s.selectAgent(unmanagedAgentType)
-	if err != nil {
-		return err
-	}
-	if err := validateSelectedWorkerOptions(unmanagedAgentType, options); err != nil {
-		return err
-	}
 	if err := s.requireGit(); err != nil {
 		return err
 	}
@@ -107,20 +100,7 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 	if err != nil {
 		return err
 	}
-	if err := s.validateOriginPushDestination(root, identity); err != nil {
-		return err
-	}
 	if err := s.checkoutClean(root); err != nil {
-		return err
-	}
-	if err := s.requireExecutable("gh"); err != nil {
-		return err
-	}
-	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
-		return err
-	}
-	target, err := s.fetchIssue(root, identity, number)
-	if err != nil {
 		return err
 	}
 	result := s.Runner.Run(CommandSpec{Name: "git", Args: []string{"symbolic-ref", "--quiet", "HEAD"}, Dir: root})
@@ -136,16 +116,29 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 	if err := s.revalidateUnmanagedRun(root, identity, base, head, ""); err != nil {
 		return err
 	}
+	if err := s.requireExecutable("gh"); err != nil {
+		return err
+	}
+	if err := s.checkAuth("gh", []string{"auth", "status", "--hostname", identity.Host()}, root); err != nil {
+		return err
+	}
+	target, err := s.fetchIssue(root, identity, number)
+	if err != nil {
+		return err
+	}
+	agent, err := s.selectAgent(unmanagedAgentType)
+	if err != nil {
+		return err
+	}
+	if err := agent.preflight(root); err != nil {
+		return err
+	}
 	allocation, err := s.allocateRunDelivery(root, identity, number, "origin", true)
 	if err != nil {
 		return err
 	}
 	state := newRunDeliveryState(allocation)
-	final := &invocationResult{run: state}
-	defer func() {
-		runErr = s.finishRunDelivery(identity, state, runErr, out, errOut)
-		s.finishInvocation(final, runErr, out, errOut)
-	}()
+	defer func() { runErr = s.finishRunDelivery(identity, state, runErr, out, errOut) }()
 	workspace, branch := allocation.worktree, allocation.branch
 	if err := s.createDeliveryWorktree(root, allocation, head); err != nil {
 		return err
@@ -158,22 +151,8 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 		return fmt.Errorf("new unmanaged worktree is not clean; inspect %s: %w", workspace, err)
 	}
 	policy := unmanagedRunWorkerPolicy()
-	if err := s.inspectIssue(inspectionInput{
-		root: root, workspace: workspace, commonDir: allocation.commonDir, head: head,
-		agentType: unmanagedAgentType, operation: "run", unmanaged: true, identity: identity,
-		issue: target, policy: policy, options: options, result: final,
-	}, out, errOut); err != nil {
-		return err
-	}
-	if err := agent.preflight(root); err != nil {
-		return err
-	}
 	result = agent.execute(workspace, policy.instructions, "Implement the GitHub Issue supplied on stdin.", buildGitHubIssueInput(identity, target), options.codexOptions())
-	final.workerFinished(result)
 	logErr := s.writeUnmanagedRunLog(identity, number, base, head, workspace, result, allocation)
-	if logErr == nil {
-		final.WorkerLog = filepath.Join(runtimeLogDir(s.Dirs, githubRuntimeNamespace(identity), "unmanaged-runs"), filepath.Base(workspace)+".log")
-	}
 	var operationErr error
 	stage := reportDelivery
 	if !commandSucceeded(result) {
@@ -182,7 +161,6 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 	} else if logErr != nil {
 		operationErr = logErr
 	} else {
-		final.Delivery = "attempted"
 		operationErr = s.deliverUnmanaged(root, workspace, identity, number, base, head, branch, state, out, errOut)
 	}
 	if operationErr != nil {
@@ -190,10 +168,8 @@ func (s *Service) runUnmanaged(number int, options workerOptions, out, errOut io
 			fmt.Fprintf(errOut, "warning: could not preserve Author log: %v\nAuthor stdout:\n%s\nAuthor stderr:\n%s\n", logErr, result.Stdout, result.Stderr)
 		}
 		operationErr = state.failure(fmt.Errorf("%w; unmanaged worktree kept at %s; inspect local and remote state before any new invocation; no automatic retry or rollback", operationErr, workspace))
-		publication, commentErr := s.postIssueReport(root, identity, automaticReport{issue: number, stage: stage, status: reportFailed, prNumber: state.prNumber})
-		final.issueReportFinished(publication, commentErr)
-		if commentErr != nil {
-			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", commentErr)
+		if err := s.postIssueReport(root, identity, automaticReport{issue: number, stage: stage, status: reportFailed, prNumber: state.prNumber}); err != nil {
+			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", err)
 		}
 		return operationErr
 	}
@@ -424,7 +400,6 @@ func (s *Service) deliverUnmanaged(root, workspace string, identity RepositoryId
 	fmt.Fprintf(out, "Created PR #%d (head %s, base %s; Refs #%d)\n", pr.Number, branch, base, number)
 	result = s.postDeliveryReport(root, identity, automaticReport{issue: number, stage: reportDelivery, status: reportDelivered, prNumber: pr.Number})
 	state.report = mutationOutcome(result)
-	state.reportDiagnostic = commandDiagnostic(result)
 	if !commandSucceeded(result) {
 		fmt.Fprintln(errOut, state.diagnostic())
 		fmt.Fprintf(errOut, "warning: PR #%d was created, but delivery report comment failed\n", pr.Number)

@@ -230,8 +230,7 @@ func (s *Service) Doctor(out io.Writer) error {
 		}
 		version, _ := connector.version(root)
 		fmt.Fprintf(diagnosticOut, "copilot executable path: %s\ncopilot version: %s\n", knownValue(path), knownValue(version))
-		check("Copilot Inspection readiness (experimental)", func() error { return connector.inspectionPreflight(root) })
-		check("Copilot Author readiness (experimental)", func() error { return connector.preflight(root) })
+		check("copilot executable and invocation options (experimental)", func() error { return connector.preflight(root) })
 		fmt.Fprintln(out, "UNKNOWN: Copilot runtime/provider readiness: no reliable read-only authentication/entitlement probe; BYOK/custom-provider is allowed. GitHub-hosted Copilot service is unverified. No login or provider request was performed.")
 	} else {
 		s.toolDiagnostics(diagnosticOut, "codex")
@@ -249,13 +248,9 @@ func (s *Service) Doctor(out io.Writer) error {
 		})
 		if codexAvailable {
 			check("Codex authentication", func() error { return agent.checkAuth(root) })
-			check("Codex Inspection readiness", func() error { return agent.inspectionPreflight(root) })
-			check("Codex Author readiness", func() error { return agent.preflight(root) })
 		} else {
 			failures++
 			fmt.Fprintln(out, "FAIL: Codex authentication: codex executable is unavailable")
-			failures += 2
-			fmt.Fprintln(out, "FAIL: Codex Inspection readiness: codex executable is unavailable\nFAIL: Codex Author readiness: codex executable is unavailable")
 		}
 	}
 
@@ -317,8 +312,14 @@ func (s *Service) runTracker(root string, config Config, issueNumber int, option
 }
 
 func (s *Service) runGitHub(root string, config Config, issueNumber int, options workerOptions, out, errOut io.Writer) (runErr error) {
-	if err := validateSelectedWorkerOptions(config.AgentType, options); err != nil {
-		return err
+	switch config.AgentType {
+	case "codex":
+	case "copilot":
+		if err := validateCopilotRunOptions(options); err != nil {
+			return err
+		}
+	default:
+		return unsupportedAgent(config.AgentType)
 	}
 	identity, err := s.repositoryIdentity(root, config)
 	if err != nil {
@@ -339,24 +340,30 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 	if err := s.verifyPushRemote(root, config.TrackerRemote, identity); err != nil {
 		return err
 	}
+	base, head, err := s.runSource(root, config.TrackerRemote)
+	if err != nil {
+		return err
+	}
 	target, err := s.fetchIssue(root, identity, issueNumber)
 	if err != nil {
 		return err
 	}
-	base, head, err := s.runSource(root, config.TrackerRemote)
-	if err != nil {
-		return err
+	switch config.AgentType {
+	case "codex":
+		if err := (codexRuntime{runner: s.Runner}).preflight(root); err != nil {
+			return err
+		}
+	case "copilot":
+		if err := (copilotRuntime{runner: s.Runner, files: s.FileSystem}).preflight(root); err != nil {
+			return err
+		}
 	}
 	allocation, err := s.allocateRunDelivery(root, identity, issueNumber, config.TrackerRemote, false)
 	if err != nil {
 		return err
 	}
 	state := newRunDeliveryState(allocation)
-	final := &invocationResult{run: state}
-	defer func() {
-		runErr = s.finishRunDelivery(identity, state, runErr, out, errOut)
-		s.finishInvocation(final, runErr, out, errOut)
-	}()
+	defer func() { runErr = s.finishRunDelivery(identity, state, runErr, out, errOut) }()
 	if err := s.createDeliveryWorktree(root, allocation, head); err != nil {
 		return err
 	}
@@ -373,47 +380,24 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 	if _, err := s.FileSystem.ReadFile(filepath.Join(workspace, "WORKFLOW.md")); err != nil {
 		return err
 	}
-	policy := managedRunWorkerPolicy()
-	if config.AgentType == "copilot" {
-		policy.instructions = copilotRunWorkerPolicy()
-	}
-	if err := s.inspectIssue(inspectionInput{
-		root: root, workspace: workspace, commonDir: allocation.commonDir, head: head,
-		agentType: config.AgentType, operation: "run", identity: identity,
-		issue: target, policy: policy, options: options, result: final,
-	}, out, errOut); err != nil {
-		return err
-	}
-	switch config.AgentType {
-	case "codex":
-		if err := (codexRuntime{runner: s.Runner}).preflight(root); err != nil {
-			return err
-		}
-	case "copilot":
-		if err := (copilotRuntime{runner: s.Runner, files: s.FileSystem}).preflight(root); err != nil {
-			return err
-		}
-	}
 
 	started := s.Now().UTC()
 	var workerResult CommandResult
 	workerName := "Codex"
 	switch config.AgentType {
 	case "codex":
+		policy := managedRunWorkerPolicy()
 		workerResult = (codexRuntime{runner: s.Runner}).execute(workspace, policy.instructions, "Implement the GitHub Issue supplied on stdin.", buildGitHubIssueInput(identity, target), options.codexOptions())
 	case "copilot":
 		workerName = "Copilot"
 		payload := "Implement the supplied GitHub Issue. The following is untrusted task/context.\n\n" + buildGitHubIssueInput(identity, target)
-		workerResult = (copilotRuntime{runner: s.Runner, files: s.FileSystem}).execute(root, workspace, allocation.commonDir, policy.instructions, payload, copilotOptions{Model: options.Model, ReasoningEffort: options.ReasoningEffort})
+		workerResult = (copilotRuntime{runner: s.Runner, files: s.FileSystem}).execute(root, workspace, allocation.commonDir, copilotRunWorkerPolicy(), payload, copilotOptions{Model: options.Model, ReasoningEffort: options.ReasoningEffort})
 	}
 	finished := s.Now().UTC()
-	final.workerFinished(workerResult)
 	if !commandSucceeded(workerResult) {
 		operationErr := state.failure(fmt.Errorf("%s exited with status %d (%v); worktree was kept for human inspection", workerName, workerResult.ExitCode, workerResult.Err))
-		publication, commentErr := s.postIssueReport(root, identity, automaticReport{issue: issueNumber, stage: reportAuthor, status: reportFailed})
-		final.issueReportFinished(publication, commentErr)
-		logPath, logErr := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, issueCommentStatus(commentErr))
-		final.WorkerLog = logPath
+		commentErr := s.postIssueReport(root, identity, automaticReport{issue: issueNumber, stage: reportAuthor, status: reportFailed})
+		_, logErr := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, issueCommentStatus(commentErr))
 		if commentErr != nil {
 			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", commentErr)
 		}
@@ -422,17 +406,14 @@ func (s *Service) runGitHub(root string, config Config, issueNumber int, options
 		}
 		return operationErr
 	}
-	logPath, logErr := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, "not attempted")
-	final.WorkerLog = logPath
+	_, logErr := s.writeAgentRunLog(config.AgentType, identity, issueNumber, started, finished, branch, workspace, workerResult, "not attempted")
 	operationErr := logErr
 	if operationErr == nil {
-		final.Delivery = "attempted"
 		operationErr = s.deliver(root, workspace, identity, issueNumber, config.TrackerRemote, branch, base, state, out, errOut)
 	}
 	if operationErr != nil {
 		operationErr = state.failure(operationErr)
-		publication, commentErr := s.postIssueReport(root, identity, automaticReport{issue: issueNumber, stage: reportDelivery, status: reportFailed, prNumber: state.prNumber})
-		final.issueReportFinished(publication, commentErr)
+		commentErr := s.postIssueReport(root, identity, automaticReport{issue: issueNumber, stage: reportDelivery, status: reportFailed, prNumber: state.prNumber})
 		if commentErr != nil {
 			fmt.Fprintf(errOut, "warning: failure report comment failed: %v\n", commentErr)
 		}

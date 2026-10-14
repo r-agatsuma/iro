@@ -91,7 +91,7 @@ func TestReviseSupportsSelectedRefsWithoutDeliveryTopology(t *testing.T) {
 					if call.Name == "git" && call.Args[0] == "fetch" {
 						fetches++
 					}
-					if call.Name == "codex" && containsString(call.Args, "--ephemeral") && !isInspectionCommand(call) {
+					if call.Name == "codex" && containsString(call.Args, "--ephemeral") {
 						workers++
 						if call.Dir != f.workspace || !strings.Contains(string(call.Stdin), "Origin Issue:\nNumber: 123") {
 							t.Fatal("worker was not bound to selected workspace/Issue")
@@ -477,7 +477,7 @@ func TestRunProducerFixturesRoundTripThroughManagedRevise(t *testing.T) {
 				if call.Name == "git" && containsArgs(call.Args, "worktree", "add") {
 					creates++
 				}
-				if call.Name == "codex" && containsString(call.Args, "--ephemeral") && !isInspectionCommand(call) {
+				if call.Name == "codex" && containsString(call.Args, "--ephemeral") {
 					workers++
 					for _, want := range []string{"Origin Issue:\nNumber: 123", "Pull request body:\n" + produced["body"].(string), "Base: " + produced["base"].(string), "Head: " + consumer.branchName} {
 						if !strings.Contains(string(call.Stdin), want) {

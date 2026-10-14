@@ -11,7 +11,6 @@ type reportStage uint8
 const (
 	reportAuthor reportStage = iota + 1
 	reportDelivery
-	reportInspection
 )
 
 type reportStatus uint8
@@ -19,7 +18,6 @@ type reportStatus uint8
 const (
 	reportFailed reportStatus = iota + 1
 	reportDelivered
-	reportBlocker
 )
 
 // automaticReport contains only iro-owned publication facts. Never add local
@@ -31,7 +29,6 @@ type automaticReport struct {
 	status   reportStatus
 	prNumber int
 	land     bool
-	reason   inspectionReason
 }
 
 func buildAutomaticReport(report automaticReport) (string, error) {
@@ -41,8 +38,6 @@ func buildAutomaticReport(report automaticReport) (string, error) {
 		stage = "author"
 	case reportDelivery:
 		stage = "delivery"
-	case reportInspection:
-		stage = "inspection"
 	default:
 		return "", fmt.Errorf("invalid automatic report stage")
 	}
@@ -52,8 +47,6 @@ func buildAutomaticReport(report automaticReport) (string, error) {
 		status = "FAILED"
 	case reportDelivered:
 		status = "DELIVERED"
-	case reportBlocker:
-		status = "BLOCKER"
 	default:
 		return "", fmt.Errorf("invalid automatic report status")
 	}
@@ -62,19 +55,8 @@ func buildAutomaticReport(report automaticReport) (string, error) {
 		(report.land && report.status != reportDelivered) {
 		return "", fmt.Errorf("invalid automatic report facts")
 	}
-	if (report.status == reportBlocker && (report.stage != reportInspection || report.reason == noInspectionReason || report.reason.name() == "")) ||
-		(report.status != reportBlocker && report.reason != noInspectionReason) ||
-		(report.stage == reportInspection && (report.prNumber != 0 || report.land || report.status == reportDelivered)) {
-		return "", fmt.Errorf("invalid automatic inspection report facts")
-	}
 	var body strings.Builder
 	fmt.Fprintf(&body, "## iro execution report\n\nStatus: %s\nStage: %s\nSource Issue: #%d\nDelivery confirmed: %t\n", status, stage, report.issue, report.prNumber > 0)
-	if report.stage == reportInspection {
-		fmt.Fprintf(&body, "INSPECTION: %s\nAUTHOR: not started\nDELIVERY: not attempted\n", status)
-		if report.status == reportBlocker {
-			fmt.Fprintf(&body, "Reason class: %s\n", report.reason.name())
-		}
-	}
 	if report.prNumber > 0 {
 		fmt.Fprintf(&body, "PR: #%d\n", report.prNumber)
 	}

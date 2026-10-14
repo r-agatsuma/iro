@@ -178,7 +178,6 @@ func (s *Service) deliver(root, workspace string, identity RepositoryIdentity, n
 	fmt.Fprintf(out, "Created PR #%d\nLand: iro land %d\n", pr.Number, pr.Number)
 	result = s.postDeliveryReport(root, identity, automaticReport{issue: number, stage: reportDelivery, status: reportDelivered, prNumber: pr.Number, land: true})
 	state.report = mutationOutcome(result)
-	state.reportDiagnostic = commandDiagnostic(result)
 	if !commandSucceeded(result) {
 		fmt.Fprintln(errOut, state.diagnostic())
 		fmt.Fprintf(errOut, "warning: PR #%d was created, but delivery report comment failed; Land: iro land %d\n", pr.Number, pr.Number)

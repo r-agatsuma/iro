@@ -13,11 +13,9 @@ import (
 )
 
 type fakeCommandRunner struct {
-	lookups        map[string]error
-	calls          []CommandSpec
-	fn             func(CommandSpec) CommandResult
-	inspection     func(CommandSpec) CommandResult
-	inspectionHelp *CommandResult
+	lookups map[string]error
+	calls   []CommandSpec
+	fn      func(CommandSpec) CommandResult
 }
 
 func (f *fakeCommandRunner) LookPath(name string) (string, error) {
@@ -29,18 +27,6 @@ func (f *fakeCommandRunner) LookPath(name string) (string, error) {
 
 func (f *fakeCommandRunner) Run(spec CommandSpec) CommandResult {
 	f.calls = append(f.calls, spec)
-	if spec.Name == "codex" && containsArgs(spec.Args, "exec", "--help") {
-		if f.inspectionHelp != nil {
-			return *f.inspectionHelp
-		}
-		return CommandResult{Stdout: "--output-schema --output-last-message"}
-	}
-	if isInspectionCommand(spec) {
-		if f.inspection != nil {
-			return f.inspection(spec)
-		}
-		return inspectionResultForTest(spec, `{"verdict":"PASS","reason_class":"none","rationale":"実行可能"}`, CommandResult{})
-	}
 	if f.fn != nil {
 		return f.fn(spec)
 	}
