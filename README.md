@@ -147,6 +147,8 @@ iro run 123
 
 成功すると、Codex ワーカーの変更を iro が commit / push し、通常の open PR を作成する。出力された PR number を後続操作で使用する。
 
+managed / unmanaged の `run` と `revise` は、Inspection に到達した実行の終了時に `INSPECTION`、`WORKER`、`DELIVERY`、`REMOTE REPORT`、`LOCAL LOG` をまとめて表示する。`LOCAL LOG` は今回の結果と診断を保存した JSON ファイルの正確なパスである。remote report の投稿に失敗した場合、既存の Issue / PR comment は古い可能性があるため、端末に表示された今回の結果と local log を確認する。Revise は従来どおりコメントを投稿せず、local only と表示する。
+
 以下では PR が `#456` だったとする。
 
 ### 6. 必要なら独立レビューと修正を行う

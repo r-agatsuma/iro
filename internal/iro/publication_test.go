@@ -229,7 +229,7 @@ func TestAutomaticPublicationRejectsInvalidFactsBeforeTrackerIO(t *testing.T) {
 		runner := &fakeCommandRunner{}
 		service := newTestService(t, runner, t.TempDir())
 		identity := RepositoryIdentity{Owner: "acme", Name: "iro"}
-		if err := service.postIssueReport("", identity, report); err == nil {
+		if _, err := service.postIssueReport("", identity, report); err == nil {
 			t.Fatal("invalid Issue report accepted")
 		}
 		if result := service.postDeliveryReport("", identity, report); commandSucceeded(result) {
